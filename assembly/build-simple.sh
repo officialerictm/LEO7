@@ -47,6 +47,14 @@ COMPONENTS=(
     "src/usb/health.sh"
     "src/usb/cli.sh"
     
+    # Network modules
+    "src/network/checksum.sh"
+    
+    # Deployment modules
+    "src/deployment/usb_deploy.sh"
+    "src/deployment/local_deploy.sh"
+    "src/deployment/cli.sh"
+    
     # UI modules
     "src/ui/menu.sh"
     "src/ui/progress.sh"

@@ -98,6 +98,20 @@ fi
 # Version and metadata (from header, but available globally)
 readonly LEONARDO_CONFIG_VERSION="7.0.0"
 
+# Detect platform early
+if [[ -z "${LEONARDO_PLATFORM:-}" ]]; then
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        LEONARDO_PLATFORM="macos"
+    elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
+        LEONARDO_PLATFORM="linux"
+    elif [[ "$OSTYPE" == "msys" ]] || [[ "$OSTYPE" == "cygwin" ]] || [[ "$OSTYPE" == "win32" ]]; then
+        LEONARDO_PLATFORM="windows"
+    else
+        LEONARDO_PLATFORM="unknown"
+    fi
+    export LEONARDO_PLATFORM
+fi
+
 # Deployment modes
 readonly LEONARDO_DEPLOYMENT_MODES=(
     "usb:USB Drive - Portable AI on any USB device"
@@ -996,6 +1010,67 @@ confirm() {
     
     [[ "${response,,}" == "y" ]]
 }
+
+# Check system requirements
+check_system_requirements() {
+    local errors=0
+    
+    # Check for required commands
+    local required_commands=("curl" "tar" "gzip" "awk" "sed")
+    
+    for cmd in "${required_commands[@]}"; do
+        if ! command -v "$cmd" >/dev/null 2>&1; then
+            log_message "ERROR" "Required command not found: $cmd"
+            ((errors++))
+        fi
+    done
+    
+    # Check for disk space (at least 1GB free)
+    local available_mb
+    case "$LEONARDO_PLATFORM" in
+        "macos")
+            available_mb=$(df -m "$HOME" | awk 'NR==2 {print $4}')
+            ;;
+        "linux")
+            available_mb=$(df -BM "$HOME" | awk 'NR==2 {print $4}' | sed 's/M//')
+            ;;
+        *)
+            available_mb=2048  # Default assume enough space
+            ;;
+    esac
+    
+    if [[ $available_mb -lt 1024 ]]; then
+        log_message "ERROR" "Insufficient disk space. Need at least 1GB free."
+        ((errors++))
+    fi
+    
+    # Check for write permissions
+    if ! touch "$HOME/.leonardo_test_$$" 2>/dev/null; then
+        log_message "ERROR" "No write permissions in home directory"
+        ((errors++))
+    else
+        rm -f "$HOME/.leonardo_test_$$"
+    fi
+    
+    return $errors
+}
+
+# Export all validation functions
+export -f validation_error
+export -f validate_boolean
+export -f validate_integer
+export -f validate_path
+export -f validate_usb_device
+export -f validate_size
+export -f validate_url
+export -f validate_checksum
+export -f validate_model_id
+export -f validate_platform
+export -f validate_permissions
+export -f format_bytes
+export -f sanitize_string
+export -f confirm
+export -f check_system_requirements
 
 # ==== Component: src/utils/filesystem.sh ====
 # ==============================================================================
@@ -2867,6 +2942,7 @@ declare -g LEONARDO_USB_DEVICE=""
 declare -g LEONARDO_USB_MOUNT=""
 declare -g LEONARDO_USB_SIZE=""
 declare -g LEONARDO_USB_FREE=""
+declare -g LEONARDO_USB_FREE_MB=""
 
 # Initialize USB device
 init_usb_device() {
@@ -2903,7 +2979,12 @@ init_usb_device() {
             LEONARDO_USB_MOUNT=$(diskutil info "$device" 2>/dev/null | grep "Mount Point:" | cut -d: -f2- | xargs)
             ;;
         "linux")
-            LEONARDO_USB_MOUNT=$(lsblk -no MOUNTPOINT "$device" 2>/dev/null | head -1)
+            # Try the device first
+            LEONARDO_USB_MOUNT=$(lsblk -no MOUNTPOINT "$device" 2>/dev/null | grep -v "^$" | head -1)
+            # If no mount point and device is like /dev/sdX, try first partition
+            if [[ -z "$LEONARDO_USB_MOUNT" ]] && [[ "$device" =~ ^/dev/sd[a-z]$ ]]; then
+                LEONARDO_USB_MOUNT=$(lsblk -no MOUNTPOINT "${device}1" 2>/dev/null | grep -v "^$" | head -1)
+            fi
             ;;
         "windows")
             LEONARDO_USB_MOUNT="$device\\"
@@ -2935,13 +3016,11 @@ format_usb_drive() {
     
     local platform=$(detect_platform)
     
-    show_progress "Formatting USB drive..." &
-    local progress_pid=$!
+    show_progress "Formatting USB drive..."
     
     case "$platform" in
         "macos")
             if diskutil eraseDisk "$filesystem" "$label" "$device" >/dev/null 2>&1; then
-                kill $progress_pid 2>/dev/null
                 log_message "SUCCESS" "USB drive formatted successfully"
                 return 0
             fi
@@ -2978,7 +3057,6 @@ format_usb_drive() {
             esac
             
             if [[ $? -eq 0 ]]; then
-                kill $progress_pid 2>/dev/null
                 log_message "SUCCESS" "USB drive formatted successfully"
                 return 0
             fi
@@ -2994,7 +3072,6 @@ assign"
                 echo "$script" | diskpart >/dev/null 2>&1
                 
                 if [[ $? -eq 0 ]]; then
-                    kill $progress_pid 2>/dev/null
                     log_message "SUCCESS" "USB drive formatted successfully"
                     return 0
                 fi
@@ -3002,7 +3079,6 @@ assign"
             ;;
     esac
     
-    kill $progress_pid 2>/dev/null
     log_message "ERROR" "Failed to format USB drive"
     return 1
 }
@@ -3197,8 +3273,7 @@ install_leonardo_to_usb() {
     
     log_message "INFO" "Installing Leonardo to USB..."
     
-    show_progress "Copying Leonardo executable..." &
-    local progress_pid=$!
+    show_progress "Copying Leonardo executable..."
     
     # Copy Leonardo executable
     if cp "$leonardo_script" "$mount_point/leonardo.sh"; then
@@ -3207,7 +3282,6 @@ install_leonardo_to_usb() {
         # Create platform-specific launchers
         create_usb_launchers "$mount_point"
         
-        kill $progress_pid 2>/dev/null
         log_message "SUCCESS" "Leonardo installed to USB successfully"
         
         # Show summary
@@ -3224,7 +3298,6 @@ install_leonardo_to_usb() {
         
         return 0
     else
-        kill $progress_pid 2>/dev/null
         log_message "ERROR" "Failed to copy Leonardo to USB"
         return 1
     fi
@@ -3309,17 +3382,14 @@ backup_usb_data() {
     
     log_message "INFO" "Backing up Leonardo data..."
     
-    show_progress "Creating backup..." &
-    local progress_pid=$!
+    show_progress "Creating backup..."
     
     # Create backup
     if tar -czf "$backup_path" -C "$mount_point" leonardo 2>/dev/null; then
-        kill $progress_pid 2>/dev/null
         local backup_size=$(get_file_size "$backup_path")
         log_message "SUCCESS" "Backup created: $backup_path ($(format_bytes $backup_size))"
         return 0
     else
-        kill $progress_pid 2>/dev/null
         log_message "ERROR" "Backup failed"
         rm -f "$backup_path"
         return 1
@@ -3351,16 +3421,13 @@ restore_usb_data() {
     
     log_message "INFO" "Restoring Leonardo data..."
     
-    show_progress "Extracting backup..." &
-    local progress_pid=$!
+    show_progress "Extracting backup..."
     
     # Extract backup
     if tar -xzf "$backup_path" -C "$mount_point" 2>/dev/null; then
-        kill $progress_pid 2>/dev/null
         log_message "SUCCESS" "Leonardo data restored successfully"
         return 0
     else
-        kill $progress_pid 2>/dev/null
         log_message "ERROR" "Restore failed"
         return 1
     fi
@@ -3400,6 +3467,7 @@ check_usb_free_space() {
     fi
     
     LEONARDO_USB_FREE="${free_mb}MB"
+    LEONARDO_USB_FREE_MB=$free_mb
     return 0
 }
 
@@ -4563,6 +4631,1615 @@ export -f usb_cli_format usb_cli_mount usb_cli_unmount
 export -f usb_cli_health usb_cli_monitor usb_cli_backup usb_cli_restore
 export -f usb_cli_clean usb_cli_test register_usb_commands
 
+# ==== Component: src/network/checksum.sh ====
+# ==============================================================================
+# Leonardo AI Universal - Checksum Verification Module
+# ==============================================================================
+# Description: File integrity verification using multiple hash algorithms
+# Version: 7.0.0
+# Dependencies: colors.sh, logging.sh, filesystem.sh
+# ==============================================================================
+
+# Supported hash algorithms
+declare -A HASH_COMMANDS=(
+    ["md5"]="md5sum"
+    ["sha1"]="sha1sum"
+    ["sha256"]="sha256sum"
+    ["sha512"]="sha512sum"
+)
+
+# Platform-specific hash commands
+init_hash_commands() {
+    local platform=$(detect_platform)
+    
+    case "$platform" in
+        "macos")
+            HASH_COMMANDS["md5"]="md5 -r"
+            HASH_COMMANDS["sha1"]="shasum -a 1"
+            HASH_COMMANDS["sha256"]="shasum -a 256"
+            HASH_COMMANDS["sha512"]="shasum -a 512"
+            ;;
+        "windows")
+            # Windows using certUtil
+            HASH_COMMANDS["md5"]="certutil -hashfile"
+            HASH_COMMANDS["sha1"]="certutil -hashfile"
+            HASH_COMMANDS["sha256"]="certutil -hashfile"
+            HASH_COMMANDS["sha512"]="certutil -hashfile"
+            ;;
+    esac
+}
+
+# Calculate file hash
+calculate_hash() {
+    local file="$1"
+    local algorithm="${2:-sha256}"
+    
+    if [[ ! -f "$file" ]]; then
+        log_message "ERROR" "File not found: $file"
+        return 1
+    fi
+    
+    local hash_cmd="${HASH_COMMANDS[$algorithm]}"
+    if [[ -z "$hash_cmd" ]]; then
+        log_message "ERROR" "Unsupported hash algorithm: $algorithm"
+        return 1
+    fi
+    
+    local hash=""
+    local platform=$(detect_platform)
+    
+    case "$platform" in
+        "windows")
+            # Windows certutil outputs differently
+            hash=$(certutil -hashfile "$file" "${algorithm^^}" 2>/dev/null | grep -v ":" | tr -d ' \r\n' | tr '[:upper:]' '[:lower:]')
+            ;;
+        *)
+            # Unix-like systems
+            hash=$($hash_cmd "$file" 2>/dev/null | awk '{print $1}')
+            ;;
+    esac
+    
+    if [[ -z "$hash" ]]; then
+        log_message "ERROR" "Failed to calculate $algorithm hash for $file"
+        return 1
+    fi
+    
+    echo "$hash"
+    return 0
+}
+
+# Verify file checksum
+verify_checksum() {
+    local file="$1"
+    local expected_hash="$2"
+    local algorithm="${3:-sha256}"
+    
+    if [[ ! -f "$file" ]]; then
+        log_message "ERROR" "File not found: $file"
+        return 1
+    fi
+    
+    if [[ -z "$expected_hash" ]]; then
+        log_message "ERROR" "No expected hash provided"
+        return 1
+    fi
+    
+    log_message "INFO" "Verifying $algorithm checksum for $(basename "$file")..."
+    
+    local actual_hash
+    actual_hash=$(calculate_hash "$file" "$algorithm")
+    
+    if [[ $? -ne 0 ]]; then
+        return 1
+    fi
+    
+    # Normalize hashes for comparison
+    expected_hash=$(echo "$expected_hash" | tr '[:upper:]' '[:lower:]' | tr -d ' ')
+    actual_hash=$(echo "$actual_hash" | tr '[:upper:]' '[:lower:]' | tr -d ' ')
+    
+    if [[ "$actual_hash" == "$expected_hash" ]]; then
+        log_message "SUCCESS" "Checksum verification passed"
+        return 0
+    else
+        log_message "ERROR" "Checksum verification failed"
+        log_message "ERROR" "Expected: $expected_hash"
+        log_message "ERROR" "Actual:   $actual_hash"
+        return 1
+    fi
+}
+
+# Verify checksum from file
+verify_checksum_file() {
+    local file="$1"
+    local checksum_file="$2"
+    local algorithm="${3:-sha256}"
+    
+    if [[ ! -f "$checksum_file" ]]; then
+        log_message "ERROR" "Checksum file not found: $checksum_file"
+        return 1
+    fi
+    
+    # Extract hash from checksum file
+    local expected_hash
+    local filename=$(basename "$file")
+    
+    # Try different checksum file formats
+    # Format 1: "hash  filename"
+    expected_hash=$(grep -E "^[a-fA-F0-9]+[[:space:]]+\*?${filename}$" "$checksum_file" 2>/dev/null | awk '{print $1}')
+    
+    # Format 2: "hash" (single line with just the hash)
+    if [[ -z "$expected_hash" ]]; then
+        expected_hash=$(grep -E "^[a-fA-F0-9]+$" "$checksum_file" 2>/dev/null | head -1)
+    fi
+    
+    # Format 3: "SHA256(filename)= hash" (BSD style)
+    if [[ -z "$expected_hash" ]]; then
+        expected_hash=$(grep -E "^${algorithm^^}\(${filename}\)=" "$checksum_file" 2>/dev/null | cut -d'=' -f2- | tr -d ' ')
+    fi
+    
+    if [[ -z "$expected_hash" ]]; then
+        log_message "ERROR" "Could not extract hash from checksum file"
+        return 1
+    fi
+    
+    verify_checksum "$file" "$expected_hash" "$algorithm"
+}
+
+# Generate checksum file
+generate_checksum_file() {
+    local file="$1"
+    local output_file="${2:-${file}.sha256}"
+    local algorithm="${3:-sha256}"
+    
+    if [[ ! -f "$file" ]]; then
+        log_message "ERROR" "File not found: $file"
+        return 1
+    fi
+    
+    log_message "INFO" "Generating $algorithm checksum for $(basename "$file")..."
+    
+    local hash
+    hash=$(calculate_hash "$file" "$algorithm")
+    
+    if [[ $? -ne 0 ]]; then
+        return 1
+    fi
+    
+    # Write checksum in standard format
+    echo "$hash  $(basename "$file")" > "$output_file"
+    
+    log_message "SUCCESS" "Checksum saved to $output_file"
+    return 0
+}
+
+# Batch verify checksums
+batch_verify_checksums() {
+    local checksum_file="$1"
+    local base_dir="${2:-.}"
+    local algorithm="${3:-sha256}"
+    
+    if [[ ! -f "$checksum_file" ]]; then
+        log_message "ERROR" "Checksum file not found: $checksum_file"
+        return 1
+    fi
+    
+    local total=0
+    local passed=0
+    local failed=0
+    
+    echo "${COLOR_CYAN}Batch Checksum Verification${COLOR_RESET}"
+    echo "Algorithm: ${algorithm^^}"
+    echo ""
+    
+    # Process each line in checksum file
+    while IFS= read -r line; do
+        # Skip empty lines and comments
+        [[ -z "$line" ]] && continue
+        [[ "$line" =~ ^# ]] && continue
+        
+        # Extract hash and filename
+        local hash=$(echo "$line" | awk '{print $1}')
+        local filename=$(echo "$line" | awk '{print $2}' | sed 's/^\*//')
+        
+        if [[ -z "$hash" ]] || [[ -z "$filename" ]]; then
+            continue
+        fi
+        
+        local filepath="$base_dir/$filename"
+        ((total++))
+        
+        echo -n "Verifying $filename... "
+        
+        if [[ ! -f "$filepath" ]]; then
+            echo "${COLOR_RED}FILE NOT FOUND${COLOR_RESET}"
+            ((failed++))
+            continue
+        fi
+        
+        if verify_checksum "$filepath" "$hash" "$algorithm" >/dev/null 2>&1; then
+            echo "${COLOR_GREEN}✓ PASS${COLOR_RESET}"
+            ((passed++))
+        else
+            echo "${COLOR_RED}✗ FAIL${COLOR_RESET}"
+            ((failed++))
+        fi
+    done < "$checksum_file"
+    
+    echo ""
+    echo "Summary: $passed/$total passed"
+    
+    if [[ $failed -gt 0 ]]; then
+        log_message "ERROR" "$failed files failed verification"
+        return 1
+    else
+        log_message "SUCCESS" "All files passed verification"
+        return 0
+    fi
+}
+
+# Generate checksums for directory
+generate_directory_checksums() {
+    local directory="$1"
+    local output_file="${2:-checksums.sha256}"
+    local algorithm="${3:-sha256}"
+    local pattern="${4:-*}"
+    
+    if [[ ! -d "$directory" ]]; then
+        log_message "ERROR" "Directory not found: $directory"
+        return 1
+    fi
+    
+    log_message "INFO" "Generating checksums for files in $directory..."
+    
+    local count=0
+    > "$output_file"  # Clear output file
+    
+    # Add header
+    echo "# Leonardo AI Universal - Checksum File" >> "$output_file"
+    echo "# Generated: $(date -u +"%Y-%m-%d %H:%M:%S UTC")" >> "$output_file"
+    echo "# Algorithm: ${algorithm^^}" >> "$output_file"
+    echo "" >> "$output_file"
+    
+    # Process files
+    find "$directory" -type f -name "$pattern" -print0 | while IFS= read -r -d '' file; do
+        local relative_path="${file#$directory/}"
+        local hash
+        
+        hash=$(calculate_hash "$file" "$algorithm")
+        if [[ $? -eq 0 ]]; then
+            echo "$hash  $relative_path" >> "$output_file"
+            ((count++))
+        fi
+    done
+    
+    log_message "SUCCESS" "Generated checksums for $count files"
+    return 0
+}
+
+# Detect hash algorithm from checksum length
+detect_hash_algorithm() {
+    local hash="$1"
+    local length=${#hash}
+    
+    case $length in
+        32) echo "md5" ;;
+        40) echo "sha1" ;;
+        64) echo "sha256" ;;
+        128) echo "sha512" ;;
+        *) echo "unknown" ;;
+    esac
+}
+
+# Verify download with checksum
+verify_download() {
+    local url="$1"
+    local file="$2"
+    local expected_hash="$3"
+    local algorithm="${4:-auto}"
+    
+    if [[ ! -f "$file" ]]; then
+        log_message "ERROR" "Downloaded file not found: $file"
+        return 1
+    fi
+    
+    # Auto-detect algorithm if needed
+    if [[ "$algorithm" == "auto" ]]; then
+        algorithm=$(detect_hash_algorithm "$expected_hash")
+        if [[ "$algorithm" == "unknown" ]]; then
+            log_message "ERROR" "Could not detect hash algorithm"
+            return 1
+        fi
+        log_message "INFO" "Auto-detected algorithm: ${algorithm^^}"
+    fi
+    
+    # Verify checksum
+    verify_checksum "$file" "$expected_hash" "$algorithm"
+}
+
+# Compare two files by checksum
+compare_files_by_hash() {
+    local file1="$1"
+    local file2="$2"
+    local algorithm="${3:-sha256}"
+    
+    if [[ ! -f "$file1" ]] || [[ ! -f "$file2" ]]; then
+        log_message "ERROR" "One or both files not found"
+        return 1
+    fi
+    
+    local hash1=$(calculate_hash "$file1" "$algorithm")
+    local hash2=$(calculate_hash "$file2" "$algorithm")
+    
+    if [[ "$hash1" == "$hash2" ]]; then
+        log_message "INFO" "Files are identical (${algorithm^^})"
+        return 0
+    else
+        log_message "INFO" "Files are different"
+        return 1
+    fi
+}
+
+# Initialize hash commands on module load
+init_hash_commands
+
+# Export checksum functions
+export -f calculate_hash verify_checksum verify_checksum_file
+export -f generate_checksum_file batch_verify_checksums
+export -f generate_directory_checksums detect_hash_algorithm
+export -f verify_download compare_files_by_hash
+
+# ==== Component: src/deployment/usb_deploy.sh ====
+# ==============================================================================
+# Leonardo AI Universal - USB Deployment Module
+# ==============================================================================
+# Description: Deploy Leonardo and AI models to USB drives
+# Version: 7.0.0
+# Dependencies: colors.sh, logging.sh, usb/*.sh, models/*.sh, checksum.sh
+# ==============================================================================
+
+# USB deployment configuration
+USB_DEPLOY_MIN_SPACE_GB=8
+USB_DEPLOY_RECOMMENDED_SPACE_GB=32
+
+# Deploy Leonardo to USB
+deploy_to_usb() {
+    local target_device="${1:-}"
+    local options="${2:-}"
+    
+    echo "${COLOR_CYAN}Leonardo USB Deployment${COLOR_RESET}"
+    echo "========================"
+    echo ""
+    
+    # Step 1: Detect or select USB device
+    if [[ -z "$target_device" ]]; then
+        echo "Detecting USB drives..."
+        local devices=$(detect_usb_drives)
+        
+        if [[ -z "$devices" ]]; then
+            log_message "ERROR" "No USB drives detected"
+            echo ""
+            echo "Please insert a USB drive and try again."
+            return 1
+        fi
+        
+        # Show available devices
+        list_usb_drives
+        echo ""
+        
+        # Let user select
+        read -p "Enter device path (e.g., /dev/sdb): " target_device
+        
+        if [[ -z "$target_device" ]]; then
+            log_message "ERROR" "No device selected"
+            return 1
+        fi
+    fi
+    
+    # Validate device
+    if ! is_usb_device "$target_device"; then
+        log_message "ERROR" "Not a valid USB device: $target_device"
+        return 1
+    fi
+    
+    # Step 2: Check USB health
+    echo ""
+    echo "${COLOR_YELLOW}Checking USB health...${COLOR_RESET}"
+    init_usb_device "$target_device" >/dev/null 2>&1
+    
+    local health_status
+    if command -v smartctl >/dev/null 2>&1; then
+        health_status=$(check_usb_smart_health "$target_device" 2>/dev/null | grep "SMART overall-health" || echo "Health check unavailable")
+        echo "Health: $health_status"
+    fi
+    
+    # Check write cycles if available
+    local write_cycles=$(estimate_write_cycles 2>/dev/null || echo "unknown")
+    if [[ "$write_cycles" != "unknown" ]]; then
+        echo "Estimated write cycles: $write_cycles"
+        if [[ $write_cycles -gt 5000 ]]; then
+            echo "${COLOR_YELLOW}Warning: This USB has high write cycles${COLOR_RESET}"
+        fi
+    fi
+    
+    # Step 3: Initialize USB
+    echo ""
+    if ! confirm_action "Initialize USB for Leonardo"; then
+        return 1
+    fi
+    
+    echo ""
+    echo "${COLOR_CYAN}Initializing USB...${COLOR_RESET}"
+    
+    # Format if requested
+    if [[ "$options" == *"format"* ]]; then
+        local filesystem="${USB_FORMAT_TYPE:-exfat}"
+        if ! format_usb_drive "$target_device" "$filesystem" "LEONARDO"; then
+            return 1
+        fi
+    fi
+    
+    # Initialize and mount
+    if ! init_usb_device "$target_device"; then
+        return 1
+    fi
+    
+    # Check space
+    if ! check_usb_free_space "$LEONARDO_USB_MOUNT" $((USB_DEPLOY_MIN_SPACE_GB * 1024)); then
+        log_message "ERROR" "Insufficient space. Need at least ${USB_DEPLOY_MIN_SPACE_GB}GB"
+        return 1
+    fi
+    
+    echo "Available space: ${LEONARDO_USB_FREE}"
+    
+    # Step 4: Create Leonardo structure
+    echo ""
+    echo "${COLOR_CYAN}Creating Leonardo structure...${COLOR_RESET}"
+    if ! create_leonardo_structure; then
+        return 1
+    fi
+    
+    # Step 5: Install Leonardo
+    echo ""
+    echo "${COLOR_CYAN}Installing Leonardo...${COLOR_RESET}"
+    
+    local leonardo_script="./leonardo.sh"
+    if [[ ! -f "$leonardo_script" ]]; then
+        # Try to build it
+        if [[ -f "assembly/build-simple.sh" ]]; then
+            echo "Building Leonardo..."
+            (cd assembly && ./build-simple.sh) || return 1
+        else
+            log_message "ERROR" "Leonardo script not found"
+            return 1
+        fi
+    fi
+    
+    if ! install_leonardo_to_usb "$LEONARDO_USB_MOUNT" "$leonardo_script"; then
+        return 1
+    fi
+    
+    # Step 6: Configure for first run
+    echo ""
+    echo "${COLOR_CYAN}Configuring Leonardo...${COLOR_RESET}"
+    configure_usb_leonardo
+    
+    # Step 7: Optionally install models
+    if [[ "$options" != *"no-models"* ]]; then
+        echo ""
+        if confirm_action "Install AI models now"; then
+            deploy_models_to_usb
+        fi
+    fi
+    
+    # Step 8: Create autorun (if supported)
+    if [[ "$options" == *"autorun"* ]]; then
+        create_usb_autorun
+    fi
+    
+    # Step 9: Final verification
+    echo ""
+    echo "${COLOR_CYAN}Verifying deployment...${COLOR_RESET}"
+    verify_usb_deployment
+    
+    # Success!
+    echo ""
+    echo "${COLOR_GREEN}✓ Leonardo successfully deployed to USB!${COLOR_RESET}"
+    echo ""
+    echo "To use Leonardo:"
+    echo "1. Safely eject this USB drive"
+    echo "2. Insert into any computer"
+    echo "3. Run leonardo.sh (Linux/Mac) or leonardo.bat (Windows)"
+    echo ""
+    echo "USB Mount: $LEONARDO_USB_MOUNT"
+    
+    return 0
+}
+
+# Configure Leonardo for USB deployment
+configure_usb_leonardo() {
+    local config_file="$LEONARDO_USB_MOUNT/leonardo/config/leonardo.conf"
+    
+    # Create configuration
+    cat > "$config_file" << EOF
+# Leonardo AI Universal - USB Configuration
+# Generated: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+
+# Deployment type
+LEONARDO_DEPLOYMENT_TYPE="usb"
+
+# USB-specific settings
+LEONARDO_USB_MODE="true"
+LEONARDO_PORTABLE_MODE="true"
+LEONARDO_NO_INSTALL="true"
+
+# Paths (relative to USB root)
+LEONARDO_BASE_DIR="\$(dirname "\$(readlink -f "\$0")")/leonardo"
+LEONARDO_MODEL_DIR="\$LEONARDO_BASE_DIR/models"
+LEONARDO_CACHE_DIR="\$LEONARDO_BASE_DIR/cache"
+LEONARDO_CONFIG_DIR="\$LEONARDO_BASE_DIR/config"
+LEONARDO_LOG_DIR="\$LEONARDO_BASE_DIR/logs"
+LEONARDO_DATA_DIR="\$LEONARDO_BASE_DIR/data"
+
+# Performance settings for USB
+LEONARDO_LOW_MEMORY_MODE="true"
+LEONARDO_CACHE_SIZE_MB="512"
+LEONARDO_MAX_THREADS="4"
+
+# Security settings
+LEONARDO_PARANOID_MODE="true"
+LEONARDO_NO_TELEMETRY="true"
+LEONARDO_CLEANUP_ON_EXIT="true"
+EOF
+    
+    log_message "SUCCESS" "USB configuration created"
+}
+
+# Deploy models to USB
+deploy_models_to_usb() {
+    echo ""
+    echo "${COLOR_CYAN}Model Deployment${COLOR_RESET}"
+    echo ""
+    
+    # Check available space
+    check_usb_free_space "$LEONARDO_USB_MOUNT" 1024
+    local free_gb=$((LEONARDO_USB_FREE_MB / 1024))
+    
+    echo "Available space: ${free_gb}GB"
+    echo ""
+    
+    # Show model recommendations based on space
+    if [[ $free_gb -lt 8 ]]; then
+        echo "${COLOR_YELLOW}Limited space. Recommended models:${COLOR_RESET}"
+        echo "- TinyLlama (1.1B) - 2GB"
+        echo "- Phi-2 (2.7B) - 3GB"
+    elif [[ $free_gb -lt 16 ]]; then
+        echo "${COLOR_CYAN}Recommended models:${COLOR_RESET}"
+        echo "- Llama 3.2 (3B) - 4GB"
+        echo "- Mistral 7B - 8GB"
+        echo "- Gemma 2B - 3GB"
+    else
+        echo "${COLOR_GREEN}Plenty of space! Popular models:${COLOR_RESET}"
+        echo "- Llama 3.1 (8B) - 8GB"
+        echo "- Mistral 7B - 8GB"
+        echo "- Mixtral 8x7B - 48GB (if space permits)"
+    fi
+    
+    echo ""
+    
+    # Model selection
+    local selected_models=()
+    local total_size=0
+    
+    while true; do
+        # Use model selector
+        select_model_interactive
+        
+        if [[ -z "$SELECTED_MODEL_ID" ]]; then
+            break
+        fi
+        
+        # Get model info
+        local model_info=$(get_model_info "$SELECTED_MODEL_ID")
+        local model_size=$(echo "$model_info" | grep "Size:" | awk '{print $2}' | sed 's/GB//')
+        
+        # Check if we have space
+        local new_total=$((total_size + model_size))
+        if [[ $new_total -gt $((free_gb - 2)) ]]; then
+            echo "${COLOR_RED}Not enough space for this model${COLOR_RESET}"
+            continue
+        fi
+        
+        selected_models+=("$SELECTED_MODEL_ID")
+        total_size=$new_total
+        
+        echo "Selected: $(echo "$model_info" | grep "Name:" | cut -d: -f2-)"
+        echo "Total size: ${total_size}GB"
+        echo ""
+        
+        if ! confirm_action "Select another model"; then
+            break
+        fi
+    done
+    
+    # Download and install selected models
+    if [[ ${#selected_models[@]} -gt 0 ]]; then
+        echo ""
+        echo "${COLOR_CYAN}Downloading models...${COLOR_RESET}"
+        
+        for model_id in "${selected_models[@]}"; do
+            echo ""
+            download_model_to_usb "$model_id"
+        done
+    fi
+}
+
+# Download model to USB
+download_model_to_usb() {
+    local model_id="$1"
+    local target_dir="$LEONARDO_USB_MOUNT/leonardo/models"
+    
+    # Ensure target directory exists
+    ensure_directory "$target_dir"
+    
+    # Set download target
+    export LEONARDO_MODEL_DIR="$target_dir"
+    
+    # Download using model manager
+    download_model "$model_id"
+    
+    # Verify integrity
+    local model_file="$target_dir/${model_id}.gguf"
+    if [[ -f "$model_file.sha256" ]]; then
+        echo "Verifying model integrity..."
+        verify_checksum_file "$model_file" "$model_file.sha256"
+    fi
+}
+
+# Create autorun files
+create_usb_autorun() {
+    # Windows autorun.inf (note: often disabled by default on modern Windows)
+    cat > "$LEONARDO_USB_MOUNT/autorun.inf" << EOF
+[autorun]
+label=Leonardo AI Universal
+icon=leonardo\\assets\\leonardo.ico
+action=Run Leonardo AI Universal
+open=leonardo.bat
+EOF
+    
+    # Create desktop entry for Linux
+    cat > "$LEONARDO_USB_MOUNT/.autorun" << EOF
+#!/bin/bash
+# Leonardo AI Universal Autorun
+cd "\$(dirname "\$0")"
+./leonardo.sh
+EOF
+    chmod +x "$LEONARDO_USB_MOUNT/.autorun"
+    
+    log_message "INFO" "Autorun files created (may require user permission)"
+}
+
+# Verify USB deployment
+verify_usb_deployment() {
+    local checks_passed=0
+    local checks_total=0
+    
+    # Check 1: Leonardo executable
+    ((checks_total++))
+    if [[ -f "$LEONARDO_USB_MOUNT/leonardo.sh" ]]; then
+        # Check if executable or if filesystem doesn't support permissions (FAT/exFAT)
+        if [[ -x "$LEONARDO_USB_MOUNT/leonardo.sh" ]] || ! chmod +x "$LEONARDO_USB_MOUNT/leonardo.sh" 2>/dev/null; then
+            echo "✓ Leonardo executable found"
+            ((checks_passed++))
+        else
+            echo "✗ Leonardo executable missing or not executable"
+        fi
+    else
+        echo "✗ Leonardo executable missing"
+    fi
+    
+    # Check 2: Directory structure
+    ((checks_total++))
+    local required_dirs=("leonardo" "leonardo/models" "leonardo/config" "leonardo/logs")
+    local dirs_ok=true
+    
+    for dir in "${required_dirs[@]}"; do
+        if [[ ! -d "$LEONARDO_USB_MOUNT/$dir" ]]; then
+            dirs_ok=false
+            break
+        fi
+    done
+    
+    if [[ "$dirs_ok" == "true" ]]; then
+        echo "✓ Directory structure complete"
+        ((checks_passed++))
+    else
+        echo "✗ Directory structure incomplete"
+    fi
+    
+    # Check 3: Configuration
+    ((checks_total++))
+    if [[ -f "$LEONARDO_USB_MOUNT/leonardo/config/leonardo.conf" ]]; then
+        echo "✓ Configuration file present"
+        ((checks_passed++))
+    else
+        echo "✗ Configuration file missing"
+    fi
+    
+    # Check 4: Platform launchers
+    ((checks_total++))
+    if [[ -f "$LEONARDO_USB_MOUNT/leonardo.bat" ]] || [[ -f "$LEONARDO_USB_MOUNT/leonardo.command" ]]; then
+        echo "✓ Platform launchers created"
+        ((checks_passed++))
+    else
+        echo "✗ Platform launchers missing"
+    fi
+    
+    # Check 5: Write test
+    ((checks_total++))
+    local test_file="$LEONARDO_USB_MOUNT/.leonardo_test_$$"
+    if echo "test" > "$test_file" 2>/dev/null && rm -f "$test_file" 2>/dev/null; then
+        echo "✓ USB is writable"
+        ((checks_passed++))
+    else
+        echo "✗ USB write test failed"
+    fi
+    
+    echo ""
+    echo "Verification: $checks_passed/$checks_total checks passed"
+    
+    return $((checks_total - checks_passed))
+}
+
+# Quick USB deployment (minimal interaction)
+quick_deploy_to_usb() {
+    local device="$1"
+    
+    # Auto-detect if not specified
+    if [[ -z "$device" ]]; then
+        device=$(detect_usb_drives | head -1 | cut -d'|' -f1)
+        if [[ -z "$device" ]]; then
+            log_message "ERROR" "No USB device detected"
+            return 1
+        fi
+    fi
+    
+    # Deploy with defaults
+    deploy_to_usb "$device" "no-models"
+}
+
+# USB deployment status
+get_usb_deployment_status() {
+    local device="$1"
+    
+    # Initialize device
+    if ! init_usb_device "$device" >/dev/null 2>&1; then
+        echo "Status: Not mounted"
+        return 1
+    fi
+    
+    # Check deployment
+    if [[ -f "$LEONARDO_USB_MOUNT/leonardo.sh" ]]; then
+        echo "Status: Leonardo installed"
+        
+        # Check version
+        if [[ -f "$LEONARDO_USB_MOUNT/leonardo/VERSION" ]]; then
+            echo "Version: $(cat "$LEONARDO_USB_MOUNT/leonardo/VERSION")"
+        fi
+        
+        # Check models
+        local model_count=$(find "$LEONARDO_USB_MOUNT/leonardo/models" -name "*.gguf" 2>/dev/null | wc -l)
+        echo "Models: $model_count installed"
+        
+        # Check space
+        check_usb_free_space "$LEONARDO_USB_MOUNT" 0
+        echo "Free space: ${LEONARDO_USB_FREE}"
+    else
+        echo "Status: Not deployed"
+    fi
+}
+
+# Export deployment functions
+export -f deploy_to_usb configure_usb_leonardo deploy_models_to_usb
+export -f download_model_to_usb create_usb_autorun verify_usb_deployment
+export -f quick_deploy_to_usb get_usb_deployment_status
+
+# ==== Component: src/deployment/local_deploy.sh ====
+# ==============================================================================
+# Leonardo AI Universal - Local Deployment Module
+# ==============================================================================
+# Description: Deploy Leonardo and AI models to local systems
+# Version: 7.0.0
+# Dependencies: colors.sh, logging.sh, filesystem.sh, models/*.sh, checksum.sh
+# ==============================================================================
+
+# Local deployment paths
+LOCAL_INSTALL_PREFIX="${LOCAL_INSTALL_PREFIX:-$HOME/.leonardo}"
+LOCAL_BIN_PATH="${LOCAL_BIN_PATH:-$HOME/.local/bin}"
+LOCAL_DESKTOP_PATH="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+
+# Deploy Leonardo locally
+deploy_to_local() {
+    local install_path="${1:-$LOCAL_INSTALL_PREFIX}"
+    local options="${2:-}"
+    
+    echo "${COLOR_CYAN}Leonardo Local Deployment${COLOR_RESET}"
+    echo "========================="
+    echo ""
+    
+    # Step 1: Check system
+    echo "${COLOR_YELLOW}Checking system...${COLOR_RESET}"
+    check_local_system
+    
+    # Step 2: Select installation path
+    if [[ "$options" != *"auto"* ]]; then
+        echo ""
+        echo "Default installation path: $install_path"
+        read -p "Use this path? (Y/n): " response
+        
+        if [[ "${response,,}" == "n" ]]; then
+            read -p "Enter installation path: " custom_path
+            if [[ -n "$custom_path" ]]; then
+                install_path="$custom_path"
+            fi
+        fi
+    fi
+    
+    # Expand path
+    install_path=$(eval echo "$install_path")
+    
+    # Step 3: Check if already installed
+    if [[ -d "$install_path" ]] && [[ -f "$install_path/leonardo.sh" ]]; then
+        echo ""
+        echo "${COLOR_YELLOW}Leonardo is already installed at: $install_path${COLOR_RESET}"
+        
+        if ! confirm_action "Reinstall/Update Leonardo"; then
+            return 0
+        fi
+    fi
+    
+    # Step 4: Create installation directory
+    echo ""
+    echo "${COLOR_CYAN}Creating installation directory...${COLOR_RESET}"
+    if ! ensure_directory "$install_path"; then
+        log_message "ERROR" "Failed to create installation directory"
+        return 1
+    fi
+    
+    # Step 5: Install Leonardo
+    echo ""
+    echo "${COLOR_CYAN}Installing Leonardo...${COLOR_RESET}"
+    if ! install_leonardo_local "$install_path"; then
+        return 1
+    fi
+    
+    # Step 6: Create system integration
+    echo ""
+    echo "${COLOR_CYAN}Creating system integration...${COLOR_RESET}"
+    create_local_integration "$install_path"
+    
+    # Step 7: Configure Leonardo
+    echo ""
+    echo "${COLOR_CYAN}Configuring Leonardo...${COLOR_RESET}"
+    configure_local_leonardo "$install_path"
+    
+    # Step 8: Optionally install models
+    if [[ "$options" != *"no-models"* ]]; then
+        echo ""
+        if confirm_action "Install AI models now"; then
+            deploy_models_to_local "$install_path"
+        fi
+    fi
+    
+    # Step 9: Verify installation
+    echo ""
+    echo "${COLOR_CYAN}Verifying installation...${COLOR_RESET}"
+    verify_local_deployment "$install_path"
+    
+    # Success!
+    echo ""
+    echo "${COLOR_GREEN}✓ Leonardo successfully installed!${COLOR_RESET}"
+    echo ""
+    echo "Installation path: $install_path"
+    echo ""
+    echo "To use Leonardo:"
+    echo "1. Run: leonardo"
+    echo "2. Or: $install_path/leonardo.sh"
+    echo ""
+    
+    # Update shell if needed
+    if [[ "$options" != *"no-shell"* ]]; then
+        update_shell_config "$install_path"
+    fi
+    
+    return 0
+}
+
+# Check local system
+check_local_system() {
+    local platform=$(detect_platform)
+    
+    echo "Platform: $platform"
+    echo "Architecture: $(uname -m)"
+    echo "Shell: $SHELL"
+    
+    # Check disk space
+    local available_space
+    case "$platform" in
+        "macos")
+            available_space=$(df -g "$HOME" | awk 'NR==2 {print $4}')
+            echo "Available space: ${available_space}GB"
+            ;;
+        "linux")
+            available_space=$(df -BG "$HOME" | awk 'NR==2 {print $4}' | sed 's/G//')
+            echo "Available space: ${available_space}GB"
+            ;;
+        "windows")
+            # WSL or Git Bash
+            available_space=$(df -BG "$HOME" 2>/dev/null | awk 'NR==2 {print $4}' | sed 's/G//')
+            if [[ -n "$available_space" ]]; then
+                echo "Available space: ${available_space}GB"
+            fi
+            ;;
+    esac
+    
+    # Check dependencies
+    echo ""
+    echo "Checking dependencies..."
+    local deps=("curl" "tar" "gzip")
+    local missing=()
+    
+    for dep in "${deps[@]}"; do
+        if ! command -v "$dep" >/dev/null 2>&1; then
+            missing+=("$dep")
+        fi
+    done
+    
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        echo "${COLOR_YELLOW}Missing dependencies: ${missing[*]}${COLOR_RESET}"
+        echo "Please install them before continuing."
+        return 1
+    else
+        echo "✓ All dependencies satisfied"
+    fi
+}
+
+# Install Leonardo locally
+install_leonardo_local() {
+    local install_path="$1"
+    local leonardo_script="./leonardo.sh"
+    
+    # Build if necessary
+    if [[ ! -f "$leonardo_script" ]]; then
+        if [[ -f "assembly/build-simple.sh" ]]; then
+            echo "Building Leonardo..."
+            (cd assembly && ./build-simple.sh) || return 1
+        else
+            log_message "ERROR" "Leonardo script not found"
+            return 1
+        fi
+    fi
+    
+    # Copy Leonardo
+    echo "Copying Leonardo..."
+    cp "$leonardo_script" "$install_path/" || return 1
+    chmod +x "$install_path/leonardo.sh"
+    
+    # Create directory structure
+    echo "Creating directory structure..."
+    local dirs=("models" "cache" "config" "logs" "data" "scripts" "backups" "temp")
+    
+    for dir in "${dirs[@]}"; do
+        ensure_directory "$install_path/$dir"
+    done
+    
+    # Copy assets if available
+    if [[ -d "assets" ]]; then
+        cp -r assets "$install_path/"
+    fi
+    
+    # Create VERSION file
+    echo "$LEONARDO_VERSION" > "$install_path/VERSION"
+    
+    log_message "SUCCESS" "Leonardo installed to $install_path"
+    return 0
+}
+
+# Create local system integration
+create_local_integration() {
+    local install_path="$1"
+    local platform=$(detect_platform)
+    
+    # Create command link
+    ensure_directory "$LOCAL_BIN_PATH"
+    
+    # Create wrapper script
+    local wrapper="$LOCAL_BIN_PATH/leonardo"
+    cat > "$wrapper" << EOF
+#!/usr/bin/env bash
+# Leonardo AI Universal launcher
+exec "$install_path/leonardo.sh" "\$@"
+EOF
+    chmod +x "$wrapper"
+    echo "✓ Command 'leonardo' created"
+    
+    # Platform-specific integration
+    case "$platform" in
+        "linux")
+            create_desktop_entry "$install_path"
+            ;;
+        "macos")
+            create_macos_app "$install_path"
+            ;;
+        "windows")
+            create_windows_shortcut "$install_path"
+            ;;
+    esac
+}
+
+# Create Linux desktop entry
+create_desktop_entry() {
+    local install_path="$1"
+    
+    ensure_directory "$LOCAL_DESKTOP_PATH"
+    
+    cat > "$LOCAL_DESKTOP_PATH/leonardo.desktop" << EOF
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Leonardo AI Universal
+Comment=Deploy AI models anywhere
+Icon=$install_path/assets/leonardo.png
+Exec=$install_path/leonardo.sh
+Terminal=true
+Categories=Development;Science;
+Keywords=AI;ML;LLM;Models;
+EOF
+    
+    # Update desktop database if available
+    if command -v update-desktop-database >/dev/null 2>&1; then
+        update-desktop-database "$LOCAL_DESKTOP_PATH" 2>/dev/null
+    fi
+    
+    echo "✓ Desktop entry created"
+}
+
+# Create macOS app bundle
+create_macos_app() {
+    local install_path="$1"
+    local app_path="$HOME/Applications/Leonardo.app"
+    
+    # Create app structure
+    ensure_directory "$app_path/Contents/MacOS"
+    ensure_directory "$app_path/Contents/Resources"
+    
+    # Create launcher
+    cat > "$app_path/Contents/MacOS/Leonardo" << EOF
+#!/bin/bash
+cd "$install_path"
+open -a Terminal "$install_path/leonardo.sh"
+EOF
+    chmod +x "$app_path/Contents/MacOS/Leonardo"
+    
+    # Create Info.plist
+    cat > "$app_path/Contents/Info.plist" << EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key>
+    <string>Leonardo</string>
+    <key>CFBundleIdentifier</key>
+    <string>ai.leonardo.universal</string>
+    <key>CFBundleName</key>
+    <string>Leonardo AI Universal</string>
+    <key>CFBundleVersion</key>
+    <string>$LEONARDO_VERSION</string>
+    <key>CFBundleIconFile</key>
+    <string>leonardo.icns</string>
+</dict>
+</plist>
+EOF
+    
+    echo "✓ macOS app created"
+}
+
+# Create Windows shortcut (for WSL/Git Bash)
+create_windows_shortcut() {
+    local install_path="$1"
+    local desktop="$HOME/Desktop"
+    
+    if [[ -d "$desktop" ]]; then
+        # Create batch file
+        cat > "$desktop/Leonardo.bat" << EOF
+@echo off
+title Leonardo AI Universal
+bash "$install_path/leonardo.sh" %*
+pause
+EOF
+        echo "✓ Desktop shortcut created"
+    fi
+}
+
+# Configure local Leonardo
+configure_local_leonardo() {
+    local install_path="$1"
+    local config_file="$install_path/config/leonardo.conf"
+    
+    cat > "$config_file" << EOF
+# Leonardo AI Universal - Local Configuration
+# Generated: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+
+# Deployment type
+LEONARDO_DEPLOYMENT_TYPE="local"
+
+# Local paths
+LEONARDO_BASE_DIR="$install_path"
+LEONARDO_MODEL_DIR="\$LEONARDO_BASE_DIR/models"
+LEONARDO_CACHE_DIR="\$LEONARDO_BASE_DIR/cache"
+LEONARDO_CONFIG_DIR="\$LEONARDO_BASE_DIR/config"
+LEONARDO_LOG_DIR="\$LEONARDO_BASE_DIR/logs"
+LEONARDO_DATA_DIR="\$LEONARDO_BASE_DIR/data"
+
+# Performance settings
+LEONARDO_CACHE_SIZE_MB="2048"
+LEONARDO_MAX_THREADS="0"  # 0 = auto-detect
+
+# Update settings
+LEONARDO_AUTO_UPDATE="true"
+LEONARDO_UPDATE_CHANNEL="stable"
+EOF
+    
+    log_message "SUCCESS" "Local configuration created"
+}
+
+# Deploy models to local installation
+deploy_models_to_local() {
+    local install_path="$1"
+    local model_dir="$install_path/models"
+    
+    # Set model directory
+    export LEONARDO_MODEL_DIR="$model_dir"
+    
+    echo ""
+    echo "${COLOR_CYAN}Model Installation${COLOR_RESET}"
+    echo ""
+    
+    # Check disk space
+    local available_gb
+    available_gb=$(df -BG "$install_path" 2>/dev/null | awk 'NR==2 {print $4}' | sed 's/G//' || echo "unknown")
+    
+    if [[ "$available_gb" != "unknown" ]]; then
+        echo "Available space: ${available_gb}GB"
+        echo ""
+    fi
+    
+    # Show recommendations
+    echo "${COLOR_CYAN}Recommended starter models:${COLOR_RESET}"
+    echo "1. Llama 3.2 (3B) - Fast and capable"
+    echo "2. Mistral 7B - Excellent general purpose"
+    echo "3. Gemma 2B - Lightweight option"
+    echo ""
+    
+    # Let user select models
+    local continue_selection=true
+    
+    while [[ "$continue_selection" == "true" ]]; do
+        select_model_interactive
+        
+        if [[ -z "$SELECTED_MODEL_ID" ]]; then
+            break
+        fi
+        
+        # Download model
+        echo ""
+        download_model "$SELECTED_MODEL_ID"
+        
+        echo ""
+        if ! confirm_action "Install another model"; then
+            continue_selection=false
+        fi
+    done
+}
+
+# Verify local deployment
+verify_local_deployment() {
+    local install_path="$1"
+    local checks_passed=0
+    local checks_total=0
+    
+    # Check 1: Leonardo executable
+    ((checks_total++))
+    if [[ -f "$install_path/leonardo.sh" ]] && [[ -x "$install_path/leonardo.sh" ]]; then
+        echo "✓ Leonardo executable found"
+        ((checks_passed++))
+    else
+        echo "✗ Leonardo executable missing"
+    fi
+    
+    # Check 2: Directory structure
+    ((checks_total++))
+    local required_dirs=("models" "config" "logs" "cache")
+    local dirs_ok=true
+    
+    for dir in "${required_dirs[@]}"; do
+        if [[ ! -d "$install_path/$dir" ]]; then
+            dirs_ok=false
+            break
+        fi
+    done
+    
+    if [[ "$dirs_ok" == "true" ]]; then
+        echo "✓ Directory structure complete"
+        ((checks_passed++))
+    else
+        echo "✗ Directory structure incomplete"
+    fi
+    
+    # Check 3: Configuration
+    ((checks_total++))
+    if [[ -f "$install_path/config/leonardo.conf" ]]; then
+        echo "✓ Configuration file present"
+        ((checks_passed++))
+    else
+        echo "✗ Configuration file missing"
+    fi
+    
+    # Check 4: Command availability
+    ((checks_total++))
+    if command -v leonardo >/dev/null 2>&1; then
+        echo "✓ 'leonardo' command available"
+        ((checks_passed++))
+    else
+        echo "✗ 'leonardo' command not in PATH"
+    fi
+    
+    echo ""
+    echo "Verification: $checks_passed/$checks_total checks passed"
+    
+    return $((checks_total - checks_passed))
+}
+
+# Update shell configuration
+update_shell_config() {
+    local install_path="$1"
+    
+    # Add to PATH if needed
+    if [[ ":$PATH:" != *":$LOCAL_BIN_PATH:"* ]]; then
+        echo ""
+        echo "${COLOR_YELLOW}Adding Leonardo to PATH...${COLOR_RESET}"
+        
+        # Detect shell config file
+        local shell_config=""
+        case "$SHELL" in
+            */bash)
+                shell_config="$HOME/.bashrc"
+                ;;
+            */zsh)
+                shell_config="$HOME/.zshrc"
+                ;;
+            */fish)
+                shell_config="$HOME/.config/fish/config.fish"
+                ;;
+        esac
+        
+        if [[ -n "$shell_config" ]] && [[ -f "$shell_config" ]]; then
+            # Check if already added
+            if ! grep -q "leonardo.*PATH" "$shell_config"; then
+                echo "" >> "$shell_config"
+                echo "# Leonardo AI Universal" >> "$shell_config"
+                echo "export PATH=\"\$PATH:$LOCAL_BIN_PATH\"" >> "$shell_config"
+                echo "✓ PATH updated in $shell_config"
+                echo ""
+                echo "Run 'source $shell_config' or restart your terminal"
+            fi
+        fi
+    fi
+}
+
+# Uninstall Leonardo
+uninstall_leonardo_local() {
+    local install_path="${1:-$LOCAL_INSTALL_PREFIX}"
+    
+    echo "${COLOR_YELLOW}Uninstalling Leonardo...${COLOR_RESET}"
+    echo ""
+    
+    if [[ ! -d "$install_path" ]]; then
+        echo "Leonardo not found at: $install_path"
+        return 1
+    fi
+    
+    if ! confirm_action "Remove Leonardo and all data"; then
+        return 0
+    fi
+    
+    # Remove installation
+    echo "Removing $install_path..."
+    rm -rf "$install_path"
+    
+    # Remove command
+    if [[ -f "$LOCAL_BIN_PATH/leonardo" ]]; then
+        rm -f "$LOCAL_BIN_PATH/leonardo"
+    fi
+    
+    # Remove desktop entry
+    if [[ -f "$LOCAL_DESKTOP_PATH/leonardo.desktop" ]]; then
+        rm -f "$LOCAL_DESKTOP_PATH/leonardo.desktop"
+    fi
+    
+    # Remove macOS app
+    if [[ -d "$HOME/Applications/Leonardo.app" ]]; then
+        rm -rf "$HOME/Applications/Leonardo.app"
+    fi
+    
+    echo ""
+    echo "${COLOR_GREEN}✓ Leonardo uninstalled${COLOR_RESET}"
+}
+
+# Export deployment functions
+export -f deploy_to_local check_local_system install_leonardo_local
+export -f create_local_integration configure_local_leonardo
+export -f deploy_models_to_local verify_local_deployment
+export -f update_shell_config uninstall_leonardo_local
+
+# ==== Component: src/deployment/cli.sh ====
+# ==============================================================================
+# Leonardo AI Universal - Deployment CLI Module
+# ==============================================================================
+# Description: Command-line interface for deployment operations
+# Version: 7.0.0
+# Dependencies: colors.sh, logging.sh, usb_deploy.sh, local_deploy.sh
+# ==============================================================================
+
+# Main deployment CLI handler
+deployment_cli() {
+    local command="${1:-help}"
+    shift
+    
+    case "$command" in
+        "usb")
+            deployment_usb_command "$@"
+            ;;
+        "local")
+            deployment_local_command "$@"
+            ;;
+        "status")
+            deployment_status_command "$@"
+            ;;
+        "verify")
+            deployment_verify_command "$@"
+            ;;
+        "help"|"-h"|"--help")
+            show_deployment_help
+            ;;
+        *)
+            echo "${COLOR_RED}Unknown deployment command: $command${COLOR_RESET}"
+            echo ""
+            show_deployment_help
+            return 1
+            ;;
+    esac
+}
+
+# USB deployment command handler
+deployment_usb_command() {
+    local device="${1:-}"
+    local options="${2:-}"
+    
+    echo "${COLOR_CYAN}╭─────────────────────────────────────╮${COLOR_RESET}"
+    echo "${COLOR_CYAN}│     Leonardo USB Deployment         │${COLOR_RESET}"
+    echo "${COLOR_CYAN}╰─────────────────────────────────────╯${COLOR_RESET}"
+    echo ""
+    
+    # Check if running from USB already
+    if [[ "${LEONARDO_DEPLOYMENT_TYPE:-}" == "usb" ]]; then
+        echo "${COLOR_YELLOW}Warning: Already running from USB${COLOR_RESET}"
+        echo "Cannot deploy to USB while running from USB."
+        return 1
+    fi
+    
+    # Deploy to USB
+    deploy_to_usb "$device" "$options"
+}
+
+# Local deployment command handler
+deployment_local_command() {
+    local install_path="${1:-}"
+    local options="${2:-}"
+    
+    echo "${COLOR_CYAN}╭─────────────────────────────────────╮${COLOR_RESET}"
+    echo "${COLOR_CYAN}│    Leonardo Local Installation      │${COLOR_RESET}"
+    echo "${COLOR_CYAN}╰─────────────────────────────────────╯${COLOR_RESET}"
+    echo ""
+    
+    # Check if already installed
+    if command -v leonardo >/dev/null 2>&1; then
+        local existing_path=$(which leonardo | xargs readlink -f | xargs dirname)
+        echo "${COLOR_YELLOW}Leonardo is already installed${COLOR_RESET}"
+        echo "Location: $existing_path"
+        echo ""
+    fi
+    
+    # Deploy locally
+    deploy_to_local "$install_path" "$options"
+}
+
+# Deployment status command
+deployment_status_command() {
+    local target="${1:-all}"
+    
+    echo "${COLOR_CYAN}Leonardo Deployment Status${COLOR_RESET}"
+    echo "========================="
+    echo ""
+    
+    # Check current deployment
+    echo "Current Deployment Status:"
+    echo "${COLOR_YELLOW}─────────────────────────${COLOR_RESET}"
+    
+    if [[ -n "${LEONARDO_DEPLOYMENT_TYPE:-}" ]]; then
+        echo "Type: ${LEONARDO_DEPLOYMENT_TYPE:-}"
+        echo "Base: ${LEONARDO_BASE_DIR:-unknown}"
+        echo "Version: ${LEONARDO_VERSION:-}"
+    else
+        echo "Running in development mode"
+    fi
+    echo ""
+    
+    # Check local installation
+    if [[ "$target" == "all" ]] || [[ "$target" == "local" ]]; then
+        echo "${COLOR_YELLOW}Local Installation:${COLOR_RESET}"
+        
+        if command -v leonardo >/dev/null 2>&1; then
+            local leonardo_path=$(which leonardo)
+            local install_dir=$(readlink -f "$leonardo_path" | xargs dirname | xargs dirname)
+            
+            echo "✓ Installed at: $install_dir"
+            
+            if [[ -f "$install_dir/VERSION" ]]; then
+                echo "  Version: $(cat "$install_dir/VERSION")"
+            fi
+            
+            # Count models
+            if [[ -d "$install_dir/models" ]]; then
+                local model_count=$(find "$install_dir/models" -name "*.gguf" 2>/dev/null | wc -l)
+                echo "  Models: $model_count installed"
+            fi
+        else
+            echo "✗ Not installed"
+        fi
+        echo ""
+    fi
+    
+    # Check USB deployments
+    if [[ "$target" == "all" ]] || [[ "$target" == "usb" ]]; then
+        echo "${COLOR_YELLOW}USB Deployments:${COLOR_RESET}"
+        
+        local usb_found=false
+        local devices=$(detect_usb_drives 2>/dev/null)
+        
+        if [[ -n "$devices" ]]; then
+            while IFS='|' read -r device label size fs; do
+                # Check if Leonardo is on this USB
+                local mount_point=$(get_mount_point "$device" 2>/dev/null)
+                
+                if [[ -n "$mount_point" ]] && [[ -f "$mount_point/leonardo.sh" ]]; then
+                    usb_found=true
+                    echo "✓ $device - $label ($size)"
+                    
+                    if [[ -f "$mount_point/leonardo/VERSION" ]]; then
+                        echo "  Version: $(cat "$mount_point/leonardo/VERSION")"
+                    fi
+                fi
+            done <<< "$devices"
+        fi
+        
+        if [[ "$usb_found" == "false" ]]; then
+            echo "✗ No Leonardo USB drives detected"
+        fi
+        echo ""
+    fi
+}
+
+# Deployment verification command
+deployment_verify_command() {
+    local target="${1:-current}"
+    
+    echo "${COLOR_CYAN}Deployment Verification${COLOR_RESET}"
+    echo "======================"
+    echo ""
+    
+    case "$target" in
+        "current")
+            # Verify current deployment
+            if [[ -n "${LEONARDO_BASE_DIR:-}" ]]; then
+                echo "Verifying: ${LEONARDO_BASE_DIR:-}"
+                echo ""
+                
+                if [[ "${LEONARDO_DEPLOYMENT_TYPE:-}" == "usb" ]]; then
+                    verify_usb_deployment
+                else
+                    verify_local_deployment "${LEONARDO_BASE_DIR:-}"
+                fi
+            else
+                echo "No active deployment to verify"
+            fi
+            ;;
+        "local")
+            # Verify local installation
+            if command -v leonardo >/dev/null 2>&1; then
+                local install_dir=$(which leonardo | xargs readlink -f | xargs dirname | xargs dirname)
+                verify_local_deployment "$install_dir"
+            else
+                echo "No local installation found"
+            fi
+            ;;
+        "usb")
+            # Verify USB deployment
+            local device="${2:-}"
+            if [[ -z "$device" ]]; then
+                echo "Please specify USB device"
+                return 1
+            fi
+            
+            init_usb_device "$device" >/dev/null 2>&1
+            verify_usb_deployment
+            ;;
+        *)
+            echo "Unknown target: $target"
+            echo "Valid targets: current, local, usb"
+            ;;
+    esac
+}
+
+# Show deployment help
+show_deployment_help() {
+    cat << EOF
+${COLOR_CYAN}Leonardo Deployment Commands${COLOR_RESET}
+
+Usage: leonardo deploy <command> [options]
+
+Commands:
+  ${COLOR_GREEN}usb [device] [options]${COLOR_RESET}
+    Deploy Leonardo to a USB drive
+    Options:
+      format      - Format USB before deployment
+      no-models   - Skip model installation
+      autorun     - Create autorun files
+    
+  ${COLOR_GREEN}local [path] [options]${COLOR_RESET}
+    Install Leonardo on local system
+    Default path: \$HOME/.leonardo
+    Options:
+      auto        - Use defaults without prompts
+      no-models   - Skip model installation
+      no-shell    - Don't update shell config
+    
+  ${COLOR_GREEN}status [target]${COLOR_RESET}
+    Check deployment status
+    Targets: all, local, usb (default: all)
+    
+  ${COLOR_GREEN}verify [target] [device]${COLOR_RESET}
+    Verify deployment integrity
+    Targets: current, local, usb
+
+Examples:
+  leonardo deploy usb                # Interactive USB deployment
+  leonardo deploy usb /dev/sdb format # Format and deploy to specific USB
+  leonardo deploy local              # Install locally with defaults
+  leonardo deploy local ~/leonardo   # Install to custom location
+  leonardo deploy status             # Check all deployments
+  leonardo deploy verify local       # Verify local installation
+
+Quick Deploy:
+  leonardo deploy usb --quick        # Auto-detect and deploy to USB
+  leonardo deploy local --quick      # Quick local installation
+
+EOF
+}
+
+# Export deployment functions
+export -f deployment_cli deployment_usb_command deployment_local_command
+export -f deployment_status_command deployment_verify_command
+
 # ==== Component: src/ui/menu.sh ====
 # ==============================================================================
 # Leonardo AI Universal - Menu System
@@ -4576,6 +6253,9 @@ export -f usb_cli_clean usb_cli_test register_usb_commands
 declare -g MENU_SELECTION=""
 declare -g MENU_POSITION=1
 declare -g MENU_MAX_ITEMS=0
+
+# Compatibility
+BRIGHT="${BOLD}"
 
 # Display menu with arrow key navigation
 show_menu() {
@@ -4653,9 +6333,9 @@ display_menu_frame() {
     local options=("$@")
     
     # Draw title box
-    echo -e "${GREEN}╔════════════════════════════════════════════╗${RESET}"
-    printf "${GREEN}║${RESET} %-42s ${GREEN}║${RESET}\n" "$title"
-    echo -e "${GREEN}╚════════════════════════════════════════════╝${RESET}"
+    echo -e "${GREEN}╔════════════════════════════════════════════╗${COLOR_RESET}"
+    printf "${GREEN}║${COLOR_RESET} %-42s ${GREEN}║${COLOR_RESET}\n" "$title"
+    echo -e "${GREEN}╚════════════════════════════════════════════╝${COLOR_RESET}"
     echo
     
     # Display options
@@ -4663,15 +6343,15 @@ display_menu_frame() {
     for option in "${options[@]}"; do
         if [[ $i -eq $MENU_POSITION ]]; then
             # Highlighted option
-            echo -e "${CYAN}▶ ${BRIGHT}${option}${RESET}"
+            echo -e "${CYAN}▶ ${BRIGHT}${option}${COLOR_RESET}"
         else
-            echo -e "  ${DIM}${option}${RESET}"
+            echo -e "  ${DIM}${option}${COLOR_RESET}"
         fi
         ((i++))
     done
     
     echo
-    echo -e "${DIM}Use ↑/↓ arrows or numbers to select, Enter to confirm, q to quit${RESET}"
+    echo -e "${DIM}Use ↑/↓ arrows or numbers to select, Enter to confirm, q to quit${COLOR_RESET}"
 }
 
 # Simple yes/no menu
@@ -4679,7 +6359,7 @@ confirm_menu() {
     local prompt="$1"
     local default="${2:-n}"
     
-    echo -e "${YELLOW}${prompt}${RESET}"
+    echo -e "${YELLOW}${prompt}${COLOR_RESET}"
     
     local options=("Yes" "No")
     local selection=$(show_menu "Confirm Action" "${options[@]}")
@@ -4688,6 +6368,11 @@ confirm_menu() {
         "Yes") return 0 ;;
         "No"|"") return 1 ;;
     esac
+}
+
+# Alias for backward compatibility
+confirm_action() {
+    confirm_menu "$@"
 }
 
 # Multi-select checklist menu
@@ -4768,9 +6453,9 @@ display_checklist_frame() {
     local -a selected=("${@:$((num_options+1))}")
     
     # Draw title box
-    echo -e "${GREEN}╔════════════════════════════════════════════╗${RESET}"
-    printf "${GREEN}║${RESET} %-42s ${GREEN}║${RESET}\n" "$title"
-    echo -e "${GREEN}╚════════════════════════════════════════════╝${RESET}"
+    echo -e "${GREEN}╔════════════════════════════════════════════╗${COLOR_RESET}"
+    printf "${GREEN}║${COLOR_RESET} %-42s ${GREEN}║${COLOR_RESET}\n" "$title"
+    echo -e "${GREEN}╚════════════════════════════════════════════╝${COLOR_RESET}"
     echo
     
     # Display options with checkboxes
@@ -4780,15 +6465,15 @@ display_checklist_frame() {
         [[ ${selected[idx]} -eq 1 ]] && checkbox="[✓]"
         
         if [[ $i -eq $MENU_POSITION ]]; then
-            echo -e "${CYAN}▶ ${checkbox} ${BRIGHT}${options[idx]}${RESET}"
+            echo -e "${CYAN}▶ ${checkbox} ${BRIGHT}${options[idx]}${COLOR_RESET}"
         else
-            echo -e "  ${checkbox} ${DIM}${options[idx]}${RESET}"
+            echo -e "  ${checkbox} ${DIM}${options[idx]}${COLOR_RESET}"
         fi
         ((i++))
     done
     
     echo
-    echo -e "${DIM}Use ↑/↓ to navigate, Space to select, Enter to confirm${RESET}"
+    echo -e "${DIM}Use ↑/↓ to navigate, Space to select, Enter to confirm${COLOR_RESET}"
 }
 
 # Radio button menu (single selection)
@@ -4823,15 +6508,15 @@ show_progress_menu() {
     (
         while [[ ${cancel_var} -eq 0 ]] && [[ ${progress_var} -lt 100 ]]; do
             clear
-            echo -e "${GREEN}╔════════════════════════════════════════════╗${RESET}"
-            printf "${GREEN}║${RESET} %-42s ${GREEN}║${RESET}\n" "$title"
-            echo -e "${GREEN}╚════════════════════════════════════════════╝${RESET}"
+            echo -e "${GREEN}╔════════════════════════════════════════════╗${COLOR_RESET}"
+            printf "${GREEN}║${COLOR_RESET} %-42s ${GREEN}║${COLOR_RESET}\n" "$title"
+            echo -e "${GREEN}╚════════════════════════════════════════════╝${COLOR_RESET}"
             echo
             echo -e "${message}"
             echo
             print_progress ${progress_var} 40
             echo
-            echo -e "${DIM}Press 'c' to cancel${RESET}"
+            echo -e "${DIM}Press 'c' to cancel${COLOR_RESET}"
             sleep 0.1
         done
     ) &
@@ -4860,14 +6545,14 @@ show_input_dialog() {
     local validation_func="${4:-}"
     
     clear
-    echo -e "${GREEN}╔════════════════════════════════════════════╗${RESET}"
-    printf "${GREEN}║${RESET} %-42s ${GREEN}║${RESET}\n" "$title"
-    echo -e "${GREEN}╚════════════════════════════════════════════╝${RESET}"
+    echo -e "${GREEN}╔════════════════════════════════════════════╗${COLOR_RESET}"
+    printf "${GREEN}║${COLOR_RESET} %-42s ${GREEN}║${COLOR_RESET}\n" "$title"
+    echo -e "${GREEN}╚════════════════════════════════════════════╝${COLOR_RESET}"
     echo
     echo -e "${prompt}"
     
     if [[ -n "$default" ]]; then
-        echo -e "${DIM}(default: $default)${RESET}"
+        echo -e "${DIM}(default: $default)${COLOR_RESET}"
     fi
     
     echo
@@ -4886,7 +6571,7 @@ show_input_dialog() {
             if $validation_func "$input"; then
                 break
             else
-                echo -e "${RED}Invalid input. Please try again.${RESET}"
+                echo -e "${RED}Invalid input. Please try again.${COLOR_RESET}"
             fi
         else
             break
@@ -4907,12 +6592,12 @@ show_filtered_list() {
     
     while true; do
         clear
-        echo -e "${GREEN}╔════════════════════════════════════════════╗${RESET}"
-        printf "${GREEN}║${RESET} %-42s ${GREEN}║${RESET}\n" "$title"
-        echo -e "${GREEN}╚════════════════════════════════════════════╝${RESET}"
+        echo -e "${GREEN}╔════════════════════════════════════════════╗${COLOR_RESET}"
+        printf "${GREEN}║${COLOR_RESET} %-42s ${GREEN}║${COLOR_RESET}\n" "$title"
+        echo -e "${GREEN}╚════════════════════════════════════════════╝${COLOR_RESET}"
         echo
-        echo -e "Filter: ${YELLOW}$filter${RESET}_"
-        echo -e "${DIM}Type to filter, ↑/↓ to select, Enter to confirm, Esc to cancel${RESET}"
+        echo -e "Filter: ${YELLOW}$filter${COLOR_RESET}_"
+        echo -e "${DIM}Type to filter, ↑/↓ to select, Enter to confirm, Esc to cancel${COLOR_RESET}"
         echo
         
         # Apply filter
@@ -4927,7 +6612,7 @@ show_filtered_list() {
         
         # Display filtered items
         if [[ ${#filtered_items[@]} -eq 0 ]]; then
-            echo -e "${DIM}No items match filter${RESET}"
+            echo -e "${DIM}No items match filter${COLOR_RESET}"
         else
             selected=$(show_menu "Select Item" "${filtered_items[@]}")
             if [[ -n "$selected" ]]; then
@@ -4961,7 +6646,7 @@ show_filtered_list() {
 }
 
 # Export menu functions
-export -f show_menu confirm_menu show_checklist show_radio_menu
+export -f show_menu confirm_menu confirm_action show_checklist show_radio_menu
 export -f show_progress_menu show_input_dialog show_filtered_list
 
 # ==== Component: src/ui/progress.sh ====
@@ -5360,10 +7045,16 @@ show_ascii_progress() {
     esac
 }
 
+# Simple progress function with spinner
+show_progress() {
+    local message="${1:-Processing...}"
+    echo "${CYAN}→ ${message}${RESET}"
+}
+
 # Export progress functions
 export -f show_progress_bar show_multi_progress show_spinner stop_spinner
-export -f show_download_progress show_status show_countdown format_duration
-export -f format_bytes show_matrix_progress show_ascii_progress
+export -f show_progress show_download_progress show_status show_countdown
+export -f format_duration format_bytes show_matrix_progress show_ascii_progress
 
 # ==== Component: src/ui/dashboard.sh ====
 # ==============================================================================
@@ -5377,6 +7068,9 @@ export -f format_bytes show_matrix_progress show_ascii_progress
 # Dashboard state
 declare -g DASHBOARD_ACTIVE=0
 declare -g DASHBOARD_REFRESH_RATE=1
+
+# Compatibility
+RESET="${COLOR_RESET}"
 
 # Main dashboard display
 show_dashboard() {
@@ -6370,6 +8064,55 @@ export -f start_web_ui stop_web_ui generate_web_ui_files
 # Dependencies: all components
 # ==============================================================================
 
+# Show application banner
+show_banner() {
+    echo "${COLOR_CYAN}╭─────────────────────────────────────╮${COLOR_RESET}"
+    echo "${COLOR_CYAN}│    Leonardo AI Universal v$LEONARDO_VERSION    │${COLOR_RESET}"
+    echo "${COLOR_CYAN}│       Deploy AI Anywhere™           │${COLOR_RESET}"
+    echo "${COLOR_CYAN}╰─────────────────────────────────────╯${COLOR_RESET}"
+    echo ""
+}
+
+# Show help information
+show_help() {
+    cat << EOF
+${COLOR_CYAN}$LEONARDO_NAME v$LEONARDO_VERSION${COLOR_RESET}
+${COLOR_DIM}$LEONARDO_DESCRIPTION${COLOR_RESET}
+
+${COLOR_GREEN}Usage:${COLOR_RESET}
+  leonardo [options] [command] [args]
+
+${COLOR_GREEN}Options:${COLOR_RESET}
+  -h, --help        Show this help message
+  -v, --verbose     Enable verbose output
+  -q, --quiet       Suppress non-essential output
+  --version         Show version information
+  --no-color        Disable colored output
+
+${COLOR_GREEN}Commands:${COLOR_RESET}
+  model <cmd>       Model management (list, download, delete, etc.)
+  usb <cmd>         USB drive management
+  dashboard         Show system dashboard
+  web [port]        Start web UI
+  test              Run system tests
+
+${COLOR_GREEN}Interactive Mode:${COLOR_RESET}
+  Run without commands to enter interactive mode
+
+${COLOR_GREEN}Examples:${COLOR_RESET}
+  leonardo                      # Interactive mode
+  leonardo model list           # List available models
+  leonardo model download llama3-8b
+  leonardo dashboard            # Show system status
+  leonardo web                  # Start web interface
+
+For more help on specific commands:
+  leonardo model help
+  leonardo usb help
+
+EOF
+}
+
 # Main function - entry point for Leonardo
 main() {
     # Mark that main has been called
@@ -6451,6 +8194,14 @@ parse_arguments() {
                 LEONARDO_ARGS=("$@")
                 break
                 ;;
+            deploy|deployment)
+                LEONARDO_COMMAND="deploy"
+                shift
+                LEONARDO_SUBCOMMAND="$1"
+                shift
+                LEONARDO_ARGS=("$@")
+                break
+                ;;
             dashboard|status)
                 LEONARDO_COMMAND="dashboard"
                 shift
@@ -6484,6 +8235,9 @@ handle_direct_command() {
         "usb")
             handle_usb_command "$LEONARDO_SUBCOMMAND" "${LEONARDO_ARGS[@]}"
             ;;
+        "deploy"|"deployment")
+            deployment_cli "$LEONARDO_SUBCOMMAND" "${LEONARDO_ARGS[@]}"
+            ;;
         "dashboard")
             show_system_dashboard
             ;;
@@ -6499,46 +8253,6 @@ handle_direct_command() {
             return 1
             ;;
     esac
-}
-
-# Show help information
-show_help() {
-    cat << EOF
-${COLOR_CYAN}$LEONARDO_NAME v$LEONARDO_VERSION${COLOR_RESET}
-${COLOR_DIM}$LEONARDO_DESCRIPTION${COLOR_RESET}
-
-${COLOR_GREEN}Usage:${COLOR_RESET}
-  leonardo [options] [command] [args]
-
-${COLOR_GREEN}Options:${COLOR_RESET}
-  -h, --help        Show this help message
-  -v, --verbose     Enable verbose output
-  -q, --quiet       Suppress non-essential output
-  --version         Show version information
-  --no-color        Disable colored output
-
-${COLOR_GREEN}Commands:${COLOR_RESET}
-  model <cmd>       Model management (list, download, delete, etc.)
-  usb <cmd>         USB drive management
-  dashboard         Show system dashboard
-  web [port]        Start web UI
-  test              Run system tests
-
-${COLOR_GREEN}Interactive Mode:${COLOR_RESET}
-  Run without commands to enter interactive mode
-
-${COLOR_GREEN}Examples:${COLOR_RESET}
-  leonardo                      # Interactive mode
-  leonardo model list           # List available models
-  leonardo model download llama3-8b
-  leonardo dashboard            # Show system status
-  leonardo web                  # Start web interface
-
-For more help on specific commands:
-  leonardo model help
-  leonardo usb help
-
-EOF
 }
 
 # Interactive main menu

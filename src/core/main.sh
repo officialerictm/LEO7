@@ -7,6 +7,55 @@
 # Dependencies: all components
 # ==============================================================================
 
+# Show application banner
+show_banner() {
+    echo "${COLOR_CYAN}╭─────────────────────────────────────╮${COLOR_RESET}"
+    echo "${COLOR_CYAN}│    Leonardo AI Universal v$LEONARDO_VERSION    │${COLOR_RESET}"
+    echo "${COLOR_CYAN}│       Deploy AI Anywhere™           │${COLOR_RESET}"
+    echo "${COLOR_CYAN}╰─────────────────────────────────────╯${COLOR_RESET}"
+    echo ""
+}
+
+# Show help information
+show_help() {
+    cat << EOF
+${COLOR_CYAN}$LEONARDO_NAME v$LEONARDO_VERSION${COLOR_RESET}
+${COLOR_DIM}$LEONARDO_DESCRIPTION${COLOR_RESET}
+
+${COLOR_GREEN}Usage:${COLOR_RESET}
+  leonardo [options] [command] [args]
+
+${COLOR_GREEN}Options:${COLOR_RESET}
+  -h, --help        Show this help message
+  -v, --verbose     Enable verbose output
+  -q, --quiet       Suppress non-essential output
+  --version         Show version information
+  --no-color        Disable colored output
+
+${COLOR_GREEN}Commands:${COLOR_RESET}
+  model <cmd>       Model management (list, download, delete, etc.)
+  usb <cmd>         USB drive management
+  dashboard         Show system dashboard
+  web [port]        Start web UI
+  test              Run system tests
+
+${COLOR_GREEN}Interactive Mode:${COLOR_RESET}
+  Run without commands to enter interactive mode
+
+${COLOR_GREEN}Examples:${COLOR_RESET}
+  leonardo                      # Interactive mode
+  leonardo model list           # List available models
+  leonardo model download llama3-8b
+  leonardo dashboard            # Show system status
+  leonardo web                  # Start web interface
+
+For more help on specific commands:
+  leonardo model help
+  leonardo usb help
+
+EOF
+}
+
 # Main function - entry point for Leonardo
 main() {
     # Mark that main has been called
@@ -88,6 +137,14 @@ parse_arguments() {
                 LEONARDO_ARGS=("$@")
                 break
                 ;;
+            deploy|deployment)
+                LEONARDO_COMMAND="deploy"
+                shift
+                LEONARDO_SUBCOMMAND="$1"
+                shift
+                LEONARDO_ARGS=("$@")
+                break
+                ;;
             dashboard|status)
                 LEONARDO_COMMAND="dashboard"
                 shift
@@ -121,6 +178,9 @@ handle_direct_command() {
         "usb")
             handle_usb_command "$LEONARDO_SUBCOMMAND" "${LEONARDO_ARGS[@]}"
             ;;
+        "deploy"|"deployment")
+            deployment_cli "$LEONARDO_SUBCOMMAND" "${LEONARDO_ARGS[@]}"
+            ;;
         "dashboard")
             show_system_dashboard
             ;;
@@ -136,46 +196,6 @@ handle_direct_command() {
             return 1
             ;;
     esac
-}
-
-# Show help information
-show_help() {
-    cat << EOF
-${COLOR_CYAN}$LEONARDO_NAME v$LEONARDO_VERSION${COLOR_RESET}
-${COLOR_DIM}$LEONARDO_DESCRIPTION${COLOR_RESET}
-
-${COLOR_GREEN}Usage:${COLOR_RESET}
-  leonardo [options] [command] [args]
-
-${COLOR_GREEN}Options:${COLOR_RESET}
-  -h, --help        Show this help message
-  -v, --verbose     Enable verbose output
-  -q, --quiet       Suppress non-essential output
-  --version         Show version information
-  --no-color        Disable colored output
-
-${COLOR_GREEN}Commands:${COLOR_RESET}
-  model <cmd>       Model management (list, download, delete, etc.)
-  usb <cmd>         USB drive management
-  dashboard         Show system dashboard
-  web [port]        Start web UI
-  test              Run system tests
-
-${COLOR_GREEN}Interactive Mode:${COLOR_RESET}
-  Run without commands to enter interactive mode
-
-${COLOR_GREEN}Examples:${COLOR_RESET}
-  leonardo                      # Interactive mode
-  leonardo model list           # List available models
-  leonardo model download llama3-8b
-  leonardo dashboard            # Show system status
-  leonardo web                  # Start web interface
-
-For more help on specific commands:
-  leonardo model help
-  leonardo usb help
-
-EOF
 }
 
 # Interactive main menu

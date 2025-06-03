@@ -394,7 +394,13 @@ show_ascii_progress() {
     esac
 }
 
+# Simple progress function with spinner
+show_progress() {
+    local message="${1:-Processing...}"
+    echo "${CYAN}→ ${message}${RESET}"
+}
+
 # Export progress functions
 export -f show_progress_bar show_multi_progress show_spinner stop_spinner
-export -f show_download_progress show_status show_countdown format_duration
-export -f format_bytes show_matrix_progress show_ascii_progress
+export -f show_progress show_download_progress show_status show_countdown
+export -f format_duration format_bytes show_matrix_progress show_ascii_progress

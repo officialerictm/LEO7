@@ -10,6 +10,20 @@
 # Version and metadata (from header, but available globally)
 readonly LEONARDO_CONFIG_VERSION="7.0.0"
 
+# Detect platform early
+if [[ -z "${LEONARDO_PLATFORM:-}" ]]; then
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        LEONARDO_PLATFORM="macos"
+    elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
+        LEONARDO_PLATFORM="linux"
+    elif [[ "$OSTYPE" == "msys" ]] || [[ "$OSTYPE" == "cygwin" ]] || [[ "$OSTYPE" == "win32" ]]; then
+        LEONARDO_PLATFORM="windows"
+    else
+        LEONARDO_PLATFORM="unknown"
+    fi
+    export LEONARDO_PLATFORM
+fi
+
 # Deployment modes
 readonly LEONARDO_DEPLOYMENT_MODES=(
     "usb:USB Drive - Portable AI on any USB device"

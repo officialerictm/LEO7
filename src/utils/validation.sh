@@ -346,3 +346,64 @@ confirm() {
     
     [[ "${response,,}" == "y" ]]
 }
+
+# Check system requirements
+check_system_requirements() {
+    local errors=0
+    
+    # Check for required commands
+    local required_commands=("curl" "tar" "gzip" "awk" "sed")
+    
+    for cmd in "${required_commands[@]}"; do
+        if ! command -v "$cmd" >/dev/null 2>&1; then
+            log_message "ERROR" "Required command not found: $cmd"
+            ((errors++))
+        fi
+    done
+    
+    # Check for disk space (at least 1GB free)
+    local available_mb
+    case "$LEONARDO_PLATFORM" in
+        "macos")
+            available_mb=$(df -m "$HOME" | awk 'NR==2 {print $4}')
+            ;;
+        "linux")
+            available_mb=$(df -BM "$HOME" | awk 'NR==2 {print $4}' | sed 's/M//')
+            ;;
+        *)
+            available_mb=2048  # Default assume enough space
+            ;;
+    esac
+    
+    if [[ $available_mb -lt 1024 ]]; then
+        log_message "ERROR" "Insufficient disk space. Need at least 1GB free."
+        ((errors++))
+    fi
+    
+    # Check for write permissions
+    if ! touch "$HOME/.leonardo_test_$$" 2>/dev/null; then
+        log_message "ERROR" "No write permissions in home directory"
+        ((errors++))
+    else
+        rm -f "$HOME/.leonardo_test_$$"
+    fi
+    
+    return $errors
+}
+
+# Export all validation functions
+export -f validation_error
+export -f validate_boolean
+export -f validate_integer
+export -f validate_path
+export -f validate_usb_device
+export -f validate_size
+export -f validate_url
+export -f validate_checksum
+export -f validate_model_id
+export -f validate_platform
+export -f validate_permissions
+export -f format_bytes
+export -f sanitize_string
+export -f confirm
+export -f check_system_requirements

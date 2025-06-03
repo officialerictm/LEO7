@@ -11,6 +11,9 @@
 declare -g DASHBOARD_ACTIVE=0
 declare -g DASHBOARD_REFRESH_RATE=1
 
+# Compatibility
+RESET="${COLOR_RESET}"
+
 # Main dashboard display
 show_dashboard() {
     local usb_device="${1:-}"

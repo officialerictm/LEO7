@@ -12,6 +12,7 @@ declare -g LEONARDO_USB_DEVICE=""
 declare -g LEONARDO_USB_MOUNT=""
 declare -g LEONARDO_USB_SIZE=""
 declare -g LEONARDO_USB_FREE=""
+declare -g LEONARDO_USB_FREE_MB=""
 
 # Initialize USB device
 init_usb_device() {
@@ -48,7 +49,12 @@ init_usb_device() {
             LEONARDO_USB_MOUNT=$(diskutil info "$device" 2>/dev/null | grep "Mount Point:" | cut -d: -f2- | xargs)
             ;;
         "linux")
-            LEONARDO_USB_MOUNT=$(lsblk -no MOUNTPOINT "$device" 2>/dev/null | head -1)
+            # Try the device first
+            LEONARDO_USB_MOUNT=$(lsblk -no MOUNTPOINT "$device" 2>/dev/null | grep -v "^$" | head -1)
+            # If no mount point and device is like /dev/sdX, try first partition
+            if [[ -z "$LEONARDO_USB_MOUNT" ]] && [[ "$device" =~ ^/dev/sd[a-z]$ ]]; then
+                LEONARDO_USB_MOUNT=$(lsblk -no MOUNTPOINT "${device}1" 2>/dev/null | grep -v "^$" | head -1)
+            fi
             ;;
         "windows")
             LEONARDO_USB_MOUNT="$device\\"
@@ -80,13 +86,11 @@ format_usb_drive() {
     
     local platform=$(detect_platform)
     
-    show_progress "Formatting USB drive..." &
-    local progress_pid=$!
+    show_progress "Formatting USB drive..."
     
     case "$platform" in
         "macos")
             if diskutil eraseDisk "$filesystem" "$label" "$device" >/dev/null 2>&1; then
-                kill $progress_pid 2>/dev/null
                 log_message "SUCCESS" "USB drive formatted successfully"
                 return 0
             fi
@@ -123,7 +127,6 @@ format_usb_drive() {
             esac
             
             if [[ $? -eq 0 ]]; then
-                kill $progress_pid 2>/dev/null
                 log_message "SUCCESS" "USB drive formatted successfully"
                 return 0
             fi
@@ -139,7 +142,6 @@ assign"
                 echo "$script" | diskpart >/dev/null 2>&1
                 
                 if [[ $? -eq 0 ]]; then
-                    kill $progress_pid 2>/dev/null
                     log_message "SUCCESS" "USB drive formatted successfully"
                     return 0
                 fi
@@ -147,7 +149,6 @@ assign"
             ;;
     esac
     
-    kill $progress_pid 2>/dev/null
     log_message "ERROR" "Failed to format USB drive"
     return 1
 }
@@ -342,8 +343,7 @@ install_leonardo_to_usb() {
     
     log_message "INFO" "Installing Leonardo to USB..."
     
-    show_progress "Copying Leonardo executable..." &
-    local progress_pid=$!
+    show_progress "Copying Leonardo executable..."
     
     # Copy Leonardo executable
     if cp "$leonardo_script" "$mount_point/leonardo.sh"; then
@@ -352,7 +352,6 @@ install_leonardo_to_usb() {
         # Create platform-specific launchers
         create_usb_launchers "$mount_point"
         
-        kill $progress_pid 2>/dev/null
         log_message "SUCCESS" "Leonardo installed to USB successfully"
         
         # Show summary
@@ -369,7 +368,6 @@ install_leonardo_to_usb() {
         
         return 0
     else
-        kill $progress_pid 2>/dev/null
         log_message "ERROR" "Failed to copy Leonardo to USB"
         return 1
     fi
@@ -454,17 +452,14 @@ backup_usb_data() {
     
     log_message "INFO" "Backing up Leonardo data..."
     
-    show_progress "Creating backup..." &
-    local progress_pid=$!
+    show_progress "Creating backup..."
     
     # Create backup
     if tar -czf "$backup_path" -C "$mount_point" leonardo 2>/dev/null; then
-        kill $progress_pid 2>/dev/null
         local backup_size=$(get_file_size "$backup_path")
         log_message "SUCCESS" "Backup created: $backup_path ($(format_bytes $backup_size))"
         return 0
     else
-        kill $progress_pid 2>/dev/null
         log_message "ERROR" "Backup failed"
         rm -f "$backup_path"
         return 1
@@ -496,16 +491,13 @@ restore_usb_data() {
     
     log_message "INFO" "Restoring Leonardo data..."
     
-    show_progress "Extracting backup..." &
-    local progress_pid=$!
+    show_progress "Extracting backup..."
     
     # Extract backup
     if tar -xzf "$backup_path" -C "$mount_point" 2>/dev/null; then
-        kill $progress_pid 2>/dev/null
         log_message "SUCCESS" "Leonardo data restored successfully"
         return 0
     else
-        kill $progress_pid 2>/dev/null
         log_message "ERROR" "Restore failed"
         return 1
     fi
@@ -545,6 +537,7 @@ check_usb_free_space() {
     fi
     
     LEONARDO_USB_FREE="${free_mb}MB"
+    LEONARDO_USB_FREE_MB=$free_mb
     return 0
 }
 

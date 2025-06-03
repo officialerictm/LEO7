@@ -12,6 +12,9 @@ declare -g MENU_SELECTION=""
 declare -g MENU_POSITION=1
 declare -g MENU_MAX_ITEMS=0
 
+# Compatibility
+BRIGHT="${BOLD}"
+
 # Display menu with arrow key navigation
 show_menu() {
     local title="$1"
@@ -88,9 +91,9 @@ display_menu_frame() {
     local options=("$@")
     
     # Draw title box
-    echo -e "${GREEN}╔════════════════════════════════════════════╗${RESET}"
-    printf "${GREEN}║${RESET} %-42s ${GREEN}║${RESET}\n" "$title"
-    echo -e "${GREEN}╚════════════════════════════════════════════╝${RESET}"
+    echo -e "${GREEN}╔════════════════════════════════════════════╗${COLOR_RESET}"
+    printf "${GREEN}║${COLOR_RESET} %-42s ${GREEN}║${COLOR_RESET}\n" "$title"
+    echo -e "${GREEN}╚════════════════════════════════════════════╝${COLOR_RESET}"
     echo
     
     # Display options
@@ -98,15 +101,15 @@ display_menu_frame() {
     for option in "${options[@]}"; do
         if [[ $i -eq $MENU_POSITION ]]; then
             # Highlighted option
-            echo -e "${CYAN}▶ ${BRIGHT}${option}${RESET}"
+            echo -e "${CYAN}▶ ${BRIGHT}${option}${COLOR_RESET}"
         else
-            echo -e "  ${DIM}${option}${RESET}"
+            echo -e "  ${DIM}${option}${COLOR_RESET}"
         fi
         ((i++))
     done
     
     echo
-    echo -e "${DIM}Use ↑/↓ arrows or numbers to select, Enter to confirm, q to quit${RESET}"
+    echo -e "${DIM}Use ↑/↓ arrows or numbers to select, Enter to confirm, q to quit${COLOR_RESET}"
 }
 
 # Simple yes/no menu
@@ -114,7 +117,7 @@ confirm_menu() {
     local prompt="$1"
     local default="${2:-n}"
     
-    echo -e "${YELLOW}${prompt}${RESET}"
+    echo -e "${YELLOW}${prompt}${COLOR_RESET}"
     
     local options=("Yes" "No")
     local selection=$(show_menu "Confirm Action" "${options[@]}")
@@ -123,6 +126,11 @@ confirm_menu() {
         "Yes") return 0 ;;
         "No"|"") return 1 ;;
     esac
+}
+
+# Alias for backward compatibility
+confirm_action() {
+    confirm_menu "$@"
 }
 
 # Multi-select checklist menu
@@ -203,9 +211,9 @@ display_checklist_frame() {
     local -a selected=("${@:$((num_options+1))}")
     
     # Draw title box
-    echo -e "${GREEN}╔════════════════════════════════════════════╗${RESET}"
-    printf "${GREEN}║${RESET} %-42s ${GREEN}║${RESET}\n" "$title"
-    echo -e "${GREEN}╚════════════════════════════════════════════╝${RESET}"
+    echo -e "${GREEN}╔════════════════════════════════════════════╗${COLOR_RESET}"
+    printf "${GREEN}║${COLOR_RESET} %-42s ${GREEN}║${COLOR_RESET}\n" "$title"
+    echo -e "${GREEN}╚════════════════════════════════════════════╝${COLOR_RESET}"
     echo
     
     # Display options with checkboxes
@@ -215,15 +223,15 @@ display_checklist_frame() {
         [[ ${selected[idx]} -eq 1 ]] && checkbox="[✓]"
         
         if [[ $i -eq $MENU_POSITION ]]; then
-            echo -e "${CYAN}▶ ${checkbox} ${BRIGHT}${options[idx]}${RESET}"
+            echo -e "${CYAN}▶ ${checkbox} ${BRIGHT}${options[idx]}${COLOR_RESET}"
         else
-            echo -e "  ${checkbox} ${DIM}${options[idx]}${RESET}"
+            echo -e "  ${checkbox} ${DIM}${options[idx]}${COLOR_RESET}"
         fi
         ((i++))
     done
     
     echo
-    echo -e "${DIM}Use ↑/↓ to navigate, Space to select, Enter to confirm${RESET}"
+    echo -e "${DIM}Use ↑/↓ to navigate, Space to select, Enter to confirm${COLOR_RESET}"
 }
 
 # Radio button menu (single selection)
@@ -258,15 +266,15 @@ show_progress_menu() {
     (
         while [[ ${cancel_var} -eq 0 ]] && [[ ${progress_var} -lt 100 ]]; do
             clear
-            echo -e "${GREEN}╔════════════════════════════════════════════╗${RESET}"
-            printf "${GREEN}║${RESET} %-42s ${GREEN}║${RESET}\n" "$title"
-            echo -e "${GREEN}╚════════════════════════════════════════════╝${RESET}"
+            echo -e "${GREEN}╔════════════════════════════════════════════╗${COLOR_RESET}"
+            printf "${GREEN}║${COLOR_RESET} %-42s ${GREEN}║${COLOR_RESET}\n" "$title"
+            echo -e "${GREEN}╚════════════════════════════════════════════╝${COLOR_RESET}"
             echo
             echo -e "${message}"
             echo
             print_progress ${progress_var} 40
             echo
-            echo -e "${DIM}Press 'c' to cancel${RESET}"
+            echo -e "${DIM}Press 'c' to cancel${COLOR_RESET}"
             sleep 0.1
         done
     ) &
@@ -295,14 +303,14 @@ show_input_dialog() {
     local validation_func="${4:-}"
     
     clear
-    echo -e "${GREEN}╔════════════════════════════════════════════╗${RESET}"
-    printf "${GREEN}║${RESET} %-42s ${GREEN}║${RESET}\n" "$title"
-    echo -e "${GREEN}╚════════════════════════════════════════════╝${RESET}"
+    echo -e "${GREEN}╔════════════════════════════════════════════╗${COLOR_RESET}"
+    printf "${GREEN}║${COLOR_RESET} %-42s ${GREEN}║${COLOR_RESET}\n" "$title"
+    echo -e "${GREEN}╚════════════════════════════════════════════╝${COLOR_RESET}"
     echo
     echo -e "${prompt}"
     
     if [[ -n "$default" ]]; then
-        echo -e "${DIM}(default: $default)${RESET}"
+        echo -e "${DIM}(default: $default)${COLOR_RESET}"
     fi
     
     echo
@@ -321,7 +329,7 @@ show_input_dialog() {
             if $validation_func "$input"; then
                 break
             else
-                echo -e "${RED}Invalid input. Please try again.${RESET}"
+                echo -e "${RED}Invalid input. Please try again.${COLOR_RESET}"
             fi
         else
             break
@@ -342,12 +350,12 @@ show_filtered_list() {
     
     while true; do
         clear
-        echo -e "${GREEN}╔════════════════════════════════════════════╗${RESET}"
-        printf "${GREEN}║${RESET} %-42s ${GREEN}║${RESET}\n" "$title"
-        echo -e "${GREEN}╚════════════════════════════════════════════╝${RESET}"
+        echo -e "${GREEN}╔════════════════════════════════════════════╗${COLOR_RESET}"
+        printf "${GREEN}║${COLOR_RESET} %-42s ${GREEN}║${COLOR_RESET}\n" "$title"
+        echo -e "${GREEN}╚════════════════════════════════════════════╝${COLOR_RESET}"
         echo
-        echo -e "Filter: ${YELLOW}$filter${RESET}_"
-        echo -e "${DIM}Type to filter, ↑/↓ to select, Enter to confirm, Esc to cancel${RESET}"
+        echo -e "Filter: ${YELLOW}$filter${COLOR_RESET}_"
+        echo -e "${DIM}Type to filter, ↑/↓ to select, Enter to confirm, Esc to cancel${COLOR_RESET}"
         echo
         
         # Apply filter
@@ -362,7 +370,7 @@ show_filtered_list() {
         
         # Display filtered items
         if [[ ${#filtered_items[@]} -eq 0 ]]; then
-            echo -e "${DIM}No items match filter${RESET}"
+            echo -e "${DIM}No items match filter${COLOR_RESET}"
         else
             selected=$(show_menu "Select Item" "${filtered_items[@]}")
             if [[ -n "$selected" ]]; then
@@ -396,5 +404,5 @@ show_filtered_list() {
 }
 
 # Export menu functions
-export -f show_menu confirm_menu show_checklist show_radio_menu
+export -f show_menu confirm_menu confirm_action show_checklist show_radio_menu
 export -f show_progress_menu show_input_dialog show_filtered_list
