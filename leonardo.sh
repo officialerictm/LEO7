@@ -2437,6 +2437,2132 @@ fetch_model_registry() {
 export -f check_connectivity download_file download_parallel
 export -f get_remote_file_size check_for_updates fetch_model_registry
 
+# ==== Component: src/usb/detector.sh ====
+# ==============================================================================
+# Leonardo AI Universal - USB Detection Module
+# ==============================================================================
+# Description: Detect and identify USB drives across platforms
+# Version: 7.0.0
+# Dependencies: colors.sh, logging.sh, filesystem.sh
+# ==============================================================================
+
+# Detect platform
+detect_platform() {
+    case "$(uname -s)" in
+        Darwin*)    echo "macos" ;;
+        Linux*)     echo "linux" ;;
+        CYGWIN*)    echo "windows" ;;
+        MINGW*)     echo "windows" ;;
+        MSYS*)      echo "windows" ;;
+        *)          echo "unknown" ;;
+    esac
+}
+
+# Detect USB drives
+detect_usb_drives() {
+    local platform=$(detect_platform)
+    local -a drives=()
+    
+    case "$platform" in
+        "macos")
+            detect_usb_drives_macos
+            ;;
+        "linux")
+            detect_usb_drives_linux
+            ;;
+        "windows")
+            detect_usb_drives_windows
+            ;;
+        *)
+            log_message "ERROR" "Unsupported platform: $platform"
+            return 1
+            ;;
+    esac
+}
+
+# Detect USB drives on macOS
+detect_usb_drives_macos() {
+    local -a drives=()
+    
+    # Use diskutil to find external, physical disks
+    while IFS= read -r line; do
+        if [[ "$line" =~ /dev/disk[0-9]+ ]]; then
+            local disk="${BASH_REMATCH[0]}"
+            # Check if it's external and physical
+            if diskutil info "$disk" 2>/dev/null | grep -q "Protocol:.*USB"; then
+                local info=$(diskutil info "$disk" 2>/dev/null)
+                local name=$(echo "$info" | grep "Media Name:" | cut -d: -f2- | xargs)
+                local size=$(echo "$info" | grep "Disk Size:" | cut -d: -f2 | awk '{print $1, $2}')
+                local mount=$(echo "$info" | grep "Mount Point:" | cut -d: -f2- | xargs)
+                
+                drives+=("$disk|$name|$size|$mount")
+            fi
+        fi
+    done < <(diskutil list | grep "external, physical")
+    
+    # Output drives
+    for drive in "${drives[@]}"; do
+        echo "$drive"
+    done
+}
+
+# Detect USB drives on Linux
+detect_usb_drives_linux() {
+    local -a drives=()
+    
+    # Use lsblk to find USB devices
+    while IFS= read -r line; do
+        local device=$(echo "$line" | awk '{print $1}')
+        local size=$(echo "$line" | awk '{print $2}')
+        local mount=$(echo "$line" | awk '{print $3}')
+        local label=$(echo "$line" | awk '{print $4}')
+        
+        # Check if it's a USB device
+        if [[ -n "$device" ]] && udevadm info --query=all --name="$device" 2>/dev/null | grep -q "ID_BUS=usb"; then
+            drives+=("/dev/$device|$label|$size|$mount")
+        fi
+    done < <(lsblk -nlo NAME,SIZE,MOUNTPOINT,LABEL | grep -E "^sd[a-z][0-9]?")
+    
+    # Output drives
+    for drive in "${drives[@]}"; do
+        echo "$drive"
+    done
+}
+
+# Detect USB drives on Windows
+detect_usb_drives_windows() {
+    local -a drives=()
+    
+    # Use wmic to find USB drives
+    if command_exists "wmic"; then
+        while IFS= read -r line; do
+            if [[ -n "$line" ]] && [[ "$line" != "DeviceID"* ]]; then
+                local device=$(echo "$line" | awk '{print $1}')
+                local size=$(echo "$line" | awk '{print $2}')
+                drives+=("$device|USB Drive|$size|$device")
+            fi
+        done < <(wmic logicaldisk where "DriveType=2" get DeviceID,Size /format:table 2>/dev/null | tail -n +2)
+    fi
+    
+    # Output drives
+    for drive in "${drives[@]}"; do
+        echo "$drive"
+    done
+}
+
+# Get USB drive info
+get_usb_drive_info() {
+    local device="$1"
+    local platform=$(detect_platform)
+    
+    case "$platform" in
+        "macos")
+            get_usb_drive_info_macos "$device"
+            ;;
+        "linux")
+            get_usb_drive_info_linux "$device"
+            ;;
+        "windows")
+            get_usb_drive_info_windows "$device"
+            ;;
+        *)
+            log_message "ERROR" "Unsupported platform"
+            return 1
+            ;;
+    esac
+}
+
+# Get USB drive info on macOS
+get_usb_drive_info_macos() {
+    local device="$1"
+    
+    if diskutil info "$device" >/dev/null 2>&1; then
+        local info=$(diskutil info "$device")
+        
+        echo "Device: $device"
+        echo "$info" | grep "Media Name:" | sed 's/^[[:space:]]*//'
+        echo "$info" | grep "Volume Name:" | sed 's/^[[:space:]]*//'
+        echo "$info" | grep "Disk Size:" | sed 's/^[[:space:]]*//'
+        echo "$info" | grep "Device Block Size:" | sed 's/^[[:space:]]*//'
+        echo "$info" | grep "Volume Free Space:" | sed 's/^[[:space:]]*//'
+        echo "$info" | grep "File System:" | sed 's/^[[:space:]]*//'
+        echo "$info" | grep "Mount Point:" | sed 's/^[[:space:]]*//'
+        
+        # Get USB specific info
+        if system_profiler SPUSBDataType 2>/dev/null | grep -A 20 "$(basename "$device")" | grep -q "Serial Number:"; then
+            echo "USB Device: Yes"
+            system_profiler SPUSBDataType 2>/dev/null | grep -A 20 "$(basename "$device")" | grep "Serial Number:" | head -1
+        fi
+    else
+        log_message "ERROR" "Cannot get info for device: $device"
+        return 1
+    fi
+}
+
+# Get USB drive info on Linux
+get_usb_drive_info_linux() {
+    local device="$1"
+    
+    if [[ -b "$device" ]]; then
+        echo "Device: $device"
+        
+        # Basic info from lsblk
+        lsblk -no NAME,SIZE,TYPE,FSTYPE,LABEL,MOUNTPOINT "$device" 2>/dev/null | head -1 | \
+        while read -r name size type fstype label mount; do
+            echo "Size: $size"
+            echo "Type: $type"
+            echo "File System: $fstype"
+            [[ -n "$label" ]] && echo "Label: $label"
+            [[ -n "$mount" ]] && echo "Mount Point: $mount"
+        done
+        
+        # USB specific info from udevadm
+        if udevadm info --query=all --name="$device" 2>/dev/null | grep -q "ID_BUS=usb"; then
+            echo "USB Device: Yes"
+            udevadm info --query=all --name="$device" 2>/dev/null | grep "ID_SERIAL=" | cut -d= -f2 | head -1 | xargs -I{} echo "Serial Number: {}"
+            udevadm info --query=all --name="$device" 2>/dev/null | grep "ID_VENDOR=" | cut -d= -f2 | head -1 | xargs -I{} echo "Vendor: {}"
+            udevadm info --query=all --name="$device" 2>/dev/null | grep "ID_MODEL=" | cut -d= -f2 | head -1 | xargs -I{} echo "Model: {}"
+        fi
+        
+        # Free space if mounted
+        if mount | grep -q "^$device"; then
+            local mount_point=$(mount | grep "^$device" | awk '{print $3}')
+            local free_space=$(df -h "$mount_point" 2>/dev/null | tail -1 | awk '{print $4}')
+            echo "Free Space: $free_space"
+        fi
+    else
+        log_message "ERROR" "Device not found: $device"
+        return 1
+    fi
+}
+
+# Get USB drive info on Windows
+get_usb_drive_info_windows() {
+    local device="$1"
+    
+    if command_exists "wmic"; then
+        echo "Device: $device"
+        
+        # Get drive info
+        wmic logicaldisk where "DeviceID='$device'" get Size,FreeSpace,FileSystem,VolumeName /format:list 2>/dev/null | \
+        grep -E "(Size|FreeSpace|FileSystem|VolumeName)=" | while IFS='=' read -r key value; do
+            case "$key" in
+                "Size") echo "Size: $(format_bytes "$value")" ;;
+                "FreeSpace") echo "Free Space: $(format_bytes "$value")" ;;
+                "FileSystem") echo "File System: $value" ;;
+                "VolumeName") [[ -n "$value" ]] && echo "Volume Name: $value" ;;
+            esac
+        done
+        
+        # Check if USB
+        if wmic logicaldisk where "DeviceID='$device' and DriveType=2" get DeviceID 2>/dev/null | grep -q "$device"; then
+            echo "USB Device: Yes"
+        fi
+    fi
+}
+
+# Check if device is USB
+is_usb_device() {
+    local device="$1"
+    local platform=$(detect_platform)
+    
+    case "$platform" in
+        "macos")
+            diskutil info "$device" 2>/dev/null | grep -q "Protocol:.*USB"
+            ;;
+        "linux")
+            udevadm info --query=all --name="$device" 2>/dev/null | grep -q "ID_BUS=usb"
+            ;;
+        "windows")
+            wmic logicaldisk where "DeviceID='$device' and DriveType=2" get DeviceID 2>/dev/null | grep -q "$device"
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+# Get USB device speed
+get_usb_speed() {
+    local device="$1"
+    local platform=$(detect_platform)
+    
+    case "$platform" in
+        "macos")
+            system_profiler SPUSBDataType 2>/dev/null | grep -A 10 "$(basename "$device")" | grep "Speed:" | head -1 | awk '{print $2, $3}'
+            ;;
+        "linux")
+            if [[ -f "/sys/block/$(basename "$device")/device/speed" ]]; then
+                local speed=$(cat "/sys/block/$(basename "$device")/device/speed" 2>/dev/null)
+                case "$speed" in
+                    "12") echo "USB 1.1 (12 Mbps)" ;;
+                    "480") echo "USB 2.0 (480 Mbps)" ;;
+                    "5000") echo "USB 3.0 (5 Gbps)" ;;
+                    "10000") echo "USB 3.1 (10 Gbps)" ;;
+                    "20000") echo "USB 3.2 (20 Gbps)" ;;
+                    *) echo "Unknown ($speed Mbps)" ;;
+                esac
+            fi
+            ;;
+        "windows")
+            # Windows requires more complex WMI queries
+            echo "N/A"
+            ;;
+    esac
+}
+
+# Monitor USB device changes
+monitor_usb_changes() {
+    local callback="${1:-on_usb_change}"
+    local platform=$(detect_platform)
+    
+    log_message "INFO" "Monitoring USB device changes..."
+    
+    case "$platform" in
+        "macos")
+            # Use diskutil activity
+            diskutil activity | while read -r line; do
+                if [[ "$line" =~ (Disk Appeared|Disk Disappeared) ]]; then
+                    $callback "$line"
+                fi
+            done
+            ;;
+        "linux")
+            # Use udevadm monitor
+            if command_exists "udevadm"; then
+                udevadm monitor --subsystem-match=usb --property | while read -r line; do
+                    if [[ "$line" =~ (add|remove) ]]; then
+                        $callback "$line"
+                    fi
+                done
+            else
+                log_message "ERROR" "udevadm not available for USB monitoring"
+                return 1
+            fi
+            ;;
+        "windows")
+            log_message "WARN" "USB monitoring not implemented for Windows"
+            return 1
+            ;;
+    esac
+}
+
+# Default USB change callback
+on_usb_change() {
+    local event="$1"
+    log_message "INFO" "USB Event: $event"
+    
+    # Refresh USB device list
+    echo "${COLOR_YELLOW}USB device change detected. Refreshing...${COLOR_RESET}"
+    list_usb_drives
+}
+
+# List USB drives with formatting
+list_usb_drives() {
+    local format="${1:-table}"
+    local drives_found=0
+    
+    echo "${COLOR_CYAN}Detecting USB drives...${COLOR_RESET}"
+    echo ""
+    
+    if [[ "$format" == "table" ]]; then
+        printf "${COLOR_CYAN}%-15s %-30s %-10s %-30s${COLOR_RESET}\n" \
+            "Device" "Name" "Size" "Mount Point"
+        echo "--------------------------------------------------------------------------------"
+    fi
+    
+    while IFS='|' read -r device name size mount; do
+        ((drives_found++))
+        
+        case "$format" in
+            "table")
+                printf "%-15s %-30s %-10s %-30s\n" \
+                    "$device" "${name:-Unknown}" "${size:-N/A}" "${mount:-Not Mounted}"
+                ;;
+            "json")
+                echo "{\"device\":\"$device\",\"name\":\"$name\",\"size\":\"$size\",\"mount\":\"$mount\"}"
+                ;;
+            "simple")
+                echo "$device"
+                ;;
+        esac
+    done < <(detect_usb_drives)
+    
+    if [[ $drives_found -eq 0 ]]; then
+        echo "${COLOR_YELLOW}No USB drives detected${COLOR_RESET}"
+        return 1
+    else
+        [[ "$format" == "table" ]] && echo ""
+        echo "${COLOR_GREEN}Found $drives_found USB drive(s)${COLOR_RESET}"
+    fi
+    
+    return 0
+}
+
+# Test USB write speed
+test_usb_write_speed() {
+    local device="$1"
+    local test_size="${2:-100M}"
+    
+    # Get mount point
+    local mount_point=""
+    local platform=$(detect_platform)
+    
+    case "$platform" in
+        "macos")
+            mount_point=$(diskutil info "$device" 2>/dev/null | grep "Mount Point:" | cut -d: -f2- | xargs)
+            ;;
+        "linux")
+            mount_point=$(lsblk -no MOUNTPOINT "$device" 2>/dev/null | head -1)
+            ;;
+        "windows")
+            mount_point="$device\\"
+            ;;
+    esac
+    
+    if [[ -z "$mount_point" ]] || [[ "$mount_point" == "Not Mounted" ]]; then
+        log_message "ERROR" "Device not mounted: $device"
+        return 1
+    fi
+    
+    echo "${COLOR_CYAN}Testing USB write speed on $device...${COLOR_RESET}"
+    echo "Mount point: $mount_point"
+    
+    local test_file="$mount_point/.leonardo_speed_test_$$"
+    local start_time=$(date +%s)
+    
+    # Write test
+    if dd if=/dev/zero of="$test_file" bs=1M count=100 conv=fdatasync 2>/dev/null; then
+        local end_time=$(date +%s)
+        local duration=$((end_time - start_time))
+        
+        if [[ $duration -gt 0 ]]; then
+            local speed=$((104857600 / duration))  # 100MB in bytes
+            echo "Write speed: $(format_bytes $speed)/s"
+        fi
+        
+        rm -f "$test_file"
+    else
+        echo "${COLOR_RED}Write test failed${COLOR_RESET}"
+        return 1
+    fi
+}
+
+# Export USB detection functions
+export -f detect_platform detect_usb_drives get_usb_drive_info
+export -f is_usb_device get_usb_speed monitor_usb_changes
+export -f list_usb_drives test_usb_write_speed
+
+# ==== Component: src/usb/manager.sh ====
+# ==============================================================================
+# Leonardo AI Universal - USB Management Module
+# ==============================================================================
+# Description: Manage USB drive lifecycle and operations
+# Version: 7.0.0
+# Dependencies: colors.sh, logging.sh, filesystem.sh, validation.sh, detector.sh
+# ==============================================================================
+
+# USB manager state
+declare -g LEONARDO_USB_DEVICE=""
+declare -g LEONARDO_USB_MOUNT=""
+declare -g LEONARDO_USB_SIZE=""
+declare -g LEONARDO_USB_FREE=""
+
+# Initialize USB device
+init_usb_device() {
+    local device="${1:-}"
+    
+    if [[ -z "$device" ]]; then
+        # Auto-detect USB device
+        log_message "INFO" "Auto-detecting USB device..."
+        
+        local detected_device
+        detected_device=$(detect_usb_drives | head -1 | cut -d'|' -f1)
+        
+        if [[ -z "$detected_device" ]]; then
+            log_message "ERROR" "No USB device detected"
+            return 1
+        fi
+        
+        device="$detected_device"
+    fi
+    
+    # Validate device
+    if ! is_usb_device "$device"; then
+        log_message "ERROR" "Not a USB device: $device"
+        return 1
+    fi
+    
+    # Set global variables
+    LEONARDO_USB_DEVICE="$device"
+    
+    # Get mount point
+    local platform=$(detect_platform)
+    case "$platform" in
+        "macos")
+            LEONARDO_USB_MOUNT=$(diskutil info "$device" 2>/dev/null | grep "Mount Point:" | cut -d: -f2- | xargs)
+            ;;
+        "linux")
+            LEONARDO_USB_MOUNT=$(lsblk -no MOUNTPOINT "$device" 2>/dev/null | head -1)
+            ;;
+        "windows")
+            LEONARDO_USB_MOUNT="$device\\"
+            ;;
+    esac
+    
+    log_message "INFO" "Initialized USB device: $LEONARDO_USB_DEVICE"
+    [[ -n "$LEONARDO_USB_MOUNT" ]] && log_message "INFO" "Mount point: $LEONARDO_USB_MOUNT"
+    
+    return 0
+}
+
+# Format USB drive
+format_usb_drive() {
+    local device="${1:-$LEONARDO_USB_DEVICE}"
+    local filesystem="${2:-exfat}"
+    local label="${3:-LEONARDO}"
+    
+    if [[ -z "$device" ]]; then
+        log_message "ERROR" "No device specified"
+        return 1
+    fi
+    
+    # Confirm formatting
+    echo "${COLOR_YELLOW}WARNING: This will erase all data on $device${COLOR_RESET}"
+    if ! confirm_action "Format USB drive"; then
+        return 1
+    fi
+    
+    local platform=$(detect_platform)
+    
+    show_progress "Formatting USB drive..." &
+    local progress_pid=$!
+    
+    case "$platform" in
+        "macos")
+            if diskutil eraseDisk "$filesystem" "$label" "$device" >/dev/null 2>&1; then
+                kill $progress_pid 2>/dev/null
+                log_message "SUCCESS" "USB drive formatted successfully"
+                return 0
+            fi
+            ;;
+        "linux")
+            # Unmount if mounted
+            if mount | grep -q "^$device"; then
+                umount "$device" 2>/dev/null
+            fi
+            
+            # Create partition table
+            if command_exists "parted"; then
+                parted -s "$device" mklabel gpt >/dev/null 2>&1
+                parted -s "$device" mkpart primary 0% 100% >/dev/null 2>&1
+            fi
+            
+            # Format partition
+            local partition="${device}1"
+            [[ -b "${device}p1" ]] && partition="${device}p1"
+            
+            case "$filesystem" in
+                "exfat")
+                    mkfs.exfat -n "$label" "$partition" >/dev/null 2>&1
+                    ;;
+                "fat32")
+                    mkfs.vfat -F 32 -n "$label" "$partition" >/dev/null 2>&1
+                    ;;
+                "ntfs")
+                    mkfs.ntfs -f -L "$label" "$partition" >/dev/null 2>&1
+                    ;;
+                "ext4")
+                    mkfs.ext4 -L "$label" "$partition" >/dev/null 2>&1
+                    ;;
+            esac
+            
+            if [[ $? -eq 0 ]]; then
+                kill $progress_pid 2>/dev/null
+                log_message "SUCCESS" "USB drive formatted successfully"
+                return 0
+            fi
+            ;;
+        "windows")
+            # Use diskpart
+            if command_exists "diskpart"; then
+                local script="select disk $device
+clean
+create partition primary
+format fs=$filesystem label=$label quick
+assign"
+                echo "$script" | diskpart >/dev/null 2>&1
+                
+                if [[ $? -eq 0 ]]; then
+                    kill $progress_pid 2>/dev/null
+                    log_message "SUCCESS" "USB drive formatted successfully"
+                    return 0
+                fi
+            fi
+            ;;
+    esac
+    
+    kill $progress_pid 2>/dev/null
+    log_message "ERROR" "Failed to format USB drive"
+    return 1
+}
+
+# Mount USB drive
+mount_usb_drive() {
+    local device="${1:-$LEONARDO_USB_DEVICE}"
+    local mount_point="${2:-}"
+    
+    if [[ -z "$device" ]]; then
+        log_message "ERROR" "No device specified"
+        return 1
+    fi
+    
+    local platform=$(detect_platform)
+    
+    case "$platform" in
+        "macos")
+            # macOS auto-mounts, but we can force it
+            if ! diskutil mount "$device" >/dev/null 2>&1; then
+                log_message "ERROR" "Failed to mount device"
+                return 1
+            fi
+            
+            # Get actual mount point
+            LEONARDO_USB_MOUNT=$(diskutil info "$device" 2>/dev/null | grep "Mount Point:" | cut -d: -f2- | xargs)
+            ;;
+        "linux")
+            # Create mount point if not specified
+            if [[ -z "$mount_point" ]]; then
+                mount_point="/mnt/leonardo_$$"
+                mkdir -p "$mount_point"
+            fi
+            
+            if mount "$device" "$mount_point" 2>/dev/null; then
+                LEONARDO_USB_MOUNT="$mount_point"
+            else
+                log_message "ERROR" "Failed to mount device"
+                rmdir "$mount_point" 2>/dev/null
+                return 1
+            fi
+            ;;
+        "windows")
+            # Windows auto-mounts with drive letters
+            LEONARDO_USB_MOUNT="$device\\"
+            ;;
+    esac
+    
+    log_message "INFO" "USB drive mounted at: $LEONARDO_USB_MOUNT"
+    return 0
+}
+
+# Unmount USB drive
+unmount_usb_drive() {
+    local device="${1:-$LEONARDO_USB_DEVICE}"
+    
+    if [[ -z "$device" ]]; then
+        log_message "ERROR" "No device specified"
+        return 1
+    fi
+    
+    local platform=$(detect_platform)
+    
+    case "$platform" in
+        "macos")
+            if diskutil unmount "$device" >/dev/null 2>&1; then
+                log_message "INFO" "USB drive unmounted"
+                return 0
+            fi
+            ;;
+        "linux")
+            if umount "$device" 2>/dev/null || umount "$LEONARDO_USB_MOUNT" 2>/dev/null; then
+                # Clean up mount point if it's our temporary one
+                [[ "$LEONARDO_USB_MOUNT" =~ ^/mnt/leonardo_ ]] && rmdir "$LEONARDO_USB_MOUNT" 2>/dev/null
+                log_message "INFO" "USB drive unmounted"
+                return 0
+            fi
+            ;;
+        "windows")
+            # Windows doesn't have a simple unmount command
+            log_message "WARN" "Please use 'Safely Remove Hardware' for Windows"
+            return 0
+            ;;
+    esac
+    
+    log_message "ERROR" "Failed to unmount USB drive"
+    return 1
+}
+
+# Create Leonardo USB structure
+create_leonardo_structure() {
+    local mount_point="${1:-$LEONARDO_USB_MOUNT}"
+    
+    if [[ -z "$mount_point" ]] || [[ ! -d "$mount_point" ]]; then
+        log_message "ERROR" "Invalid mount point: $mount_point"
+        return 1
+    fi
+    
+    log_message "INFO" "Creating Leonardo directory structure..."
+    
+    # Create directory structure
+    local dirs=(
+        "leonardo"
+        "leonardo/models"
+        "leonardo/cache"
+        "leonardo/config"
+        "leonardo/logs"
+        "leonardo/backups"
+        "leonardo/scripts"
+        "leonardo/data"
+        "leonardo/temp"
+    )
+    
+    for dir in "${dirs[@]}"; do
+        if ! mkdir -p "$mount_point/$dir"; then
+            log_message "ERROR" "Failed to create directory: $dir"
+            return 1
+        fi
+    done
+    
+    # Create README
+    cat > "$mount_point/leonardo/README.md" << 'EOF'
+# Leonardo AI Universal
+
+This USB drive contains Leonardo AI Universal - a portable AI deployment system.
+
+## Directory Structure
+
+- `models/` - AI model files
+- `cache/` - Model cache and temporary files
+- `config/` - Configuration files
+- `logs/` - System logs
+- `backups/` - Backup files
+- `scripts/` - Utility scripts
+- `data/` - User data
+- `temp/` - Temporary files
+
+## Usage
+
+Run Leonardo from the USB drive root:
+```bash
+./leonardo.sh
+```
+
+## Security
+
+This system is designed to leave no trace on the host computer.
+All data remains on the USB drive.
+
+## Support
+
+Visit: https://github.com/officialerictm/LEO7
+EOF
+    
+    # Create version file
+    echo "7.0.0" > "$mount_point/leonardo/VERSION"
+    
+    # Create config file
+    cat > "$mount_point/leonardo/config/leonardo.conf" << EOF
+# Leonardo AI Universal Configuration
+LEONARDO_VERSION="7.0.0"
+LEONARDO_USB_PATH="$mount_point/leonardo"
+LEONARDO_MODEL_DIR="$mount_point/leonardo/models"
+LEONARDO_CACHE_DIR="$mount_point/leonardo/cache"
+LEONARDO_LOG_DIR="$mount_point/leonardo/logs"
+LEONARDO_PARANOID_MODE="true"
+EOF
+    
+    log_message "SUCCESS" "Leonardo structure created successfully"
+    return 0
+}
+
+# Install Leonardo to USB
+install_leonardo_to_usb() {
+    local mount_point="${1:-$LEONARDO_USB_MOUNT}"
+    local leonardo_script="${2:-./leonardo.sh}"
+    
+    if [[ -z "$mount_point" ]] || [[ ! -d "$mount_point" ]]; then
+        log_message "ERROR" "Invalid mount point: $mount_point"
+        return 1
+    fi
+    
+    if [[ ! -f "$leonardo_script" ]]; then
+        log_message "ERROR" "Leonardo script not found: $leonardo_script"
+        return 1
+    fi
+    
+    # Create structure first
+    if ! create_leonardo_structure "$mount_point"; then
+        return 1
+    fi
+    
+    log_message "INFO" "Installing Leonardo to USB..."
+    
+    show_progress "Copying Leonardo executable..." &
+    local progress_pid=$!
+    
+    # Copy Leonardo executable
+    if cp "$leonardo_script" "$mount_point/leonardo.sh"; then
+        chmod +x "$mount_point/leonardo.sh" 2>/dev/null
+        
+        # Create platform-specific launchers
+        create_usb_launchers "$mount_point"
+        
+        kill $progress_pid 2>/dev/null
+        log_message "SUCCESS" "Leonardo installed to USB successfully"
+        
+        # Show summary
+        echo ""
+        echo "${COLOR_GREEN}Installation complete!${COLOR_RESET}"
+        echo ""
+        echo "USB Drive: $LEONARDO_USB_DEVICE"
+        echo "Mount Point: $mount_point"
+        echo ""
+        echo "To run Leonardo from USB:"
+        echo "  ${COLOR_CYAN}cd $mount_point${COLOR_RESET}"
+        echo "  ${COLOR_CYAN}./leonardo.sh${COLOR_RESET}"
+        echo ""
+        
+        return 0
+    else
+        kill $progress_pid 2>/dev/null
+        log_message "ERROR" "Failed to copy Leonardo to USB"
+        return 1
+    fi
+}
+
+# Create platform-specific launchers
+create_usb_launchers() {
+    local mount_point="$1"
+    
+    # Windows batch launcher
+    cat > "$mount_point/leonardo.bat" << 'EOF'
+@echo off
+echo Leonardo AI Universal
+echo.
+
+REM Check if running from USB
+if not exist "%~dp0leonardo.sh" (
+    echo Error: leonardo.sh not found
+    pause
+    exit /b 1
+)
+
+REM Try to run with Git Bash
+if exist "%PROGRAMFILES%\Git\bin\bash.exe" (
+    "%PROGRAMFILES%\Git\bin\bash.exe" "%~dp0leonardo.sh" %*
+) else if exist "%PROGRAMFILES(x86)%\Git\bin\bash.exe" (
+    "%PROGRAMFILES(x86)%\Git\bin\bash.exe" "%~dp0leonardo.sh" %*
+) else if exist "%LOCALAPPDATA%\Programs\Git\bin\bash.exe" (
+    "%LOCALAPPDATA%\Programs\Git\bin\bash.exe" "%~dp0leonardo.sh" %*
+) else (
+    echo Error: Git Bash not found. Please install Git for Windows.
+    echo Download from: https://git-scm.com/download/win
+    pause
+    exit /b 1
+)
+EOF
+    
+    # macOS/Linux launcher script
+    cat > "$mount_point/launch-leonardo.sh" << 'EOF'
+#!/usr/bin/env bash
+# Leonardo AI Universal Launcher
+
+# Get the directory of this script
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
+# Check if leonardo.sh exists
+if [[ ! -f "$DIR/leonardo.sh" ]]; then
+    echo "Error: leonardo.sh not found"
+    exit 1
+fi
+
+# Launch Leonardo
+cd "$DIR"
+exec ./leonardo.sh "$@"
+EOF
+    chmod +x "$mount_point/launch-leonardo.sh" 2>/dev/null
+    
+    # Create .desktop file for Linux
+    cat > "$mount_point/leonardo.desktop" << EOF
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Leonardo AI Universal
+Comment=Portable AI Deployment System
+Exec=$mount_point/launch-leonardo.sh
+Icon=$mount_point/leonardo/icon.png
+Terminal=true
+Categories=Development;Science;
+EOF
+    chmod +x "$mount_point/leonardo.desktop" 2>/dev/null
+}
+
+# Backup USB Leonardo data
+backup_usb_data() {
+    local mount_point="${1:-$LEONARDO_USB_MOUNT}"
+    local backup_path="${2:-./leonardo_backup_$(date +%Y%m%d_%H%M%S).tar.gz}"
+    
+    if [[ -z "$mount_point" ]] || [[ ! -d "$mount_point/leonardo" ]]; then
+        log_message "ERROR" "Leonardo not found on USB"
+        return 1
+    fi
+    
+    log_message "INFO" "Backing up Leonardo data..."
+    
+    show_progress "Creating backup..." &
+    local progress_pid=$!
+    
+    # Create backup
+    if tar -czf "$backup_path" -C "$mount_point" leonardo 2>/dev/null; then
+        kill $progress_pid 2>/dev/null
+        local backup_size=$(get_file_size "$backup_path")
+        log_message "SUCCESS" "Backup created: $backup_path ($(format_bytes $backup_size))"
+        return 0
+    else
+        kill $progress_pid 2>/dev/null
+        log_message "ERROR" "Backup failed"
+        rm -f "$backup_path"
+        return 1
+    fi
+}
+
+# Restore USB Leonardo data
+restore_usb_data() {
+    local mount_point="${1:-$LEONARDO_USB_MOUNT}"
+    local backup_path="$2"
+    
+    if [[ -z "$backup_path" ]] || [[ ! -f "$backup_path" ]]; then
+        log_message "ERROR" "Backup file not found: $backup_path"
+        return 1
+    fi
+    
+    if [[ -z "$mount_point" ]] || [[ ! -d "$mount_point" ]]; then
+        log_message "ERROR" "Invalid mount point: $mount_point"
+        return 1
+    fi
+    
+    # Confirm restore
+    if [[ -d "$mount_point/leonardo" ]]; then
+        echo "${COLOR_YELLOW}WARNING: This will overwrite existing Leonardo data${COLOR_RESET}"
+        if ! confirm_action "Restore Leonardo data"; then
+            return 1
+        fi
+    fi
+    
+    log_message "INFO" "Restoring Leonardo data..."
+    
+    show_progress "Extracting backup..." &
+    local progress_pid=$!
+    
+    # Extract backup
+    if tar -xzf "$backup_path" -C "$mount_point" 2>/dev/null; then
+        kill $progress_pid 2>/dev/null
+        log_message "SUCCESS" "Leonardo data restored successfully"
+        return 0
+    else
+        kill $progress_pid 2>/dev/null
+        log_message "ERROR" "Restore failed"
+        return 1
+    fi
+}
+
+# Check USB free space
+check_usb_free_space() {
+    local mount_point="${1:-$LEONARDO_USB_MOUNT}"
+    local required_mb="${2:-1000}"  # Default 1GB
+    
+    if [[ -z "$mount_point" ]] || [[ ! -d "$mount_point" ]]; then
+        log_message "ERROR" "Invalid mount point: $mount_point"
+        return 1
+    fi
+    
+    local free_kb
+    local platform=$(detect_platform)
+    
+    case "$platform" in
+        "macos"|"linux")
+            free_kb=$(df -k "$mount_point" | tail -1 | awk '{print $4}')
+            ;;
+        "windows")
+            if command_exists "wmic"; then
+                local device="${mount_point%\\}"
+                free_kb=$(wmic logicaldisk where "DeviceID='$device'" get FreeSpace /value | grep -oE '[0-9]+' | head -1)
+                free_kb=$((free_kb / 1024))
+            fi
+            ;;
+    esac
+    
+    local free_mb=$((free_kb / 1024))
+    
+    if [[ $free_mb -lt $required_mb ]]; then
+        log_message "WARN" "Insufficient free space: ${free_mb}MB available, ${required_mb}MB required"
+        return 1
+    fi
+    
+    LEONARDO_USB_FREE="${free_mb}MB"
+    return 0
+}
+
+# Clean USB temporary files
+clean_usb_temp() {
+    local mount_point="${1:-$LEONARDO_USB_MOUNT}"
+    
+    if [[ -z "$mount_point" ]] || [[ ! -d "$mount_point/leonardo/temp" ]]; then
+        log_message "WARN" "Temp directory not found"
+        return 1
+    fi
+    
+    log_message "INFO" "Cleaning temporary files..."
+    
+    # Remove old temp files (older than 7 days)
+    find "$mount_point/leonardo/temp" -type f -mtime +7 -delete 2>/dev/null
+    
+    # Remove empty directories
+    find "$mount_point/leonardo/temp" -type d -empty -delete 2>/dev/null
+    
+    # Clean cache if needed
+    local cache_size=$(du -sm "$mount_point/leonardo/cache" 2>/dev/null | cut -f1)
+    if [[ $cache_size -gt 1000 ]]; then  # More than 1GB
+        log_message "INFO" "Cleaning old cache files..."
+        find "$mount_point/leonardo/cache" -type f -mtime +30 -delete 2>/dev/null
+    fi
+    
+    log_message "SUCCESS" "Cleanup complete"
+    return 0
+}
+
+# Export USB manager functions
+export -f init_usb_device format_usb_drive mount_usb_drive unmount_usb_drive
+export -f create_leonardo_structure install_leonardo_to_usb
+export -f backup_usb_data restore_usb_data check_usb_free_space clean_usb_temp
+
+# ==== Component: src/usb/health.sh ====
+# ==============================================================================
+# Leonardo AI Universal - USB Health Monitoring Module
+# ==============================================================================
+# Description: Monitor USB drive health, write cycles, and performance
+# Version: 7.0.0
+# Dependencies: colors.sh, logging.sh, filesystem.sh, detector.sh
+# ==============================================================================
+
+# Health check thresholds
+readonly USB_HEALTH_WRITE_CYCLE_WARNING=10000
+readonly USB_HEALTH_WRITE_CYCLE_CRITICAL=50000
+readonly USB_HEALTH_TEMP_WARNING=60
+readonly USB_HEALTH_TEMP_CRITICAL=70
+readonly USB_HEALTH_SPEED_MIN_MB=10
+
+# Health status database
+declare -g LEONARDO_USB_HEALTH_DB="${LEONARDO_USB_MOUNT:-}/leonardo/data/health.db"
+
+# Initialize health monitoring
+init_usb_health() {
+    local mount_point="${1:-$LEONARDO_USB_MOUNT}"
+    
+    if [[ -z "$mount_point" ]] || [[ ! -d "$mount_point" ]]; then
+        log_message "ERROR" "Invalid mount point for health monitoring"
+        return 1
+    fi
+    
+    # Create health database directory
+    mkdir -p "$(dirname "$LEONARDO_USB_HEALTH_DB")" 2>/dev/null
+    
+    # Initialize health database if not exists
+    if [[ ! -f "$LEONARDO_USB_HEALTH_DB" ]]; then
+        cat > "$LEONARDO_USB_HEALTH_DB" << EOF
+# Leonardo USB Health Database
+# Format: timestamp|metric|value
+# Initialized: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+EOF
+    fi
+    
+    log_message "INFO" "USB health monitoring initialized"
+    return 0
+}
+
+# Record health metric
+record_health_metric() {
+    local metric="$1"
+    local value="$2"
+    local timestamp=$(date -u +"%Y-%m-%d %H:%M:%S")
+    
+    echo "${timestamp}|${metric}|${value}" >> "$LEONARDO_USB_HEALTH_DB"
+}
+
+# Get USB SMART data
+get_usb_smart_data() {
+    local device="${1:-$LEONARDO_USB_DEVICE}"
+    local platform=$(detect_platform)
+    
+    case "$platform" in
+        "linux")
+            if command_exists "smartctl"; then
+                # Try to get SMART data
+                if smartctl -i "$device" 2>/dev/null | grep -q "SMART support is: Available"; then
+                    smartctl -A "$device" 2>/dev/null
+                else
+                    echo "SMART data not available for USB device"
+                fi
+            else
+                echo "smartctl not installed"
+            fi
+            ;;
+        "macos")
+            if command_exists "smartctl"; then
+                smartctl -A "$device" 2>/dev/null || echo "SMART data not available"
+            else
+                # Use diskutil for basic info
+                diskutil info "$device" | grep -E "(Media Name|Total Size|Device Block Size)"
+            fi
+            ;;
+        *)
+            echo "SMART monitoring not supported on this platform"
+            ;;
+    esac
+}
+
+# Estimate write cycles
+estimate_write_cycles() {
+    local mount_point="${1:-$LEONARDO_USB_MOUNT}"
+    
+    if [[ ! -f "$LEONARDO_USB_HEALTH_DB" ]]; then
+        echo "0"
+        return
+    fi
+    
+    # Count write operations from health database
+    local write_count=$(grep "|write_operation|" "$LEONARDO_USB_HEALTH_DB" 2>/dev/null | wc -l)
+    
+    # Estimate based on write operations (rough approximation)
+    # Assume each operation writes average 10MB, USB has 100GB capacity
+    # This gives us a very rough estimate of write cycles
+    local estimated_cycles=$((write_count / 1000))
+    
+    echo "$estimated_cycles"
+}
+
+# Check USB temperature (if available)
+check_usb_temperature() {
+    local device="${1:-$LEONARDO_USB_DEVICE}"
+    local platform=$(detect_platform)
+    local temp="N/A"
+    
+    case "$platform" in
+        "linux")
+            # Try to get temperature from hwmon
+            local device_name=$(basename "$device")
+            local hwmon_path="/sys/block/$device_name/device/hwmon"
+            
+            if [[ -d "$hwmon_path" ]]; then
+                for hwmon in "$hwmon_path"/hwmon*; do
+                    if [[ -f "$hwmon/temp1_input" ]]; then
+                        local temp_milli=$(cat "$hwmon/temp1_input" 2>/dev/null)
+                        temp=$((temp_milli / 1000))
+                        break
+                    fi
+                done
+            fi
+            
+            # Try smartctl as fallback
+            if [[ "$temp" == "N/A" ]] && command_exists "smartctl"; then
+                local smart_temp=$(smartctl -A "$device" 2>/dev/null | grep -i "temperature" | awk '{print $10}')
+                [[ -n "$smart_temp" ]] && temp="$smart_temp"
+            fi
+            ;;
+        "macos")
+            # Try smartctl
+            if command_exists "smartctl"; then
+                local smart_temp=$(smartctl -A "$device" 2>/dev/null | grep -i "temperature" | awk '{print $10}')
+                [[ -n "$smart_temp" ]] && temp="$smart_temp"
+            fi
+            ;;
+    esac
+    
+    echo "$temp"
+}
+
+# Perform comprehensive health check
+perform_health_check() {
+    local device="${1:-$LEONARDO_USB_DEVICE}"
+    local mount_point="${2:-$LEONARDO_USB_MOUNT}"
+    
+    if [[ -z "$device" ]]; then
+        log_message "ERROR" "No USB device specified"
+        return 1
+    fi
+    
+    echo "${COLOR_CYAN}USB Health Check${COLOR_RESET}"
+    echo "=================="
+    echo ""
+    
+    # Basic device info
+    echo "${COLOR_CYAN}Device Information:${COLOR_RESET}"
+    get_usb_drive_info "$device" | sed 's/^/  /'
+    echo ""
+    
+    # Performance test
+    echo "${COLOR_CYAN}Performance Test:${COLOR_RESET}"
+    local write_speed="N/A"
+    if [[ -n "$mount_point" ]] && [[ -d "$mount_point" ]]; then
+        # Quick write test (10MB)
+        local test_file="$mount_point/.leonardo_health_test_$$"
+        local start_time=$(date +%s%N)
+        
+        if dd if=/dev/zero of="$test_file" bs=1M count=10 conv=fdatasync 2>/dev/null; then
+            local end_time=$(date +%s%N)
+            local duration=$((end_time - start_time))
+            
+            if [[ $duration -gt 0 ]]; then
+                # Calculate MB/s
+                local speed_bytes=$((10485760 * 1000000000 / duration))
+                write_speed="$(format_bytes $speed_bytes)/s"
+                
+                # Record metric
+                record_health_metric "write_speed" "$speed_bytes"
+            fi
+            
+            rm -f "$test_file"
+        fi
+    fi
+    echo "  Write Speed: $write_speed"
+    
+    # USB speed
+    echo "  USB Speed: $(get_usb_speed "$device")"
+    echo ""
+    
+    # Health metrics
+    echo "${COLOR_CYAN}Health Metrics:${COLOR_RESET}"
+    
+    # Temperature
+    local temp=$(check_usb_temperature "$device")
+    echo -n "  Temperature: "
+    if [[ "$temp" != "N/A" ]]; then
+        if [[ $temp -ge $USB_HEALTH_TEMP_CRITICAL ]]; then
+            echo "${COLOR_RED}${temp}°C (CRITICAL)${COLOR_RESET}"
+        elif [[ $temp -ge $USB_HEALTH_TEMP_WARNING ]]; then
+            echo "${COLOR_YELLOW}${temp}°C (WARNING)${COLOR_RESET}"
+        else
+            echo "${COLOR_GREEN}${temp}°C${COLOR_RESET}"
+        fi
+        record_health_metric "temperature" "$temp"
+    else
+        echo "N/A"
+    fi
+    
+    # Write cycles
+    local cycles=$(estimate_write_cycles)
+    echo -n "  Estimated Write Cycles: "
+    if [[ $cycles -ge $USB_HEALTH_WRITE_CYCLE_CRITICAL ]]; then
+        echo "${COLOR_RED}${cycles} (CRITICAL)${COLOR_RESET}"
+    elif [[ $cycles -ge $USB_HEALTH_WRITE_CYCLE_WARNING ]]; then
+        echo "${COLOR_YELLOW}${cycles} (WARNING)${COLOR_RESET}"
+    else
+        echo "${COLOR_GREEN}${cycles}${COLOR_RESET}"
+    fi
+    
+    # Free space
+    if [[ -n "$mount_point" ]]; then
+        local free_space=$(df -h "$mount_point" 2>/dev/null | tail -1 | awk '{print $4}')
+        local used_percent=$(df "$mount_point" 2>/dev/null | tail -1 | awk '{print $5}' | tr -d '%')
+        
+        echo -n "  Free Space: $free_space "
+        if [[ $used_percent -ge 95 ]]; then
+            echo "${COLOR_RED}(${used_percent}% used - CRITICAL)${COLOR_RESET}"
+        elif [[ $used_percent -ge 80 ]]; then
+            echo "${COLOR_YELLOW}(${used_percent}% used - WARNING)${COLOR_RESET}"
+        else
+            echo "${COLOR_GREEN}(${used_percent}% used)${COLOR_RESET}"
+        fi
+    fi
+    
+    echo ""
+    
+    # SMART data (if available)
+    echo "${COLOR_CYAN}SMART Data:${COLOR_RESET}"
+    get_usb_smart_data "$device" | grep -E "(Reallocated|Wear_Leveling|Runtime_Bad|Temperature|Power_On)" | sed 's/^/  /'
+    echo ""
+    
+    # Overall health status
+    echo -n "${COLOR_CYAN}Overall Status:${COLOR_RESET} "
+    local status="GOOD"
+    local status_color="$COLOR_GREEN"
+    
+    if [[ $cycles -ge $USB_HEALTH_WRITE_CYCLE_CRITICAL ]] || [[ "$temp" != "N/A" && $temp -ge $USB_HEALTH_TEMP_CRITICAL ]]; then
+        status="CRITICAL"
+        status_color="$COLOR_RED"
+    elif [[ $cycles -ge $USB_HEALTH_WRITE_CYCLE_WARNING ]] || [[ "$temp" != "N/A" && $temp -ge $USB_HEALTH_TEMP_WARNING ]]; then
+        status="WARNING"
+        status_color="$COLOR_YELLOW"
+    fi
+    
+    echo "${status_color}${status}${COLOR_RESET}"
+    
+    # Record overall health
+    record_health_metric "health_status" "$status"
+    
+    return 0
+}
+
+# Generate health report
+generate_health_report() {
+    local output_file="${1:-./usb_health_report_$(date +%Y%m%d_%H%M%S).txt}"
+    local device="${2:-$LEONARDO_USB_DEVICE}"
+    
+    {
+        echo "Leonardo USB Health Report"
+        echo "========================="
+        echo "Generated: $(date)"
+        echo ""
+        
+        perform_health_check "$device"
+        
+        echo ""
+        echo "Health History (Last 30 days):"
+        echo "=============================="
+        
+        if [[ -f "$LEONARDO_USB_HEALTH_DB" ]]; then
+            # Get metrics from last 30 days
+            local cutoff_date=$(date -u -d "30 days ago" +"%Y-%m-%d" 2>/dev/null || date -u -v-30d +"%Y-%m-%d")
+            
+            echo ""
+            echo "Write Speed Trend:"
+            grep "|write_speed|" "$LEONARDO_USB_HEALTH_DB" | tail -20 | while IFS='|' read -r timestamp metric value; do
+                echo "  $timestamp: $(format_bytes $value)/s"
+            done
+            
+            echo ""
+            echo "Temperature History:"
+            grep "|temperature|" "$LEONARDO_USB_HEALTH_DB" | tail -20 | while IFS='|' read -r timestamp metric value; do
+                echo "  $timestamp: ${value}°C"
+            done
+            
+            echo ""
+            echo "Health Status Changes:"
+            grep "|health_status|" "$LEONARDO_USB_HEALTH_DB" | tail -10 | while IFS='|' read -r timestamp metric value; do
+                echo "  $timestamp: $value"
+            done
+        else
+            echo "No historical data available"
+        fi
+        
+    } > "$output_file"
+    
+    log_message "INFO" "Health report generated: $output_file"
+    echo "${COLOR_GREEN}Health report saved to: $output_file${COLOR_RESET}"
+}
+
+# Monitor health in background
+monitor_usb_health() {
+    local interval="${1:-300}"  # Default 5 minutes
+    local device="${2:-$LEONARDO_USB_DEVICE}"
+    
+    if [[ -z "$device" ]]; then
+        log_message "ERROR" "No USB device to monitor"
+        return 1
+    fi
+    
+    log_message "INFO" "Starting USB health monitoring (interval: ${interval}s)"
+    
+    # Create monitoring script
+    local monitor_script="/tmp/leonardo_health_monitor_$$.sh"
+    cat > "$monitor_script" << EOF
+#!/usr/bin/env bash
+source "$0"  # Source Leonardo
+
+while true; do
+    # Check if device still exists
+    if ! is_usb_device "$device"; then
+        log_message "WARN" "USB device disconnected"
+        break
+    fi
+    
+    # Perform quick health check
+    local temp=\$(check_usb_temperature "$device")
+    local cycles=\$(estimate_write_cycles)
+    
+    # Record metrics
+    [[ "\$temp" != "N/A" ]] && record_health_metric "temperature" "\$temp"
+    record_health_metric "write_cycles" "\$cycles"
+    
+    # Check for critical conditions
+    if [[ "\$temp" != "N/A" && \$temp -ge $USB_HEALTH_TEMP_CRITICAL ]]; then
+        log_message "CRITICAL" "USB temperature critical: \${temp}°C"
+    fi
+    
+    if [[ \$cycles -ge $USB_HEALTH_WRITE_CYCLE_CRITICAL ]]; then
+        log_message "CRITICAL" "USB write cycles critical: \$cycles"
+    fi
+    
+    sleep $interval
+done
+
+rm -f "$monitor_script"
+EOF
+    
+    chmod +x "$monitor_script"
+    
+    # Run in background
+    nohup bash "$monitor_script" > /dev/null 2>&1 &
+    local monitor_pid=$!
+    
+    echo "${COLOR_GREEN}Health monitoring started (PID: $monitor_pid)${COLOR_RESET}"
+    echo "To stop monitoring: kill $monitor_pid"
+    
+    # Save PID for later
+    echo "$monitor_pid" > "/tmp/leonardo_health_monitor.pid"
+    
+    return 0
+}
+
+# Stop health monitoring
+stop_health_monitoring() {
+    if [[ -f "/tmp/leonardo_health_monitor.pid" ]]; then
+        local pid=$(cat "/tmp/leonardo_health_monitor.pid")
+        if kill -0 "$pid" 2>/dev/null; then
+            kill "$pid"
+            log_message "INFO" "Health monitoring stopped"
+        fi
+        rm -f "/tmp/leonardo_health_monitor.pid"
+    else
+        log_message "WARN" "No active health monitoring found"
+    fi
+}
+
+# Analyze health trends
+analyze_health_trends() {
+    if [[ ! -f "$LEONARDO_USB_HEALTH_DB" ]]; then
+        log_message "ERROR" "No health data available"
+        return 1
+    fi
+    
+    echo "${COLOR_CYAN}USB Health Trend Analysis${COLOR_RESET}"
+    echo "========================="
+    echo ""
+    
+    # Analyze write speed trends
+    echo "Write Speed Analysis:"
+    local speeds=($(grep "|write_speed|" "$LEONARDO_USB_HEALTH_DB" | tail -100 | cut -d'|' -f3))
+    if [[ ${#speeds[@]} -gt 0 ]]; then
+        local sum=0
+        local min=${speeds[0]}
+        local max=${speeds[0]}
+        
+        for speed in "${speeds[@]}"; do
+            ((sum += speed))
+            [[ $speed -lt $min ]] && min=$speed
+            [[ $speed -gt $max ]] && max=$speed
+        done
+        
+        local avg=$((sum / ${#speeds[@]}))
+        
+        echo "  Average: $(format_bytes $avg)/s"
+        echo "  Minimum: $(format_bytes $min)/s"
+        echo "  Maximum: $(format_bytes $max)/s"
+        
+        # Check for degradation
+        local recent_avg=0
+        local recent_count=0
+        for ((i=${#speeds[@]}-10; i<${#speeds[@]}; i++)); do
+            if [[ $i -ge 0 ]]; then
+                ((recent_avg += speeds[i]))
+                ((recent_count++))
+            fi
+        done
+        
+        if [[ $recent_count -gt 0 ]]; then
+            recent_avg=$((recent_avg / recent_count))
+            local degradation=$(( (avg - recent_avg) * 100 / avg ))
+            
+            if [[ $degradation -gt 20 ]]; then
+                echo "  ${COLOR_YELLOW}⚠ Performance degradation detected: ${degradation}%${COLOR_RESET}"
+            fi
+        fi
+    else
+        echo "  No data available"
+    fi
+    
+    echo ""
+    
+    # Temperature trends
+    echo "Temperature Analysis:"
+    local temps=($(grep "|temperature|" "$LEONARDO_USB_HEALTH_DB" | tail -100 | cut -d'|' -f3 | grep -v "N/A"))
+    if [[ ${#temps[@]} -gt 0 ]]; then
+        local sum=0
+        local min=${temps[0]}
+        local max=${temps[0]}
+        local high_count=0
+        
+        for temp in "${temps[@]}"; do
+            ((sum += temp))
+            [[ $temp -lt $min ]] && min=$temp
+            [[ $temp -gt $max ]] && max=$temp
+            [[ $temp -ge $USB_HEALTH_TEMP_WARNING ]] && ((high_count++))
+        done
+        
+        local avg=$((sum / ${#temps[@]}))
+        
+        echo "  Average: ${avg}°C"
+        echo "  Minimum: ${min}°C"
+        echo "  Maximum: ${max}°C"
+        
+        if [[ $high_count -gt 0 ]]; then
+            local high_percent=$((high_count * 100 / ${#temps[@]}))
+            echo "  ${COLOR_YELLOW}⚠ High temperature incidents: ${high_count} (${high_percent}%)${COLOR_RESET}"
+        fi
+    else
+        echo "  No data available"
+    fi
+    
+    echo ""
+    
+    # Health status summary
+    echo "Health Status Summary:"
+    local good_count=$(grep "|health_status|GOOD" "$LEONARDO_USB_HEALTH_DB" | wc -l)
+    local warn_count=$(grep "|health_status|WARNING" "$LEONARDO_USB_HEALTH_DB" | wc -l)
+    local crit_count=$(grep "|health_status|CRITICAL" "$LEONARDO_USB_HEALTH_DB" | wc -l)
+    local total_count=$((good_count + warn_count + crit_count))
+    
+    if [[ $total_count -gt 0 ]]; then
+        echo "  Good: $good_count ($((good_count * 100 / total_count))%)"
+        echo "  Warning: $warn_count ($((warn_count * 100 / total_count))%)"
+        echo "  Critical: $crit_count ($((crit_count * 100 / total_count))%)"
+    else
+        echo "  No data available"
+    fi
+    
+    return 0
+}
+
+# Export health monitoring functions
+export -f init_usb_health record_health_metric get_usb_smart_data
+export -f estimate_write_cycles check_usb_temperature perform_health_check
+export -f generate_health_report monitor_usb_health stop_health_monitoring
+export -f analyze_health_trends
+
+# ==== Component: src/usb/cli.sh ====
+# ==============================================================================
+# Leonardo AI Universal - USB CLI Module
+# ==============================================================================
+# Description: Command-line interface for USB operations
+# Version: 7.0.0
+# Dependencies: colors.sh, logging.sh, detector.sh, manager.sh, health.sh
+# ==============================================================================
+
+# USB CLI help
+usb_cli_help() {
+    cat << EOF
+${COLOR_CYAN}Leonardo USB Management${COLOR_RESET}
+
+Usage:
+  leonardo usb <command> [options]
+
+Commands:
+  list              List available USB drives
+  info <device>     Show USB drive information
+  init <device>     Initialize USB drive for Leonardo
+  install [device]  Install Leonardo to USB drive
+  format <device>   Format USB drive
+  mount <device>    Mount USB drive
+  unmount <device>  Unmount USB drive
+  health [device]   Check USB drive health
+  monitor [device]  Monitor USB health continuously
+  backup [device]   Backup Leonardo data from USB
+  restore <file>    Restore Leonardo data to USB
+  clean [device]    Clean temporary files on USB
+  test [device]     Test USB drive performance
+
+Options:
+  -f, --format <fs>   File system type (exfat, fat32, ntfs, ext4)
+  -l, --label <name>  Volume label
+  -b, --backup <file> Backup file path
+  -i, --interval <s>  Monitoring interval in seconds
+
+Examples:
+  leonardo usb list
+  leonardo usb init /dev/sdb
+  leonardo usb install
+  leonardo usb health /dev/sdb
+  leonardo usb format /dev/sdb --format exfat --label LEONARDO
+  leonardo usb backup --backup ~/leonardo_backup.tar.gz
+  leonardo usb monitor --interval 60
+
+Quick Start:
+  leonardo usb list        # Find your USB drive
+  leonardo usb init <dev>  # Initialize for Leonardo
+  leonardo usb install     # Install Leonardo to USB
+
+EOF
+}
+
+# USB CLI main handler
+usb_cli() {
+    local command="${1:-help}"
+    shift
+    
+    case "$command" in
+        "list")
+            usb_cli_list "$@"
+            ;;
+        "info")
+            usb_cli_info "$@"
+            ;;
+        "init")
+            usb_cli_init "$@"
+            ;;
+        "install")
+            usb_cli_install "$@"
+            ;;
+        "format")
+            usb_cli_format "$@"
+            ;;
+        "mount")
+            usb_cli_mount "$@"
+            ;;
+        "unmount"|"umount")
+            usb_cli_unmount "$@"
+            ;;
+        "health")
+            usb_cli_health "$@"
+            ;;
+        "monitor")
+            usb_cli_monitor "$@"
+            ;;
+        "backup")
+            usb_cli_backup "$@"
+            ;;
+        "restore")
+            usb_cli_restore "$@"
+            ;;
+        "clean")
+            usb_cli_clean "$@"
+            ;;
+        "test")
+            usb_cli_test "$@"
+            ;;
+        "help"|"--help"|"-h")
+            usb_cli_help
+            ;;
+        *)
+            echo "${COLOR_RED}Unknown command: $command${COLOR_RESET}"
+            echo "Use 'leonardo usb help' for usage information"
+            return 1
+            ;;
+    esac
+}
+
+# List USB drives
+usb_cli_list() {
+    local format="table"
+    
+    # Parse options
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --json)
+                format="json"
+                shift
+                ;;
+            --simple)
+                format="simple"
+                shift
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+    
+    list_usb_drives "$format"
+}
+
+# Show USB info
+usb_cli_info() {
+    local device="$1"
+    
+    if [[ -z "$device" ]]; then
+        echo "${COLOR_RED}Error: No device specified${COLOR_RESET}"
+        echo "Usage: leonardo usb info <device>"
+        return 1
+    fi
+    
+    if ! is_usb_device "$device"; then
+        echo "${COLOR_RED}Error: Not a USB device: $device${COLOR_RESET}"
+        return 1
+    fi
+    
+    echo ""
+    get_usb_drive_info "$device"
+    echo ""
+    echo "USB Speed: $(get_usb_speed "$device")"
+    
+    # Check if Leonardo is installed
+    local mount_point
+    local platform=$(detect_platform)
+    
+    case "$platform" in
+        "macos")
+            mount_point=$(diskutil info "$device" 2>/dev/null | grep "Mount Point:" | cut -d: -f2- | xargs)
+            ;;
+        "linux")
+            mount_point=$(lsblk -no MOUNTPOINT "$device" 2>/dev/null | head -1)
+            ;;
+        "windows")
+            mount_point="$device\\"
+            ;;
+    esac
+    
+    if [[ -n "$mount_point" ]] && [[ -f "$mount_point/leonardo.sh" ]]; then
+        echo ""
+        echo "${COLOR_GREEN}Leonardo Status: Installed${COLOR_RESET}"
+        if [[ -f "$mount_point/leonardo/VERSION" ]]; then
+            echo "Leonardo Version: $(cat "$mount_point/leonardo/VERSION")"
+        fi
+    else
+        echo ""
+        echo "${COLOR_YELLOW}Leonardo Status: Not Installed${COLOR_RESET}"
+    fi
+}
+
+# Initialize USB for Leonardo
+usb_cli_init() {
+    local device="$1"
+    
+    if [[ -z "$device" ]]; then
+        echo "${COLOR_RED}Error: No device specified${COLOR_RESET}"
+        echo "Usage: leonardo usb init <device>"
+        return 1
+    fi
+    
+    # Initialize device
+    if ! init_usb_device "$device"; then
+        return 1
+    fi
+    
+    # Check if already has Leonardo structure
+    if [[ -n "$LEONARDO_USB_MOUNT" ]] && [[ -d "$LEONARDO_USB_MOUNT/leonardo" ]]; then
+        echo "${COLOR_YELLOW}Leonardo structure already exists on USB${COLOR_RESET}"
+        if ! confirm_action "Reinitialize USB"; then
+            return 0
+        fi
+    fi
+    
+    # Create Leonardo structure
+    if ! create_leonardo_structure; then
+        return 1
+    fi
+    
+    echo ""
+    echo "${COLOR_GREEN}USB drive initialized for Leonardo!${COLOR_RESET}"
+    echo "Next step: leonardo usb install"
+}
+
+# Install Leonardo to USB
+usb_cli_install() {
+    local device="$1"
+    local leonardo_script="./leonardo.sh"
+    
+    # Parse options
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --script)
+                leonardo_script="$2"
+                shift 2
+                ;;
+            *)
+                device="$1"
+                shift
+                ;;
+        esac
+    done
+    
+    # Auto-detect if no device specified
+    if [[ -z "$device" ]]; then
+        echo "${COLOR_CYAN}Auto-detecting USB device...${COLOR_RESET}"
+        device=$(detect_usb_drives | head -1 | cut -d'|' -f1)
+        
+        if [[ -z "$device" ]]; then
+            echo "${COLOR_RED}No USB device detected${COLOR_RESET}"
+            return 1
+        fi
+        
+        echo "Found: $device"
+        if ! confirm_action "Use this device"; then
+            return 1
+        fi
+    fi
+    
+    # Check if Leonardo script exists
+    if [[ ! -f "$leonardo_script" ]]; then
+        echo "${COLOR_RED}Leonardo script not found: $leonardo_script${COLOR_RESET}"
+        return 1
+    fi
+    
+    # Initialize device
+    if ! init_usb_device "$device"; then
+        return 1
+    fi
+    
+    # Install Leonardo
+    install_leonardo_to_usb "$LEONARDO_USB_MOUNT" "$leonardo_script"
+}
+
+# Format USB drive
+usb_cli_format() {
+    local device=""
+    local filesystem="exfat"
+    local label="LEONARDO"
+    
+    # Parse options
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -f|--format)
+                filesystem="$2"
+                shift 2
+                ;;
+            -l|--label)
+                label="$2"
+                shift 2
+                ;;
+            *)
+                device="$1"
+                shift
+                ;;
+        esac
+    done
+    
+    if [[ -z "$device" ]]; then
+        echo "${COLOR_RED}Error: No device specified${COLOR_RESET}"
+        echo "Usage: leonardo usb format <device> [--format <fs>] [--label <name>]"
+        return 1
+    fi
+    
+    # Validate filesystem
+    case "$filesystem" in
+        exfat|fat32|ntfs|ext4)
+            ;;
+        *)
+            echo "${COLOR_RED}Error: Unsupported filesystem: $filesystem${COLOR_RESET}"
+            echo "Supported: exfat, fat32, ntfs, ext4"
+            return 1
+            ;;
+    esac
+    
+    format_usb_drive "$device" "$filesystem" "$label"
+}
+
+# Mount USB drive
+usb_cli_mount() {
+    local device="$1"
+    local mount_point="$2"
+    
+    if [[ -z "$device" ]]; then
+        echo "${COLOR_RED}Error: No device specified${COLOR_RESET}"
+        echo "Usage: leonardo usb mount <device> [mount_point]"
+        return 1
+    fi
+    
+    mount_usb_drive "$device" "$mount_point"
+}
+
+# Unmount USB drive
+usb_cli_unmount() {
+    local device="$1"
+    
+    if [[ -z "$device" ]]; then
+        echo "${COLOR_RED}Error: No device specified${COLOR_RESET}"
+        echo "Usage: leonardo usb unmount <device>"
+        return 1
+    fi
+    
+    unmount_usb_drive "$device"
+}
+
+# Check USB health
+usb_cli_health() {
+    local device="$1"
+    local report=false
+    local output_file=""
+    
+    # Parse options
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --report)
+                report=true
+                output_file="${2:-}"
+                shift
+                [[ -n "$output_file" ]] && shift
+                ;;
+            *)
+                device="$1"
+                shift
+                ;;
+        esac
+    done
+    
+    # Auto-detect if no device specified
+    if [[ -z "$device" ]]; then
+        if [[ -n "$LEONARDO_USB_DEVICE" ]]; then
+            device="$LEONARDO_USB_DEVICE"
+        else
+            device=$(detect_usb_drives | head -1 | cut -d'|' -f1)
+            if [[ -z "$device" ]]; then
+                echo "${COLOR_RED}No USB device detected${COLOR_RESET}"
+                return 1
+            fi
+        fi
+    fi
+    
+    # Initialize device
+    init_usb_device "$device" >/dev/null 2>&1
+    
+    # Initialize health monitoring
+    init_usb_health
+    
+    if [[ "$report" == "true" ]]; then
+        generate_health_report "$output_file" "$device"
+    else
+        perform_health_check "$device"
+    fi
+}
+
+# Monitor USB health
+usb_cli_monitor() {
+    local device=""
+    local interval=300
+    
+    # Parse options
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -i|--interval)
+                interval="$2"
+                shift 2
+                ;;
+            --stop)
+                stop_health_monitoring
+                return 0
+                ;;
+            *)
+                device="$1"
+                shift
+                ;;
+        esac
+    done
+    
+    # Auto-detect if no device specified
+    if [[ -z "$device" ]]; then
+        if [[ -n "$LEONARDO_USB_DEVICE" ]]; then
+            device="$LEONARDO_USB_DEVICE"
+        else
+            device=$(detect_usb_drives | head -1 | cut -d'|' -f1)
+            if [[ -z "$device" ]]; then
+                echo "${COLOR_RED}No USB device detected${COLOR_RESET}"
+                return 1
+            fi
+        fi
+    fi
+    
+    # Initialize device
+    init_usb_device "$device" >/dev/null 2>&1
+    
+    # Initialize health monitoring
+    init_usb_health
+    
+    # Start monitoring
+    monitor_usb_health "$interval" "$device"
+}
+
+# Backup USB data
+usb_cli_backup() {
+    local device=""
+    local backup_file=""
+    
+    # Parse options
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -b|--backup)
+                backup_file="$2"
+                shift 2
+                ;;
+            *)
+                device="$1"
+                shift
+                ;;
+        esac
+    done
+    
+    # Auto-detect if no device specified
+    if [[ -z "$device" ]]; then
+        if [[ -n "$LEONARDO_USB_DEVICE" ]]; then
+            device="$LEONARDO_USB_DEVICE"
+        else
+            device=$(detect_usb_drives | head -1 | cut -d'|' -f1)
+            if [[ -z "$device" ]]; then
+                echo "${COLOR_RED}No USB device detected${COLOR_RESET}"
+                return 1
+            fi
+        fi
+    fi
+    
+    # Initialize device
+    if ! init_usb_device "$device"; then
+        return 1
+    fi
+    
+    # Check if Leonardo exists
+    if [[ ! -d "$LEONARDO_USB_MOUNT/leonardo" ]]; then
+        echo "${COLOR_RED}Leonardo not found on USB device${COLOR_RESET}"
+        return 1
+    fi
+    
+    backup_usb_data "$LEONARDO_USB_MOUNT" "$backup_file"
+}
+
+# Restore USB data
+usb_cli_restore() {
+    local backup_file="$1"
+    local device="$2"
+    
+    if [[ -z "$backup_file" ]]; then
+        echo "${COLOR_RED}Error: No backup file specified${COLOR_RESET}"
+        echo "Usage: leonardo usb restore <backup_file> [device]"
+        return 1
+    fi
+    
+    if [[ ! -f "$backup_file" ]]; then
+        echo "${COLOR_RED}Error: Backup file not found: $backup_file${COLOR_RESET}"
+        return 1
+    fi
+    
+    # Auto-detect if no device specified
+    if [[ -z "$device" ]]; then
+        if [[ -n "$LEONARDO_USB_DEVICE" ]]; then
+            device="$LEONARDO_USB_DEVICE"
+        else
+            device=$(detect_usb_drives | head -1 | cut -d'|' -f1)
+            if [[ -z "$device" ]]; then
+                echo "${COLOR_RED}No USB device detected${COLOR_RESET}"
+                return 1
+            fi
+            
+            echo "Found: $device"
+            if ! confirm_action "Restore to this device"; then
+                return 1
+            fi
+        fi
+    fi
+    
+    # Initialize device
+    if ! init_usb_device "$device"; then
+        return 1
+    fi
+    
+    restore_usb_data "$LEONARDO_USB_MOUNT" "$backup_file"
+}
+
+# Clean USB temp files
+usb_cli_clean() {
+    local device="$1"
+    
+    # Auto-detect if no device specified
+    if [[ -z "$device" ]]; then
+        if [[ -n "$LEONARDO_USB_DEVICE" ]]; then
+            device="$LEONARDO_USB_DEVICE"
+        else
+            device=$(detect_usb_drives | head -1 | cut -d'|' -f1)
+            if [[ -z "$device" ]]; then
+                echo "${COLOR_RED}No USB device detected${COLOR_RESET}"
+                return 1
+            fi
+        fi
+    fi
+    
+    # Initialize device
+    if ! init_usb_device "$device"; then
+        return 1
+    fi
+    
+    # Check if Leonardo exists
+    if [[ ! -d "$LEONARDO_USB_MOUNT/leonardo" ]]; then
+        echo "${COLOR_RED}Leonardo not found on USB device${COLOR_RESET}"
+        return 1
+    fi
+    
+    # Show current usage
+    echo "Current disk usage:"
+    du -sh "$LEONARDO_USB_MOUNT/leonardo"/* 2>/dev/null | sort -h
+    echo ""
+    
+    if confirm_action "Clean temporary files"; then
+        clean_usb_temp "$LEONARDO_USB_MOUNT"
+        
+        # Show new usage
+        echo ""
+        echo "Disk usage after cleanup:"
+        du -sh "$LEONARDO_USB_MOUNT/leonardo"/* 2>/dev/null | sort -h
+    fi
+}
+
+# Test USB performance
+usb_cli_test() {
+    local device="$1"
+    
+    # Auto-detect if no device specified
+    if [[ -z "$device" ]]; then
+        if [[ -n "$LEONARDO_USB_DEVICE" ]]; then
+            device="$LEONARDO_USB_DEVICE"
+        else
+            device=$(detect_usb_drives | head -1 | cut -d'|' -f1)
+            if [[ -z "$device" ]]; then
+                echo "${COLOR_RED}No USB device detected${COLOR_RESET}"
+                return 1
+            fi
+        fi
+    fi
+    
+    # Initialize device
+    if ! init_usb_device "$device"; then
+        return 1
+    fi
+    
+    echo "${COLOR_CYAN}USB Performance Test${COLOR_RESET}"
+    echo "===================="
+    echo "Device: $device"
+    echo "Mount: $LEONARDO_USB_MOUNT"
+    echo ""
+    
+    # Test write speed
+    test_usb_write_speed "$device"
+    
+    # Additional performance metrics
+    echo ""
+    echo "USB Interface: $(get_usb_speed "$device")"
+    
+    # Check free space
+    if check_usb_free_space "$LEONARDO_USB_MOUNT" 100; then
+        echo "Free Space: $LEONARDO_USB_FREE"
+    fi
+    
+    # Quick health check
+    echo ""
+    echo "Quick Health Check:"
+    local temp=$(check_usb_temperature "$device")
+    echo "  Temperature: $temp"
+    echo "  Write Cycles: $(estimate_write_cycles)"
+}
+
+# Register USB commands
+register_usb_commands() {
+    # This function is called during Leonardo initialization
+    # to register USB commands with the main command handler
+    log_message "INFO" "USB commands registered"
+}
+
+# Export USB CLI functions
+export -f usb_cli usb_cli_help
+export -f usb_cli_list usb_cli_info usb_cli_init usb_cli_install
+export -f usb_cli_format usb_cli_mount usb_cli_unmount
+export -f usb_cli_health usb_cli_monitor usb_cli_backup usb_cli_restore
+export -f usb_cli_clean usb_cli_test register_usb_commands
+
 # ==== Component: src/ui/menu.sh ====
 # ==============================================================================
 # Leonardo AI Universal - Menu System
@@ -4751,9 +6877,66 @@ handle_exit() {
     exit 0
 }
 
-# Stub for USB command handler
+# Handle model commands
+handle_model_command() {
+    model_cli "$@"
+}
+
+# Handle USB commands
 handle_usb_command() {
-    echo "${COLOR_YELLOW}USB management commands coming soon!${COLOR_RESET}"
+    usb_cli "$@"
+}
+
+# Run system tests
+run_system_tests() {
+    clear
+    echo "${COLOR_CYAN}Running System Tests${COLOR_RESET}"
+    echo ""
+    
+    # Component tests
+    local tests=(
+        "Environment:check_environment"
+        "File System:test_filesystem"
+        "Network:test_network_connectivity"
+        "Model Registry:test_model_registry"
+        "UI Components:test_ui_components"
+    )
+    
+    for test in "${tests[@]}"; do
+        local name="${test%%:*}"
+        local func="${test##*:}"
+        
+        echo -n "Testing $name... "
+        if $func 2>/dev/null; then
+            echo "${COLOR_GREEN}✓ PASS${COLOR_RESET}"
+        else
+            echo "${COLOR_RED}✗ FAIL${COLOR_RESET}"
+        fi
+    done
+    
+    echo ""
+}
+
+# Test functions
+check_environment() {
+    [[ -n "$LEONARDO_VERSION" ]] && [[ -n "$LEONARDO_BASE_DIR" ]]
+}
+
+test_filesystem() {
+    local test_file="$LEONARDO_TEMP_DIR/.test_$$"
+    echo "test" > "$test_file" && rm -f "$test_file"
+}
+
+test_network_connectivity() {
+    check_connectivity >/dev/null 2>&1
+}
+
+test_model_registry() {
+    [[ ${#LEONARDO_MODEL_REGISTRY[@]} -gt 0 ]]
+}
+
+test_ui_components() {
+    type show_menu >/dev/null 2>&1 && type show_progress_bar >/dev/null 2>&1
 }
 
 # ==== Component: src/models/registry.sh ====

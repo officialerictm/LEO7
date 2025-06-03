@@ -514,7 +514,64 @@ handle_exit() {
     exit 0
 }
 
-# Stub for USB command handler
+# Handle model commands
+handle_model_command() {
+    model_cli "$@"
+}
+
+# Handle USB commands
 handle_usb_command() {
-    echo "${COLOR_YELLOW}USB management commands coming soon!${COLOR_RESET}"
+    usb_cli "$@"
+}
+
+# Run system tests
+run_system_tests() {
+    clear
+    echo "${COLOR_CYAN}Running System Tests${COLOR_RESET}"
+    echo ""
+    
+    # Component tests
+    local tests=(
+        "Environment:check_environment"
+        "File System:test_filesystem"
+        "Network:test_network_connectivity"
+        "Model Registry:test_model_registry"
+        "UI Components:test_ui_components"
+    )
+    
+    for test in "${tests[@]}"; do
+        local name="${test%%:*}"
+        local func="${test##*:}"
+        
+        echo -n "Testing $name... "
+        if $func 2>/dev/null; then
+            echo "${COLOR_GREEN}✓ PASS${COLOR_RESET}"
+        else
+            echo "${COLOR_RED}✗ FAIL${COLOR_RESET}"
+        fi
+    done
+    
+    echo ""
+}
+
+# Test functions
+check_environment() {
+    [[ -n "$LEONARDO_VERSION" ]] && [[ -n "$LEONARDO_BASE_DIR" ]]
+}
+
+test_filesystem() {
+    local test_file="$LEONARDO_TEMP_DIR/.test_$$"
+    echo "test" > "$test_file" && rm -f "$test_file"
+}
+
+test_network_connectivity() {
+    check_connectivity >/dev/null 2>&1
+}
+
+test_model_registry() {
+    [[ ${#LEONARDO_MODEL_REGISTRY[@]} -gt 0 ]]
+}
+
+test_ui_components() {
+    type show_menu >/dev/null 2>&1 && type show_progress_bar >/dev/null 2>&1
 }

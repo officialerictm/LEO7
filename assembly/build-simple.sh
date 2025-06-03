@@ -40,6 +40,14 @@ COMPONENTS=(
     "src/network/download.sh"
     "src/network/transfer.sh"
     "src/utils/network.sh"
+    
+    # USB modules
+    "src/usb/detector.sh"
+    "src/usb/manager.sh"
+    "src/usb/health.sh"
+    "src/usb/cli.sh"
+    
+    # UI modules
     "src/ui/menu.sh"
     "src/ui/progress.sh"
     "src/ui/dashboard.sh"
