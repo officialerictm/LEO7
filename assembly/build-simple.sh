@@ -33,6 +33,11 @@ EOF
 COMPONENTS=(
     "src/core/header.sh"
     "src/core/config.sh"
+    "src/utils/colors.sh"
+    "src/utils/logging.sh"
+    "src/utils/validation.sh"
+    "src/utils/filesystem.sh"
+    "src/utils/network.sh"
     "src/core/main.sh"
 )
 
