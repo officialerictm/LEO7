@@ -310,6 +310,18 @@ LEONARDO_WARNING="${YELLOW}"
 LEONARDO_ERROR="${RED}"
 LEONARDO_INFO="${BLUE}"
 
+# Compatibility aliases
+COLOR_RESET="${NC}"
+COLOR_BLACK="${BLACK}"
+COLOR_RED="${RED}"
+COLOR_GREEN="${GREEN}"
+COLOR_YELLOW="${YELLOW}"
+COLOR_BLUE="${BLUE}"
+COLOR_MAGENTA="${MAGENTA}"
+COLOR_CYAN="${CYAN}"
+COLOR_WHITE="${WHITE}"
+COLOR_DIM="${DIM}"
+
 # Functions for colored output
 print_color() {
     local color="$1"
@@ -437,6 +449,21 @@ get_matrix_char() {
 # Export color functions
 export -f print_color print_bold print_success print_error print_warning print_info
 export -f print_progress print_spinner draw_box print_gradient
+
+# Export color variables
+export NC BOLD DIM UNDERLINE BLINK REVERSE HIDDEN
+export BLACK RED GREEN YELLOW BLUE MAGENTA CYAN WHITE
+export BRIGHT_BLACK BRIGHT_RED BRIGHT_GREEN BRIGHT_YELLOW
+export BRIGHT_BLUE BRIGHT_MAGENTA BRIGHT_CYAN BRIGHT_WHITE
+export BG_BLACK BG_RED BG_GREEN BG_YELLOW BG_BLUE BG_MAGENTA BG_CYAN BG_WHITE
+export LEONARDO_PRIMARY LEONARDO_SECONDARY LEONARDO_ACCENT
+export LEONARDO_SUCCESS LEONARDO_ERROR LEONARDO_WARNING LEONARDO_INFO
+export BOX_HORIZONTAL BOX_VERTICAL BOX_TOP_LEFT BOX_TOP_RIGHT
+export BOX_BOTTOM_LEFT BOX_BOTTOM_RIGHT BOX_CROSS BOX_T_DOWN
+export BOX_T_UP BOX_T_RIGHT BOX_T_LEFT
+export BOX_DOUBLE_HORIZONTAL BOX_DOUBLE_VERTICAL BOX_DOUBLE_TOP_LEFT
+export BOX_DOUBLE_TOP_RIGHT BOX_DOUBLE_BOTTOM_LEFT BOX_DOUBLE_BOTTOM_RIGHT
+export COLOR_RESET COLOR_BLACK COLOR_RED COLOR_GREEN COLOR_YELLOW COLOR_BLUE COLOR_MAGENTA COLOR_CYAN COLOR_WHITE COLOR_DIM
 
 # ==== Component: src/utils/logging.sh ====
 # ==============================================================================
@@ -1337,6 +1364,682 @@ cleanup_temp_files() {
 export -f detect_usb_devices format_usb_device mount_device unmount_device
 export -f check_available_space create_leonardo_structure copy_with_progress
 export -f safe_delete get_file_checksum create_temp_dir
+
+# ==== Component: src/network/download.sh ====
+# ==============================================================================
+# Leonardo AI Universal - Network Download Module
+# ==============================================================================
+# Description: File download functionality with progress tracking
+# Version: 7.0.0
+# Dependencies: colors.sh, logging.sh, progress.sh, validation.sh
+# ==============================================================================
+
+# Download file with progress
+download_file_with_progress() {
+    local url="$1"
+    local output_file="$2"
+    local retries="${3:-$LEONARDO_DOWNLOAD_RETRIES}"
+    
+    # Validate inputs
+    if [[ -z "$url" ]] || [[ -z "$output_file" ]]; then
+        log_message "ERROR" "Invalid download parameters"
+        return 1
+    fi
+    
+    # Create output directory
+    local output_dir=$(dirname "$output_file")
+    mkdir -p "$output_dir"
+    
+    # Check available downloaders
+    local downloader=""
+    if command_exists "curl"; then
+        downloader="curl"
+    elif command_exists "wget"; then
+        downloader="wget"
+    else
+        log_message "ERROR" "No suitable downloader found (curl or wget required)"
+        return 1
+    fi
+    
+    log_message "INFO" "Downloading: $url"
+    log_message "INFO" "Output: $output_file"
+    log_message "INFO" "Using: $downloader"
+    
+    local attempt=1
+    while [[ $attempt -le $retries ]]; do
+        log_message "INFO" "Download attempt $attempt/$retries"
+        
+        if [[ "$downloader" == "curl" ]]; then
+            if download_with_curl "$url" "$output_file"; then
+                return 0
+            fi
+        else
+            if download_with_wget "$url" "$output_file"; then
+                return 0
+            fi
+        fi
+        
+        ((attempt++))
+        if [[ $attempt -le $retries ]]; then
+            log_message "WARN" "Download failed, retrying in 5 seconds..."
+            sleep 5
+        fi
+    done
+    
+    log_message "ERROR" "Download failed after $retries attempts"
+    return 1
+}
+
+# Download with curl
+download_with_curl() {
+    local url="$1"
+    local output_file="$2"
+    local temp_file="${output_file}.tmp"
+    
+    # Download with progress bar
+    if [[ -t 1 ]] && [[ "$LEONARDO_QUIET" != "true" ]]; then
+        # Interactive mode with progress bar
+        curl -L -f -# \
+            --connect-timeout "$LEONARDO_TIMEOUT" \
+            --retry 3 \
+            --retry-delay 2 \
+            -o "$temp_file" \
+            "$url" 2>&1 | \
+        while IFS= read -r line; do
+            if [[ "$line" =~ ^[[:space:]]*([0-9]+(\.[0-9]+)?)[[:space:]]+.*$ ]]; then
+                local percent="${BASH_REMATCH[1]}"
+                show_download_progress "$percent" "$url"
+            fi
+        done
+    else
+        # Non-interactive mode
+        curl -L -f -S \
+            --connect-timeout "$LEONARDO_TIMEOUT" \
+            --retry 3 \
+            --retry-delay 2 \
+            -o "$temp_file" \
+            "$url"
+    fi
+    
+    local result=$?
+    
+    if [[ $result -eq 0 ]] && [[ -f "$temp_file" ]]; then
+        mv "$temp_file" "$output_file"
+        return 0
+    else
+        rm -f "$temp_file"
+        return 1
+    fi
+}
+
+# Download with wget
+download_with_wget() {
+    local url="$1"
+    local output_file="$2"
+    local temp_file="${output_file}.tmp"
+    
+    # Download with progress
+    if [[ -t 1 ]] && [[ "$LEONARDO_QUIET" != "true" ]]; then
+        # Interactive mode with progress bar
+        wget --progress=bar:force \
+            --timeout="$LEONARDO_TIMEOUT" \
+            --tries=3 \
+            --wait=2 \
+            -O "$temp_file" \
+            "$url" 2>&1 | \
+        while IFS= read -r line; do
+            if [[ "$line" =~ ([0-9]+)% ]]; then
+                local percent="${BASH_REMATCH[1]}"
+                show_download_progress "$percent" "$url"
+            fi
+        done
+    else
+        # Non-interactive mode
+        wget -q \
+            --timeout="$LEONARDO_TIMEOUT" \
+            --tries=3 \
+            --wait=2 \
+            -O "$temp_file" \
+            "$url"
+    fi
+    
+    local result=$?
+    
+    if [[ $result -eq 0 ]] && [[ -f "$temp_file" ]]; then
+        mv "$temp_file" "$output_file"
+        return 0
+    else
+        rm -f "$temp_file"
+        return 1
+    fi
+}
+
+# Download file (simple version without progress)
+download_file() {
+    local url="$1"
+    local output_file="$2"
+    
+    if command_exists "curl"; then
+        curl -L -f -s -o "$output_file" "$url"
+    elif command_exists "wget"; then
+        wget -q -O "$output_file" "$url"
+    else
+        log_message "ERROR" "No suitable downloader found"
+        return 1
+    fi
+}
+
+# Fetch remote file to string
+fetch_remote_file() {
+    local url="$1"
+    
+    if command_exists "curl"; then
+        curl -L -f -s "$url"
+    elif command_exists "wget"; then
+        wget -q -O - "$url"
+    else
+        log_message "ERROR" "No suitable downloader found"
+        return 1
+    fi
+}
+
+# Download and verify file
+download_and_verify() {
+    local url="$1"
+    local output_file="$2"
+    local expected_hash="$3"
+    local hash_type="${4:-sha256}"
+    
+    # Download file
+    if ! download_file_with_progress "$url" "$output_file"; then
+        return 1
+    fi
+    
+    # Verify if hash provided
+    if [[ -n "$expected_hash" ]]; then
+        log_message "INFO" "Verifying file integrity..."
+        
+        local actual_hash=""
+        case "$hash_type" in
+            "sha256")
+                actual_hash=$(sha256sum "$output_file" 2>/dev/null | awk '{print $1}')
+                ;;
+            "md5")
+                actual_hash=$(md5sum "$output_file" 2>/dev/null | awk '{print $1}')
+                ;;
+            *)
+                log_message "ERROR" "Unsupported hash type: $hash_type"
+                rm -f "$output_file"
+                return 1
+                ;;
+        esac
+        
+        if [[ "$actual_hash" != "$expected_hash" ]]; then
+            log_message "ERROR" "Hash verification failed!"
+            log_message "ERROR" "Expected: $expected_hash"
+            log_message "ERROR" "Actual:   $actual_hash"
+            rm -f "$output_file"
+            return 1
+        fi
+        
+        log_message "INFO" "File verified successfully"
+    fi
+    
+    return 0
+}
+
+# Batch download files
+batch_download() {
+    local -n urls=$1
+    local -n outputs=$2
+    local parallel="${3:-1}"
+    
+    if [[ ${#urls[@]} -ne ${#outputs[@]} ]]; then
+        log_message "ERROR" "URL and output arrays must have same length"
+        return 1
+    fi
+    
+    local total=${#urls[@]}
+    local completed=0
+    local failed=0
+    
+    echo "${COLOR_CYAN}Downloading $total files...${COLOR_RESET}"
+    
+    for i in "${!urls[@]}"; do
+        local url="${urls[$i]}"
+        local output="${outputs[$i]}"
+        
+        echo ""
+        echo "${COLOR_YELLOW}[$((i+1))/$total] $(basename "$output")${COLOR_RESET}"
+        
+        if download_file_with_progress "$url" "$output"; then
+            ((completed++))
+        else
+            ((failed++))
+            log_message "ERROR" "Failed to download: $(basename "$output")"
+        fi
+    done
+    
+    echo ""
+    echo "${COLOR_CYAN}Download complete:${COLOR_RESET}"
+    echo "  ${COLOR_GREEN}Success: $completed${COLOR_RESET}"
+    [[ $failed -gt 0 ]] && echo "  ${COLOR_RED}Failed: $failed${COLOR_RESET}"
+    
+    return $failed
+}
+
+# Resume download
+resume_download() {
+    local url="$1"
+    local output_file="$2"
+    
+    if [[ ! -f "$output_file" ]]; then
+        # No partial file, do normal download
+        download_file_with_progress "$url" "$output_file"
+        return $?
+    fi
+    
+    local existing_size=$(stat -f%z "$output_file" 2>/dev/null || stat -c%s "$output_file" 2>/dev/null || echo 0)
+    
+    log_message "INFO" "Resuming download from byte $existing_size"
+    
+    if command_exists "curl"; then
+        curl -L -f -C "$existing_size" -# -o "$output_file" "$url"
+    elif command_exists "wget"; then
+        wget -c --progress=bar:force -O "$output_file" "$url"
+    else
+        log_message "ERROR" "No suitable downloader with resume support found"
+        return 1
+    fi
+}
+
+# Mirror remote directory
+mirror_remote_directory() {
+    local remote_url="$1"
+    local local_dir="$2"
+    local include_pattern="${3:-*}"
+    
+    log_message "INFO" "Mirroring remote directory: $remote_url"
+    
+    mkdir -p "$local_dir"
+    
+    if command_exists "wget"; then
+        wget -r -np -nH --cut-dirs=1 \
+            -P "$local_dir" \
+            -A "$include_pattern" \
+            "$remote_url"
+    else
+        log_message "ERROR" "Directory mirroring requires wget"
+        return 1
+    fi
+}
+
+# Test download speed
+test_download_speed() {
+    local test_url="${1:-http://speedtest.tele2.net/10MB.zip}"
+    local test_file="$LEONARDO_TEMP_DIR/speedtest_$$"
+    
+    echo "${COLOR_CYAN}Testing download speed...${COLOR_RESET}"
+    
+    local start_time=$(date +%s)
+    
+    if download_file "$test_url" "$test_file"; then
+        local end_time=$(date +%s)
+        local duration=$((end_time - start_time))
+        local file_size=$(stat -f%z "$test_file" 2>/dev/null || stat -c%s "$test_file" 2>/dev/null || echo 0)
+        
+        if [[ $duration -gt 0 ]]; then
+            local speed=$((file_size / duration))
+            echo "Download speed: $(format_bytes $speed)/s"
+        fi
+        
+        rm -f "$test_file"
+    else
+        echo "${COLOR_RED}Speed test failed${COLOR_RESET}"
+        return 1
+    fi
+}
+
+# Fetch model registry
+fetch_model_registry() {
+    local registry_url="$1"
+    local output_file="$2"
+    
+    log_message "INFO" "Fetching model registry from: $registry_url"
+    
+    if download_file "$registry_url" "$output_file"; then
+        log_message "INFO" "Model registry updated successfully"
+        return 0
+    else
+        log_message "ERROR" "Failed to fetch model registry"
+        return 1
+    fi
+}
+
+# Export download functions
+export -f download_file_with_progress download_file fetch_remote_file
+export -f download_and_verify batch_download resume_download
+export -f mirror_remote_directory test_download_speed fetch_model_registry
+
+# ==== Component: src/network/transfer.sh ====
+# ==============================================================================
+# Leonardo AI Universal - Network Transfer Module
+# ==============================================================================
+# Description: File transfer functionality (upload, sync, share)
+# Version: 7.0.0
+# Dependencies: colors.sh, logging.sh, validation.sh
+# ==============================================================================
+
+# Upload file
+upload_file() {
+    local file="$1"
+    local destination="$2"
+    local method="${3:-auto}"
+    
+    if [[ ! -f "$file" ]]; then
+        log_message "ERROR" "File not found: $file"
+        return 1
+    fi
+    
+    case "$method" in
+        "curl")
+            upload_with_curl "$file" "$destination"
+            ;;
+        "rsync")
+            upload_with_rsync "$file" "$destination"
+            ;;
+        "scp")
+            upload_with_scp "$file" "$destination"
+            ;;
+        "auto")
+            if command_exists "rsync"; then
+                upload_with_rsync "$file" "$destination"
+            elif command_exists "scp"; then
+                upload_with_scp "$file" "$destination"
+            elif command_exists "curl"; then
+                upload_with_curl "$file" "$destination"
+            else
+                log_message "ERROR" "No suitable upload method found"
+                return 1
+            fi
+            ;;
+        *)
+            log_message "ERROR" "Unknown upload method: $method"
+            return 1
+            ;;
+    esac
+}
+
+# Upload with curl
+upload_with_curl() {
+    local file="$1"
+    local url="$2"
+    
+    log_message "INFO" "Uploading with curl: $(basename "$file")"
+    
+    if curl -f -T "$file" "$url"; then
+        log_message "INFO" "Upload successful"
+        return 0
+    else
+        log_message "ERROR" "Upload failed"
+        return 1
+    fi
+}
+
+# Upload with rsync
+upload_with_rsync() {
+    local file="$1"
+    local destination="$2"
+    
+    log_message "INFO" "Uploading with rsync: $(basename "$file")"
+    
+    rsync -avz --progress "$file" "$destination"
+}
+
+# Upload with scp
+upload_with_scp() {
+    local file="$1"
+    local destination="$2"
+    
+    log_message "INFO" "Uploading with scp: $(basename "$file")"
+    
+    scp -p "$file" "$destination"
+}
+
+# Create temporary share link
+create_share_link() {
+    local file="$1"
+    local expire_hours="${2:-24}"
+    
+    if [[ ! -f "$file" ]]; then
+        log_message "ERROR" "File not found: $file"
+        return 1
+    fi
+    
+    # Use transfer.sh for temporary file sharing
+    if command_exists "curl"; then
+        log_message "INFO" "Creating share link for: $(basename "$file")"
+        
+        local response=$(curl -s --upload-file "$file" "https://transfer.sh/$(basename "$file")")
+        
+        if [[ -n "$response" ]]; then
+            echo "${COLOR_GREEN}Share link:${COLOR_RESET} $response"
+            echo "${COLOR_YELLOW}Expires in $expire_hours hours${COLOR_RESET}"
+            return 0
+        fi
+    fi
+    
+    log_message "ERROR" "Failed to create share link"
+    return 1
+}
+
+# Sync directory
+sync_directory() {
+    local source="$1"
+    local destination="$2"
+    local method="${3:-rsync}"
+    
+    if [[ ! -d "$source" ]]; then
+        log_message "ERROR" "Source directory not found: $source"
+        return 1
+    fi
+    
+    case "$method" in
+        "rsync")
+            sync_with_rsync "$source" "$destination"
+            ;;
+        "cp")
+            sync_with_cp "$source" "$destination"
+            ;;
+        *)
+            log_message "ERROR" "Unknown sync method: $method"
+            return 1
+            ;;
+    esac
+}
+
+# Sync with rsync
+sync_with_rsync() {
+    local source="$1"
+    local destination="$2"
+    
+    log_message "INFO" "Syncing with rsync: $source -> $destination"
+    
+    rsync -avz --delete --progress "$source/" "$destination/"
+}
+
+# Sync with cp
+sync_with_cp() {
+    local source="$1"
+    local destination="$2"
+    
+    log_message "INFO" "Syncing with cp: $source -> $destination"
+    
+    cp -R "$source"/* "$destination/"
+}
+
+# Transfer between systems
+transfer_between_systems() {
+    local source_system="$1"
+    local source_path="$2"
+    local dest_system="$3"
+    local dest_path="$4"
+    
+    log_message "INFO" "Transferring: $source_system:$source_path -> $dest_system:$dest_path"
+    
+    if command_exists "rsync"; then
+        rsync -avz --progress "$source_system:$source_path" "$dest_system:$dest_path"
+    elif command_exists "scp"; then
+        # Use intermediate transfer
+        local temp_file="$LEONARDO_TEMP_DIR/transfer_$$"
+        scp "$source_system:$source_path" "$temp_file" && \
+        scp "$temp_file" "$dest_system:$dest_path"
+        rm -f "$temp_file"
+    else
+        log_message "ERROR" "No suitable transfer method found"
+        return 1
+    fi
+}
+
+# Check connectivity
+check_connectivity() {
+    local host="${1:-8.8.8.8}"
+    local port="${2:-443}"
+    local timeout="${3:-5}"
+    
+    if command_exists "nc"; then
+        nc -z -w "$timeout" "$host" "$port" 2>/dev/null
+    elif command_exists "timeout"; then
+        timeout "$timeout" bash -c "echo >/dev/tcp/$host/$port" 2>/dev/null
+    else
+        ping -c 1 -W "$timeout" "$host" >/dev/null 2>&1
+    fi
+}
+
+# Test transfer speed
+test_transfer_speed() {
+    local destination="$1"
+    local test_size="${2:-10M}"
+    
+    echo "${COLOR_CYAN}Testing transfer speed to $destination...${COLOR_RESET}"
+    
+    # Create test file
+    local test_file="$LEONARDO_TEMP_DIR/speedtest_$$"
+    dd if=/dev/zero of="$test_file" bs=1M count=10 2>/dev/null
+    
+    local start_time=$(date +%s)
+    
+    if upload_file "$test_file" "$destination"; then
+        local end_time=$(date +%s)
+        local duration=$((end_time - start_time))
+        
+        if [[ $duration -gt 0 ]]; then
+            local speed=$((10485760 / duration))  # 10MB in bytes
+            echo "Transfer speed: $(format_bytes $speed)/s"
+        fi
+    else
+        echo "${COLOR_RED}Speed test failed${COLOR_RESET}"
+    fi
+    
+    rm -f "$test_file"
+}
+
+# Create model package
+create_model_package() {
+    local model_id="$1"
+    local output_file="$2"
+    
+    log_message "INFO" "Creating model package for: $model_id"
+    
+    # Get model info
+    local model_file=$(get_model_metadata "$model_id" "filename")
+    local model_path="$LEONARDO_MODEL_DIR/$model_file"
+    
+    if [[ ! -f "$model_path" ]]; then
+        log_message "ERROR" "Model file not found: $model_path"
+        return 1
+    fi
+    
+    # Create package directory
+    local package_dir="$LEONARDO_TEMP_DIR/package_$$"
+    mkdir -p "$package_dir"
+    
+    # Copy model and metadata
+    cp "$model_path" "$package_dir/"
+    
+    # Create metadata file
+    cat > "$package_dir/metadata.json" << EOF
+{
+  "model_id": "$model_id",
+  "name": "$(get_model_metadata "$model_id" "name")",
+  "size": "$(get_model_metadata "$model_id" "size")",
+  "format": "$(get_model_metadata "$model_id" "format")",
+  "quantization": "$(get_model_metadata "$model_id" "quantization")",
+  "family": "$(get_model_metadata "$model_id" "family")",
+  "license": "$(get_model_metadata "$model_id" "license")",
+  "sha256": "$(get_model_metadata "$model_id" "sha256")",
+  "packaged_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+EOF
+    
+    # Create archive
+    tar -czf "$output_file" -C "$package_dir" .
+    
+    # Cleanup
+    rm -rf "$package_dir"
+    
+    log_message "INFO" "Model package created: $output_file"
+    return 0
+}
+
+# Extract model package
+extract_model_package() {
+    local package_file="$1"
+    local extract_dir="${2:-$LEONARDO_MODEL_DIR}"
+    
+    if [[ ! -f "$package_file" ]]; then
+        log_message "ERROR" "Package file not found: $package_file"
+        return 1
+    fi
+    
+    log_message "INFO" "Extracting model package: $package_file"
+    
+    # Create temporary extraction directory
+    local temp_dir="$LEONARDO_TEMP_DIR/extract_$$"
+    mkdir -p "$temp_dir"
+    
+    # Extract package
+    if tar -xzf "$package_file" -C "$temp_dir"; then
+        # Check for metadata
+        if [[ -f "$temp_dir/metadata.json" ]]; then
+            # Move model file
+            local model_files=$(find "$temp_dir" -name "*.gguf" -o -name "*.bin" -o -name "*.safetensors")
+            for file in $model_files; do
+                mv "$file" "$extract_dir/"
+                log_message "INFO" "Extracted: $(basename "$file")"
+            done
+            
+            # Process metadata
+            # TODO: Import metadata into registry
+            
+            rm -rf "$temp_dir"
+            return 0
+        else
+            log_message "ERROR" "Invalid package: missing metadata"
+            rm -rf "$temp_dir"
+            return 1
+        fi
+    else
+        log_message "ERROR" "Failed to extract package"
+        rm -rf "$temp_dir"
+        return 1
+    fi
+}
+
+# Export transfer functions
+export -f upload_file create_share_link sync_directory
+export -f transfer_between_systems check_connectivity test_transfer_speed
+export -f create_model_package extract_model_package
 
 # ==== Component: src/utils/network.sh ====
 # ==============================================================================
@@ -3546,18 +4249,27 @@ main() {
     # Mark that main has been called
     LEONARDO_MAIN_CALLED=true
     
+    # Initialize components (colors are already initialized by sourcing colors.sh)
+    init_logging
+    
     # Parse command line arguments
     parse_arguments "$@"
+    
+    # Handle direct commands
+    if [[ -n "$LEONARDO_COMMAND" ]]; then
+        handle_direct_command
+        return $?
+    fi
     
     # Show banner unless quiet mode
     if [[ "$LEONARDO_QUIET" != "true" ]]; then
         clear
-        leonardo_banner
+        show_banner
         echo
     fi
     
-    # Initialize logging
-    log_message "INFO" "Starting $LEONARDO_NAME v$LEONARDO_VERSION"
+    # Initialize model manager
+    init_model_manager
     
     # Check system requirements
     if ! check_system_requirements; then
@@ -3565,180 +4277,1969 @@ main() {
         exit 1
     fi
     
-    # Main menu loop
-    while true; do
-        show_main_menu
-        
-        case "$MENU_CHOICE" in
-            1) handle_create_usb ;;
-            2) handle_manage_models ;;
-            3) handle_verify_usb ;;
-            4) handle_advanced_options ;;
-            5) handle_about ;;
-            0|q|Q) handle_exit ;;
-            *) show_error "Invalid choice. Please try again." ;;
-        esac
-        
-        # Add a pause unless we're exiting
-        if [[ "$MENU_CHOICE" != "0" ]] && [[ "$MENU_CHOICE" != "q" ]] && [[ "$MENU_CHOICE" != "Q" ]]; then
-            echo
-            read -p "Press Enter to continue..."
-        fi
-    done
+    # Main interactive menu
+    interactive_main_menu
 }
 
 # Parse command line arguments
 parse_arguments() {
+    LEONARDO_COMMAND=""
+    LEONARDO_SUBCOMMAND=""
+    LEONARDO_ARGS=()
+    
     while [[ $# -gt 0 ]]; do
         case "$1" in
             -h|--help)
                 show_help
                 exit 0
                 ;;
-            -v|--version)
-                leonardo_version
-                exit 0
-                ;;
-            -d|--debug)
-                LEONARDO_DEBUG=true
-                LEONARDO_VERBOSE=true
+            -v|--verbose)
+                export LEONARDO_VERBOSE=true
                 shift
                 ;;
             -q|--quiet)
-                LEONARDO_QUIET=true
+                export LEONARDO_QUIET=true
                 shift
+                ;;
+            --version)
+                echo "$LEONARDO_NAME v$LEONARDO_VERSION"
+                exit 0
                 ;;
             --no-color)
-                LEONARDO_NO_COLOR=true
+                export LEONARDO_NO_COLOR=true
                 shift
                 ;;
+            model|models)
+                LEONARDO_COMMAND="model"
+                shift
+                LEONARDO_SUBCOMMAND="$1"
+                shift
+                LEONARDO_ARGS=("$@")
+                break
+                ;;
+            usb|drive)
+                LEONARDO_COMMAND="usb"
+                shift
+                LEONARDO_SUBCOMMAND="$1"
+                shift
+                LEONARDO_ARGS=("$@")
+                break
+                ;;
+            dashboard|status)
+                LEONARDO_COMMAND="dashboard"
+                shift
+                break
+                ;;
+            web|webui)
+                LEONARDO_COMMAND="web"
+                shift
+                LEONARDO_ARGS=("$@")
+                break
+                ;;
+            test|check)
+                LEONARDO_COMMAND="test"
+                shift
+                break
+                ;;
             *)
-                log_message "WARNING" "Unknown argument: $1"
+                LEONARDO_ARGS+=("$1")
                 shift
                 ;;
         esac
     done
 }
 
-# Show help information
-show_help() {
-    cat << EOF
-$LEONARDO_NAME v$LEONARDO_VERSION
-
-Usage: $(basename "$0") [OPTIONS]
-
-OPTIONS:
-    -h, --help      Show this help message
-    -v, --version   Show version information
-    -d, --debug     Enable debug mode (verbose output)
-    -q, --quiet     Quiet mode (minimal output)
-    --no-color      Disable colored output
-
-EXAMPLES:
-    $(basename "$0")           # Start interactive mode
-    $(basename "$0") --help    # Show help
-    $(basename "$0") --debug   # Run with debug output
-
-For more information, visit: $LEONARDO_REPO
-EOF
-}
-
-# Placeholder functions for menu items
-handle_create_usb() {
-    log_message "INFO" "Starting USB creation workflow..."
-    show_info "USB creation feature coming soon!"
-}
-
-handle_manage_models() {
-    log_message "INFO" "Opening model management..."
-    show_info "Model management feature coming soon!"
-}
-
-handle_verify_usb() {
-    log_message "INFO" "Starting USB verification..."
-    show_info "USB verification feature coming soon!"
-}
-
-handle_advanced_options() {
-    log_message "INFO" "Opening advanced options..."
-    show_info "Advanced options coming soon!"
-}
-
-handle_about() {
-    clear
-    leonardo_banner
-    echo
-    leonardo_version
-    echo
-    echo "Authors: ${LEONARDO_AUTHORS[*]}"
-    echo
-    echo "Leonardo AI Universal is a portable AI deployment system that"
-    echo "enables you to run AI models from a USB drive on any computer."
-    echo
-    echo "Features:"
-    echo "  • Zero-trace operation - leaves no footprint on host systems"
-    echo "  • Cross-platform support - works on Windows, macOS, and Linux"
-    echo "  • Multiple AI models - supports various open-source LLMs"
-    echo "  • Air-gap ready - works completely offline"
-    echo "  • Paranoid security - designed with security first"
-    echo
-}
-
-handle_exit() {
-    log_message "INFO" "Shutting down Leonardo AI Universal..."
-    echo
-    echo "Thanks for using Leonardo AI Universal!"
-    echo "May your models be swift and your USBs eternal! 🚀"
-    echo
-    exit 0
-}
-
-# Stub function for log_message (will be replaced by actual logging component)
-log_message() {
-    local level="$1"
-    local message="$2"
-    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-    
-    if [[ "$LEONARDO_QUIET" == "true" ]] && [[ "$level" != "ERROR" ]]; then
-        return
-    fi
-    
-    case "$level" in
-        ERROR)   echo -e "\033[0;31m[$timestamp] [ERROR] $message\033[0m" >&2 ;;
-        WARNING) echo -e "\033[0;33m[$timestamp] [WARN]  $message\033[0m" ;;
-        INFO)    [[ "$LEONARDO_VERBOSE" == "true" ]] && echo -e "\033[0;34m[$timestamp] [INFO]  $message\033[0m" ;;
-        DEBUG)   [[ "$LEONARDO_DEBUG" == "true" ]] && echo -e "\033[0;36m[$timestamp] [DEBUG] $message\033[0m" ;;
+# Handle direct commands
+handle_direct_command() {
+    case "$LEONARDO_COMMAND" in
+        "model")
+            handle_model_command "$LEONARDO_SUBCOMMAND" "${LEONARDO_ARGS[@]}"
+            ;;
+        "usb")
+            handle_usb_command "$LEONARDO_SUBCOMMAND" "${LEONARDO_ARGS[@]}"
+            ;;
+        "dashboard")
+            show_system_dashboard
+            ;;
+        "web")
+            start_web_ui "${LEONARDO_ARGS[@]}"
+            ;;
+        "test")
+            run_system_tests
+            ;;
+        *)
+            echo "${COLOR_RED}Unknown command: $LEONARDO_COMMAND${COLOR_RESET}"
+            show_help
+            return 1
+            ;;
     esac
 }
 
-# Stub function for show_main_menu
-show_main_menu() {
-    echo
-    echo "╔════════════════════════════════════════════╗"
-    echo "║          LEONARDO AI UNIVERSAL             ║"
-    echo "║            MAIN MENU v7.0.0                ║"
-    echo "╚════════════════════════════════════════════╝"
-    echo
-    echo "  1) Create Leonardo USB"
-    echo "  2) Manage AI Models"
-    echo "  3) Verify/Repair USB"
-    echo "  4) Advanced Options"
-    echo "  5) About Leonardo"
-    echo
-    echo "  0) Exit"
-    echo
-    read -p "Enter your choice [0-5]: " MENU_CHOICE
+# Show help information
+show_help() {
+    cat << EOF
+${COLOR_CYAN}$LEONARDO_NAME v$LEONARDO_VERSION${COLOR_RESET}
+${COLOR_DIM}$LEONARDO_DESCRIPTION${COLOR_RESET}
+
+${COLOR_GREEN}Usage:${COLOR_RESET}
+  leonardo [options] [command] [args]
+
+${COLOR_GREEN}Options:${COLOR_RESET}
+  -h, --help        Show this help message
+  -v, --verbose     Enable verbose output
+  -q, --quiet       Suppress non-essential output
+  --version         Show version information
+  --no-color        Disable colored output
+
+${COLOR_GREEN}Commands:${COLOR_RESET}
+  model <cmd>       Model management (list, download, delete, etc.)
+  usb <cmd>         USB drive management
+  dashboard         Show system dashboard
+  web [port]        Start web UI
+  test              Run system tests
+
+${COLOR_GREEN}Interactive Mode:${COLOR_RESET}
+  Run without commands to enter interactive mode
+
+${COLOR_GREEN}Examples:${COLOR_RESET}
+  leonardo                      # Interactive mode
+  leonardo model list           # List available models
+  leonardo model download llama3-8b
+  leonardo dashboard            # Show system status
+  leonardo web                  # Start web interface
+
+For more help on specific commands:
+  leonardo model help
+  leonardo usb help
+
+EOF
 }
 
-# Stub functions for UI elements
-show_info() { echo -e "\033[0;36m[INFO] $1\033[0m"; }
-show_error() { echo -e "\033[0;31m[ERROR] $1\033[0m" >&2; }
+# Interactive main menu
+interactive_main_menu() {
+    while true; do
+        clear
+        show_banner
+        echo ""
+        
+        local options=(
+            "models:AI Model Management"
+            "usb:Create/Manage USB Drive"
+            "dashboard:System Dashboard"
+            "web:Launch Web Interface"
+            "settings:Settings & Preferences"
+            "test:Run System Tests"
+            "about:About Leonardo"
+            "exit:Exit"
+        )
+        
+        local selected=$(show_menu "Main Menu" "${options[@]##*:}")
+        
+        if [[ -z "$selected" ]]; then
+            continue
+        fi
+        
+        local choice="${options[$selected]%%:*}"
+        
+        case "$choice" in
+            "models")
+                model_management_menu
+                ;;
+            "usb")
+                usb_management_menu
+                ;;
+            "dashboard")
+                show_system_dashboard
+                read -p "Press Enter to continue..."
+                ;;
+            "web")
+                echo ""
+                echo "${COLOR_CYAN}Starting web interface...${COLOR_RESET}"
+                start_web_ui
+                ;;
+            "settings")
+                settings_menu
+                ;;
+            "test")
+                run_system_tests
+                read -p "Press Enter to continue..."
+                ;;
+            "about")
+                show_about
+                read -p "Press Enter to continue..."
+                ;;
+            "exit")
+                handle_exit
+                break
+                ;;
+        esac
+    done
+}
 
-# Stub function for system requirements check
-check_system_requirements() {
-    # This will be replaced by actual system checking logic
+# Model management menu
+model_management_menu() {
+    while true; do
+        clear
+        echo "${COLOR_CYAN}Model Management${COLOR_RESET}"
+        echo "${COLOR_DIM}Manage AI models for Leonardo${COLOR_RESET}"
+        echo ""
+        
+        # Show model stats
+        local installed_count=${#LEONARDO_INSTALLED_MODELS[@]}
+        local total_count=${#LEONARDO_MODEL_REGISTRY[@]}
+        echo "Models installed: ${COLOR_GREEN}$installed_count${COLOR_RESET} / $total_count"
+        echo ""
+        
+        local options=(
+            "browse:Browse Available Models"
+            "installed:View Installed Models"
+            "download:Download New Model"
+            "select:Interactive Model Selector"
+            "import:Import Model from File"
+            "export:Export Model to File"
+            "delete:Delete Installed Model"
+            "update:Update Model Registry"
+            "back:Back to Main Menu"
+        )
+        
+        local selected=$(show_menu "Model Options" "${options[@]##*:}")
+        
+        [[ -z "$selected" ]] && continue
+        
+        local choice="${options[$selected]%%:*}"
+        
+        case "$choice" in
+            "browse")
+                clear
+                list_models
+                read -p "Press Enter to continue..."
+                ;;
+            "installed")
+                clear
+                list_installed_models
+                read -p "Press Enter to continue..."
+                ;;
+            "download")
+                clear
+                handle_model_download
+                read -p "Press Enter to continue..."
+                ;;
+            "select")
+                interactive_model_selector
+                ;;
+            "import")
+                clear
+                local file=$(show_input_dialog "Model file path:")
+                [[ -n "$file" ]] && import_model "$file"
+                read -p "Press Enter to continue..."
+                ;;
+            "export")
+                clear
+                list_installed_models
+                echo ""
+                local model=$(show_input_dialog "Model ID to export:")
+                [[ -n "$model" ]] && export_model "$model"
+                read -p "Press Enter to continue..."
+                ;;
+            "delete")
+                clear
+                handle_model_delete
+                read -p "Press Enter to continue..."
+                ;;
+            "update")
+                clear
+                update_model_registry
+                read -p "Press Enter to continue..."
+                ;;
+            "back")
+                break
+                ;;
+        esac
+    done
+}
+
+# USB management menu (placeholder)
+usb_management_menu() {
+    clear
+    echo "${COLOR_CYAN}USB Drive Management${COLOR_RESET}"
+    echo "${COLOR_DIM}This feature is coming soon...${COLOR_RESET}"
+    echo ""
+    echo "USB drive creation and management functionality will include:"
+    echo "  • Create bootable Leonardo USB drives"
+    echo "  • Verify USB integrity"
+    echo "  • Repair corrupted USBs"
+    echo "  • Track USB health and write cycles"
+    echo ""
+    read -p "Press Enter to return..."
+}
+
+# Settings menu
+settings_menu() {
+    while true; do
+        clear
+        echo "${COLOR_CYAN}Settings & Preferences${COLOR_RESET}"
+        echo ""
+        
+        local options=(
+            "model_prefs:Model Preferences"
+            "security:Security Settings"
+            "network:Network Settings"
+            "ui:UI Preferences"
+            "back:Back to Main Menu"
+        )
+        
+        local selected=$(show_menu "Settings" "${options[@]##*:}")
+        
+        [[ -z "$selected" ]] && break
+        
+        local choice="${options[$selected]%%:*}"
+        
+        case "$choice" in
+            "model_prefs")
+                configure_model_preferences
+                ;;
+            "security")
+                security_settings_menu
+                ;;
+            "network")
+                network_settings_menu
+                ;;
+            "ui")
+                ui_preferences_menu
+                ;;
+            "back")
+                break
+                ;;
+        esac
+    done
+}
+
+# Security settings menu
+security_settings_menu() {
+    clear
+    echo "${COLOR_CYAN}Security Settings${COLOR_RESET}"
+    echo ""
+    echo "Current settings:"
+    echo "  Paranoid Mode: ${LEONARDO_PARANOID_MODE}"
+    echo "  Secure Delete: ${LEONARDO_SECURE_DELETE}"
+    echo "  Verify Checksums: ${LEONARDO_VERIFY_CHECKSUMS}"
+    echo ""
+    # TODO: Implement security settings configuration
+    read -p "Press Enter to continue..."
+}
+
+# Network settings menu
+network_settings_menu() {
+    clear
+    echo "${COLOR_CYAN}Network Settings${COLOR_RESET}"
+    echo ""
+    echo "Current settings:"
+    echo "  Download Retries: ${LEONARDO_DOWNLOAD_RETRIES}"
+    echo "  Connection Timeout: ${LEONARDO_TIMEOUT}s"
+    echo ""
+    # TODO: Implement network settings configuration
+    read -p "Press Enter to continue..."
+}
+
+# UI preferences menu
+ui_preferences_menu() {
+    clear
+    echo "${COLOR_CYAN}UI Preferences${COLOR_RESET}"
+    echo ""
+    echo "Current settings:"
+    echo "  Color Output: ${LEONARDO_NO_COLOR:-enabled}"
+    echo "  Verbose Mode: ${LEONARDO_VERBOSE}"
+    echo ""
+    # TODO: Implement UI preferences configuration
+    read -p "Press Enter to continue..."
+}
+
+# System tests
+run_system_tests() {
+    clear
+    echo "${COLOR_CYAN}Running System Tests${COLOR_RESET}"
+    echo ""
+    
+    # Component tests
+    local tests=(
+        "Environment:check_environment"
+        "File System:test_filesystem"
+        "Network:test_network_connectivity"
+        "Model Registry:test_model_registry"
+        "UI Components:test_ui_components"
+    )
+    
+    for test in "${tests[@]}"; do
+        local name="${test%%:*}"
+        local func="${test##*:}"
+        
+        echo -n "Testing $name... "
+        if $func 2>/dev/null; then
+            echo "${COLOR_GREEN}✓ PASS${COLOR_RESET}"
+        else
+            echo "${COLOR_RED}✗ FAIL${COLOR_RESET}"
+        fi
+    done
+    
+    echo ""
+}
+
+# Test functions
+check_environment() {
+    [[ -n "$LEONARDO_VERSION" ]] && [[ -n "$LEONARDO_BASE_DIR" ]]
+}
+
+test_filesystem() {
+    local test_file="$LEONARDO_TEMP_DIR/.test_$$"
+    echo "test" > "$test_file" && rm -f "$test_file"
+}
+
+test_network_connectivity() {
+    check_connectivity >/dev/null 2>&1
+}
+
+test_model_registry() {
+    [[ ${#LEONARDO_MODEL_REGISTRY[@]} -gt 0 ]]
+}
+
+test_ui_components() {
+    type show_menu >/dev/null 2>&1 && type show_progress_bar >/dev/null 2>&1
+}
+
+# About screen
+show_about() {
+    clear
+    show_banner
+    echo ""
+    echo "${COLOR_CYAN}About Leonardo AI Universal${COLOR_RESET}"
+    echo "${COLOR_DIM}$(printf '%60s' | tr ' ' '-')${COLOR_RESET}"
+    echo ""
+    echo "Version: ${COLOR_GREEN}$LEONARDO_VERSION${COLOR_RESET} ($LEONARDO_CODENAME)"
+    echo "Build Date: $LEONARDO_BUILD_DATE"
+    echo ""
+    echo "Leonardo AI Universal is a cross-platform solution for deploying"
+    echo "AI models on USB drives. It enables you to carry powerful language"
+    echo "models anywhere and run them on any compatible computer without"
+    echo "installation or leaving traces."
+    echo ""
+    echo "${COLOR_GREEN}Key Features:${COLOR_RESET}"
+    echo "  • Portable AI models on USB drives"
+    echo "  • Support for multiple LLM families"
+    echo "  • Cross-platform compatibility"
+    echo "  • Zero installation required"
+    echo "  • Privacy-focused design"
+    echo ""
+    echo "${COLOR_GREEN}Authors:${COLOR_RESET} $LEONARDO_AUTHORS"
+    echo "${COLOR_GREEN}License:${COLOR_RESET} $LEONARDO_LICENSE"
+    echo "${COLOR_GREEN}Repository:${COLOR_RESET} $LEONARDO_REPOSITORY"
+    echo ""
+}
+
+# Exit handler
+handle_exit() {
+    echo ""
+    echo "${COLOR_CYAN}Thank you for using Leonardo AI Universal!${COLOR_RESET}"
+    echo "${COLOR_DIM}Stay curious, stay creative.${COLOR_RESET}"
+    echo ""
+    
+    # Cleanup
+    cleanup_temp_files 2>/dev/null || true
+    
+    # Save session state if needed
+    # TODO: Implement session persistence
+    
+    exit 0
+}
+
+# Stub for USB command handler
+handle_usb_command() {
+    echo "${COLOR_YELLOW}USB management commands coming soon!${COLOR_RESET}"
+}
+
+# ==== Component: src/models/registry.sh ====
+# ==============================================================================
+# Leonardo AI Universal - Model Registry
+# ==============================================================================
+# Description: AI model registry and metadata management
+# Version: 7.0.0
+# Dependencies: colors.sh, logging.sh, network.sh, validation.sh
+# ==============================================================================
+
+# Model registry data structure
+declare -A LEONARDO_MODEL_REGISTRY
+declare -A LEONARDO_MODEL_METADATA
+
+# Initialize model registry
+init_model_registry() {
+    log_message "INFO" "Initializing model registry"
+    
+    # LLaMA 3 Models
+    LEONARDO_MODEL_REGISTRY["llama3-8b"]="llama-3-8b-instruct.Q4_K_M.gguf"
+    LEONARDO_MODEL_METADATA["llama3-8b"]="name:LLaMA 3 8B|size:4.7GB|format:gguf|quantization:Q4_K_M|family:llama|license:llama3|url:https://huggingface.co/TheBloke/Llama-3-8B-Instruct-GGUF/resolve/main/llama-3-8b-instruct.Q4_K_M.gguf|sha256:8daa8615d0e8b7975db0e939b7f32a3905ae8648f30833e73ab02577148c3354"
+    
+    LEONARDO_MODEL_REGISTRY["llama3-8b-q8"]="llama-3-8b-instruct.Q8_0.gguf"
+    LEONARDO_MODEL_METADATA["llama3-8b-q8"]="name:LLaMA 3 8B Q8|size:8.5GB|format:gguf|quantization:Q8_0|family:llama|license:llama3|url:https://huggingface.co/TheBloke/Llama-3-8B-Instruct-GGUF/resolve/main/llama-3-8b-instruct.Q8_0.gguf|sha256:e5dc003066f7e8ac3ce23e8cc8d08b4ef3eb9e6e1e9989cf8b07b9d5dd626820"
+    
+    LEONARDO_MODEL_REGISTRY["llama3-70b"]="llama-3-70b-instruct.Q4_K_M.gguf"
+    LEONARDO_MODEL_METADATA["llama3-70b"]="name:LLaMA 3 70B|size:39.1GB|format:gguf|quantization:Q4_K_M|family:llama|license:llama3|url:https://huggingface.co/TheBloke/Llama-3-70B-Instruct-GGUF/resolve/main/llama-3-70b-instruct.Q4_K_M.gguf|sha256:0c0f952e0e2c86fd3a2bef8b5c1d7f5db96b5c523f96de33cc385d8cf1c87b73"
+    
+    # Mistral Models
+    LEONARDO_MODEL_REGISTRY["mistral-7b"]="mistral-7b-instruct-v0.3.Q4_K_M.gguf"
+    LEONARDO_MODEL_METADATA["mistral-7b"]="name:Mistral 7B v0.3|size:4.1GB|format:gguf|quantization:Q4_K_M|family:mistral|license:apache-2.0|url:https://huggingface.co/TheBloke/Mistral-7B-Instruct-v0.3-GGUF/resolve/main/mistral-7b-instruct-v0.3.Q4_K_M.gguf|sha256:b2f8e6cc58c476394e3e931b0e6e33b8389f5c55c0ff690e38e77ad219669816"
+    
+    LEONARDO_MODEL_REGISTRY["mistral-7b-q8"]="mistral-7b-instruct-v0.3.Q8_0.gguf"
+    LEONARDO_MODEL_METADATA["mistral-7b-q8"]="name:Mistral 7B v0.3 Q8|size:7.7GB|format:gguf|quantization:Q8_0|family:mistral|license:apache-2.0|url:https://huggingface.co/TheBloke/Mistral-7B-Instruct-v0.3-GGUF/resolve/main/mistral-7b-instruct-v0.3.Q8_0.gguf|sha256:4978bcbe6dc0c257f36339002a8e7f305ac640ad89fd97e5018a4df4b332a84a"
+    
+    # Mixtral Models
+    LEONARDO_MODEL_REGISTRY["mixtral-8x7b"]="mixtral-8x7b-instruct-v0.1.Q4_K_M.gguf"
+    LEONARDO_MODEL_METADATA["mixtral-8x7b"]="name:Mixtral 8x7B|size:26.4GB|format:gguf|quantization:Q4_K_M|family:mixtral|license:apache-2.0|url:https://huggingface.co/TheBloke/Mixtral-8x7B-Instruct-v0.1-GGUF/resolve/main/mixtral-8x7b-instruct-v0.1.Q4_K_M.gguf|sha256:2395a53ed52ac1a8a7a93bfa5c7db1dd8b3a29b8e1567a5813ebd6f065d4fe3f"
+    
+    # Gemma Models
+    LEONARDO_MODEL_REGISTRY["gemma-7b"]="gemma-7b-it.Q4_K_M.gguf"
+    LEONARDO_MODEL_METADATA["gemma-7b"]="name:Gemma 7B|size:5.0GB|format:gguf|quantization:Q4_K_M|family:gemma|license:gemma|url:https://huggingface.co/google/gemma-7b-it-GGUF/resolve/main/gemma-7b-it.Q4_K_M.gguf|sha256:4e94c2da4d43c861dd26dd31c6f11ace5b0799f0c52fef5f30a26a36b2d1cffe"
+    
+    LEONARDO_MODEL_REGISTRY["gemma-2b"]="gemma-2b-it.Q4_K_M.gguf"
+    LEONARDO_MODEL_METADATA["gemma-2b"]="name:Gemma 2B|size:1.7GB|format:gguf|quantization:Q4_K_M|family:gemma|license:gemma|url:https://huggingface.co/google/gemma-2b-it-GGUF/resolve/main/gemma-2b-it.Q4_K_M.gguf|sha256:7a2550ca621f42a6c91045c99c88dd2ece26c5032dc82ad87ae09076bbaa0bfb"
+    
+    # Phi Models
+    LEONARDO_MODEL_REGISTRY["phi-3-mini"]="Phi-3-mini-4k-instruct-q4.gguf"
+    LEONARDO_MODEL_METADATA["phi-3-mini"]="name:Phi 3 Mini 4K|size:2.2GB|format:gguf|quantization:Q4_K_M|family:phi|license:mit|url:https://huggingface.co/microsoft/Phi-3-mini-4k-instruct-gguf/resolve/main/Phi-3-mini-4k-instruct-q4.gguf|sha256:09d16545cf09322a6b7e5054522f2fd4a8033327f4e2a978f051baf2c84a909f"
+    
+    # CodeLlama Models
+    LEONARDO_MODEL_REGISTRY["codellama-7b"]="codellama-7b-instruct.Q4_K_M.gguf"
+    LEONARDO_MODEL_METADATA["codellama-7b"]="name:CodeLlama 7B|size:4.1GB|format:gguf|quantization:Q4_K_M|family:codellama|license:llama2|url:https://huggingface.co/TheBloke/CodeLlama-7B-Instruct-GGUF/resolve/main/codellama-7b-instruct.Q4_K_M.gguf|sha256:0e0bc5a4726d73022f90287e4fbc7609fd9bdffca87b35a5ba21fb30fc2b6618"
+    
+    # Vicuna Models
+    LEONARDO_MODEL_REGISTRY["vicuna-13b"]="vicuna-13b-v1.5.Q4_K_M.gguf"
+    LEONARDO_MODEL_METADATA["vicuna-13b"]="name:Vicuna 13B v1.5|size:7.9GB|format:gguf|quantization:Q4_K_M|family:vicuna|license:llama|url:https://huggingface.co/TheBloke/vicuna-13B-v1.5-GGUF/resolve/main/vicuna-13b-v1.5.Q4_K_M.gguf|sha256:d62fc1034c2064a8c2fbe65f13fbab3c53a2362a84079bad76912094e5c87bd7"
+    
+    log_message "INFO" "Model registry initialized with ${#LEONARDO_MODEL_REGISTRY[@]} models"
+}
+
+# Get model metadata field
+get_model_metadata() {
+    local model_id="$1"
+    local field="$2"
+    
+    if [[ -z "${LEONARDO_MODEL_METADATA[$model_id]:-}" ]]; then
+        return 1
+    fi
+    
+    local metadata="${LEONARDO_MODEL_METADATA[$model_id]}"
+    local value=""
+    
+    # Parse metadata fields
+    IFS='|' read -ra fields <<< "$metadata"
+    for field_data in "${fields[@]}"; do
+        IFS=':' read -r key val <<< "$field_data"
+        if [[ "$key" == "$field" ]]; then
+            echo "$val"
+            return 0
+        fi
+    done
+    
+    return 1
+}
+
+# List available models
+list_models() {
+    local filter="${1:-}"
+    local format="${2:-table}"  # table, json, simple
+    
+    log_message "INFO" "Listing models (filter: ${filter:-none})"
+    
+    if [[ "$format" == "table" ]]; then
+        # Header
+        printf "${COLOR_CYAN}%-20s %-25s %-10s %-15s %-10s${COLOR_RESET}\n" \
+            "ID" "Name" "Size" "Quantization" "License"
+        printf "${COLOR_DIM}%s${COLOR_RESET}\n" "$(printf '%80s' | tr ' ' '-')"
+        
+        # Models
+        for model_id in "${!LEONARDO_MODEL_REGISTRY[@]}"; do
+            if [[ -n "$filter" ]] && [[ ! "$model_id" =~ $filter ]]; then
+                continue
+            fi
+            
+            local name=$(get_model_metadata "$model_id" "name")
+            local size=$(get_model_metadata "$model_id" "size")
+            local quant=$(get_model_metadata "$model_id" "quantization")
+            local license=$(get_model_metadata "$model_id" "license")
+            
+            printf "%-20s %-25s ${COLOR_YELLOW}%-10s${COLOR_RESET} %-15s %-10s\n" \
+                "$model_id" "$name" "$size" "$quant" "$license"
+        done
+    elif [[ "$format" == "json" ]]; then
+        echo "{"
+        local first=true
+        for model_id in "${!LEONARDO_MODEL_REGISTRY[@]}"; do
+            if [[ -n "$filter" ]] && [[ ! "$model_id" =~ $filter ]]; then
+                continue
+            fi
+            
+            [[ "$first" == "false" ]] && echo ","
+            first=false
+            
+            echo -n "  \"$model_id\": {"
+            echo -n "\"filename\": \"${LEONARDO_MODEL_REGISTRY[$model_id]}\", "
+            echo -n "\"name\": \"$(get_model_metadata "$model_id" "name")\", "
+            echo -n "\"size\": \"$(get_model_metadata "$model_id" "size")\", "
+            echo -n "\"format\": \"$(get_model_metadata "$model_id" "format")\", "
+            echo -n "\"quantization\": \"$(get_model_metadata "$model_id" "quantization")\", "
+            echo -n "\"family\": \"$(get_model_metadata "$model_id" "family")\", "
+            echo -n "\"license\": \"$(get_model_metadata "$model_id" "license")\", "
+            echo -n "\"url\": \"$(get_model_metadata "$model_id" "url")\", "
+            echo -n "\"sha256\": \"$(get_model_metadata "$model_id" "sha256")\""
+            echo -n "}"
+        done
+        echo -e "\n}"
+    else
+        # Simple format
+        for model_id in "${!LEONARDO_MODEL_REGISTRY[@]}"; do
+            if [[ -n "$filter" ]] && [[ ! "$model_id" =~ $filter ]]; then
+                continue
+            fi
+            echo "$model_id"
+        done | sort
+    fi
+}
+
+# Get model info
+get_model_info() {
+    local model_id="$1"
+    
+    if [[ -z "${LEONARDO_MODEL_REGISTRY[$model_id]:-}" ]]; then
+        log_message "ERROR" "Model not found: $model_id"
+        return 1
+    fi
+    
+    echo "${COLOR_CYAN}Model Information${COLOR_RESET}"
+    echo "${COLOR_DIM}$(printf '%40s' | tr ' ' '-')${COLOR_RESET}"
+    echo "${COLOR_GREEN}ID:${COLOR_RESET}           $model_id"
+    echo "${COLOR_GREEN}Filename:${COLOR_RESET}     ${LEONARDO_MODEL_REGISTRY[$model_id]}"
+    echo "${COLOR_GREEN}Name:${COLOR_RESET}         $(get_model_metadata "$model_id" "name")"
+    echo "${COLOR_GREEN}Size:${COLOR_RESET}         $(get_model_metadata "$model_id" "size")"
+    echo "${COLOR_GREEN}Format:${COLOR_RESET}       $(get_model_metadata "$model_id" "format")"
+    echo "${COLOR_GREEN}Quantization:${COLOR_RESET} $(get_model_metadata "$model_id" "quantization")"
+    echo "${COLOR_GREEN}Family:${COLOR_RESET}       $(get_model_metadata "$model_id" "family")"
+    echo "${COLOR_GREEN}License:${COLOR_RESET}      $(get_model_metadata "$model_id" "license")"
+    echo "${COLOR_GREEN}SHA256:${COLOR_RESET}       $(get_model_metadata "$model_id" "sha256")"
+}
+
+# Search models
+search_models() {
+    local query="$1"
+    local models=()
+    
+    log_message "INFO" "Searching models for: $query"
+    
+    for model_id in "${!LEONARDO_MODEL_REGISTRY[@]}"; do
+        local metadata="${LEONARDO_MODEL_METADATA[$model_id]}"
+        if [[ "$model_id" =~ $query ]] || [[ "$metadata" =~ $query ]]; then
+            models+=("$model_id")
+        fi
+    done
+    
+    if [[ ${#models[@]} -eq 0 ]]; then
+        log_message "WARN" "No models found matching: $query"
+        return 1
+    fi
+    
+    echo "${COLOR_CYAN}Found ${#models[@]} model(s) matching '$query':${COLOR_RESET}"
+    for model in "${models[@]}"; do
+        echo "  - $model ($(get_model_metadata "$model" "name"))"
+    done
+}
+
+# Get recommended models by use case
+get_recommended_models() {
+    local use_case="$1"
+    
+    case "$use_case" in
+        "general"|"chat")
+            echo "llama3-8b mistral-7b gemma-7b vicuna-13b"
+            ;;
+        "coding"|"code")
+            echo "codellama-7b llama3-8b mistral-7b"
+            ;;
+        "small"|"lightweight")
+            echo "phi-3-mini gemma-2b mistral-7b"
+            ;;
+        "large"|"advanced")
+            echo "llama3-70b mixtral-8x7b vicuna-13b"
+            ;;
+        "fast")
+            echo "phi-3-mini gemma-2b mistral-7b llama3-8b"
+            ;;
+        *)
+            echo "llama3-8b mistral-7b gemma-7b"
+            ;;
+    esac
+}
+
+# Validate model file
+validate_model_file() {
+    local model_path="$1"
+    local expected_sha256="${2:-}"
+    
+    if [[ ! -f "$model_path" ]]; then
+        log_message "ERROR" "Model file not found: $model_path"
+        return 1
+    fi
+    
+    # Check file size
+    local file_size=$(stat -f%z "$model_path" 2>/dev/null || stat -c%s "$model_path" 2>/dev/null)
+    if [[ $file_size -lt 1000000 ]]; then  # Less than 1MB
+        log_message "ERROR" "Model file too small: $file_size bytes"
+        return 1
+    fi
+    
+    # Verify checksum if provided
+    if [[ -n "$expected_sha256" ]]; then
+        log_message "INFO" "Verifying model checksum..."
+        local actual_sha256=$(sha256sum "$model_path" | awk '{print $1}')
+        
+        if [[ "$actual_sha256" != "$expected_sha256" ]]; then
+            log_message "ERROR" "Checksum mismatch!"
+            log_message "ERROR" "Expected: $expected_sha256"
+            log_message "ERROR" "Actual:   $actual_sha256"
+            return 1
+        fi
+        
+        log_message "INFO" "Checksum verified successfully"
+    fi
+    
+    # Check file format
+    local file_ext="${model_path##*.}"
+    case "$file_ext" in
+        gguf|ggml|bin|pth|safetensors)
+            log_message "INFO" "Valid model format: $file_ext"
+            ;;
+        *)
+            log_message "WARN" "Unknown model format: $file_ext"
+            ;;
+    esac
+    
     return 0
 }
+
+# Export model registry functions
+export -f init_model_registry list_models get_model_info search_models
+export -f get_model_metadata get_recommended_models validate_model_file
+
+# ==== Component: src/models/manager.sh ====
+# ==============================================================================
+# Leonardo AI Universal - Model Manager
+# ==============================================================================
+# Description: Model download, installation, and lifecycle management
+# Version: 7.0.0
+# Dependencies: colors.sh, logging.sh, filesystem.sh, network.sh, progress.sh, registry.sh
+# ==============================================================================
+
+# Model management state
+declare -A LEONARDO_INSTALLED_MODELS
+declare -A LEONARDO_MODEL_STATUS
+LEONARDO_ACTIVE_MODEL=""
+
+# Initialize model manager
+init_model_manager() {
+    log_message "INFO" "Initializing model manager"
+    
+    # Create model directories
+    mkdir -p "$LEONARDO_MODEL_DIR"
+    mkdir -p "$LEONARDO_MODEL_CACHE_DIR"
+    mkdir -p "$LEONARDO_MODEL_DIR/downloads"
+    
+    # Initialize model registry
+    init_model_registry
+    
+    # Scan for installed models
+    scan_installed_models
+}
+
+# Scan for installed models
+scan_installed_models() {
+    log_message "INFO" "Scanning for installed models..."
+    
+    LEONARDO_INSTALLED_MODELS=()
+    
+    if [[ -d "$LEONARDO_MODEL_DIR" ]]; then
+        while IFS= read -r model_file; do
+            local basename=$(basename "$model_file")
+            
+            # Check if this file matches any known model
+            for model_id in "${!LEONARDO_MODEL_REGISTRY[@]}"; do
+                if [[ "${LEONARDO_MODEL_REGISTRY[$model_id]}" == "$basename" ]]; then
+                    LEONARDO_INSTALLED_MODELS[$model_id]="$model_file"
+                    LEONARDO_MODEL_STATUS[$model_id]="installed"
+                    log_message "INFO" "Found installed model: $model_id"
+                    break
+                fi
+            done
+        done < <(find "$LEONARDO_MODEL_DIR" -name "*.gguf" -o -name "*.ggml" -o -name "*.bin" 2>/dev/null)
+    fi
+    
+    log_message "INFO" "Found ${#LEONARDO_INSTALLED_MODELS[@]} installed model(s)"
+}
+
+# Download model
+download_model() {
+    local model_id="$1"
+    local force="${2:-false}"
+    
+    # Validate model ID
+    if [[ -z "${LEONARDO_MODEL_REGISTRY[$model_id]:-}" ]]; then
+        log_message "ERROR" "Unknown model: $model_id"
+        return 1
+    fi
+    
+    # Check if already installed
+    if [[ -n "${LEONARDO_INSTALLED_MODELS[$model_id]:-}" ]] && [[ "$force" != "true" ]]; then
+        log_message "INFO" "Model already installed: $model_id"
+        return 0
+    fi
+    
+    # Get model metadata
+    local filename="${LEONARDO_MODEL_REGISTRY[$model_id]}"
+    local url=$(get_model_metadata "$model_id" "url")
+    local size=$(get_model_metadata "$model_id" "size")
+    local sha256=$(get_model_metadata "$model_id" "sha256")
+    local name=$(get_model_metadata "$model_id" "name")
+    
+    if [[ -z "$url" ]]; then
+        log_message "ERROR" "No download URL for model: $model_id"
+        return 1
+    fi
+    
+    # Show model info
+    echo "${COLOR_CYAN}Downloading Model: $name${COLOR_RESET}"
+    echo "${COLOR_DIM}Size: $size${COLOR_RESET}"
+    echo "${COLOR_DIM}Quantization: $(get_model_metadata "$model_id" "quantization")${COLOR_RESET}"
+    echo ""
+    
+    # Check available space
+    local size_bytes=$(parse_size_to_bytes "$size")
+    if ! check_space_available "$LEONARDO_MODEL_DIR" "$size_bytes"; then
+        log_message "ERROR" "Insufficient space for model download"
+        return 1
+    fi
+    
+    # Set download paths
+    local temp_file="$LEONARDO_MODEL_DIR/downloads/${filename}.tmp"
+    local final_file="$LEONARDO_MODEL_DIR/$filename"
+    
+    # Update status
+    LEONARDO_MODEL_STATUS[$model_id]="downloading"
+    
+    # Download with progress
+    echo "${COLOR_YELLOW}Downloading from: $url${COLOR_RESET}"
+    if download_file_with_progress "$url" "$temp_file"; then
+        # Verify download if checksum available
+        if [[ -n "$sha256" ]] && [[ "$LEONARDO_VERIFY_CHECKSUMS" == "true" ]]; then
+            echo -n "${COLOR_CYAN}Verifying checksum...${COLOR_RESET} "
+            if validate_model_file "$temp_file" "$sha256"; then
+                echo "${COLOR_GREEN}✓${COLOR_RESET}"
+            else
+                echo "${COLOR_RED}✗${COLOR_RESET}"
+                rm -f "$temp_file"
+                LEONARDO_MODEL_STATUS[$model_id]="error"
+                return 1
+            fi
+        fi
+        
+        # Move to final location
+        mv "$temp_file" "$final_file"
+        LEONARDO_INSTALLED_MODELS[$model_id]="$final_file"
+        LEONARDO_MODEL_STATUS[$model_id]="installed"
+        
+        log_message "INFO" "Model downloaded successfully: $model_id"
+        show_status "success" "Model '$name' installed successfully!"
+        
+        # Create metadata file
+        save_model_metadata "$model_id" "$final_file"
+        
+        return 0
+    else
+        rm -f "$temp_file"
+        LEONARDO_MODEL_STATUS[$model_id]="error"
+        log_message "ERROR" "Failed to download model: $model_id"
+        return 1
+    fi
+}
+
+# Parse size string to bytes
+parse_size_to_bytes() {
+    local size_str="$1"
+    local number=$(echo "$size_str" | grep -oE '[0-9.]+')
+    local unit=$(echo "$size_str" | grep -oE '[A-Z]+')
+    
+    case "$unit" in
+        "GB")
+            echo $(awk "BEGIN {printf \"%.0f\", $number * 1024 * 1024 * 1024}")
+            ;;
+        "MB")
+            echo $(awk "BEGIN {printf \"%.0f\", $number * 1024 * 1024}")
+            ;;
+        "KB")
+            echo $(awk "BEGIN {printf \"%.0f\", $number * 1024}")
+            ;;
+        *)
+            echo "$number"
+            ;;
+    esac
+}
+
+# Save model metadata
+save_model_metadata() {
+    local model_id="$1"
+    local model_path="$2"
+    local metadata_file="${model_path}.meta"
+    
+    cat > "$metadata_file" << EOF
+{
+    "id": "$model_id",
+    "name": "$(get_model_metadata "$model_id" "name")",
+    "filename": "$(basename "$model_path")",
+    "size": "$(get_model_metadata "$model_id" "size")",
+    "format": "$(get_model_metadata "$model_id" "format")",
+    "quantization": "$(get_model_metadata "$model_id" "quantization")",
+    "family": "$(get_model_metadata "$model_id" "family")",
+    "license": "$(get_model_metadata "$model_id" "license")",
+    "sha256": "$(get_model_metadata "$model_id" "sha256")",
+    "installed_date": "$(date -u +"%Y-%m-%d %H:%M:%S UTC")",
+    "leonardo_version": "$LEONARDO_VERSION"
+}
+EOF
+}
+
+# Delete model
+delete_model() {
+    local model_id="$1"
+    
+    if [[ -z "${LEONARDO_INSTALLED_MODELS[$model_id]:-}" ]]; then
+        log_message "ERROR" "Model not installed: $model_id"
+        return 1
+    fi
+    
+    local model_path="${LEONARDO_INSTALLED_MODELS[$model_id]}"
+    local name=$(get_model_metadata "$model_id" "name")
+    
+    # Confirm deletion
+    if confirm_action "Delete model '$name'?"; then
+        # Delete model file
+        if [[ "$LEONARDO_SECURE_DELETE" == "true" ]]; then
+            secure_delete "$model_path"
+        else
+            rm -f "$model_path"
+        fi
+        
+        # Delete metadata
+        rm -f "${model_path}.meta"
+        
+        # Update state
+        unset LEONARDO_INSTALLED_MODELS[$model_id]
+        unset LEONARDO_MODEL_STATUS[$model_id]
+        
+        log_message "INFO" "Model deleted: $model_id"
+        show_status "success" "Model '$name' deleted"
+        return 0
+    else
+        log_message "INFO" "Model deletion cancelled"
+        return 1
+    fi
+}
+
+# List installed models
+list_installed_models() {
+    if [[ ${#LEONARDO_INSTALLED_MODELS[@]} -eq 0 ]]; then
+        echo "${COLOR_YELLOW}No models installed${COLOR_RESET}"
+        echo "Use 'leonardo model download <model-id>' to install models"
+        return
+    fi
+    
+    echo "${COLOR_CYAN}Installed Models:${COLOR_RESET}"
+    echo "${COLOR_DIM}$(printf '%60s' | tr ' ' '-')${COLOR_RESET}"
+    
+    for model_id in "${!LEONARDO_INSTALLED_MODELS[@]}"; do
+        local path="${LEONARDO_INSTALLED_MODELS[$model_id]}"
+        local name=$(get_model_metadata "$model_id" "name")
+        local size=$(get_model_metadata "$model_id" "size")
+        local status="${LEONARDO_MODEL_STATUS[$model_id]:-unknown}"
+        
+        # Status icon
+        local status_icon="?"
+        local status_color="$COLOR_DIM"
+        case "$status" in
+            "installed")
+                status_icon="✓"
+                status_color="$COLOR_GREEN"
+                ;;
+            "downloading")
+                status_icon="⟳"
+                status_color="$COLOR_YELLOW"
+                ;;
+            "error")
+                status_icon="✗"
+                status_color="$COLOR_RED"
+                ;;
+        esac
+        
+        printf "${status_color}%s${COLOR_RESET} %-15s %-25s %10s\n" \
+            "$status_icon" "$model_id" "$name" "$size"
+        
+        if [[ "$LEONARDO_VERBOSE" == "true" ]]; then
+            echo "  ${COLOR_DIM}Path: $path${COLOR_RESET}"
+        fi
+    done
+}
+
+# Import model from file
+import_model() {
+    local model_file="$1"
+    local model_id="${2:-}"
+    
+    if [[ ! -f "$model_file" ]]; then
+        log_message "ERROR" "Model file not found: $model_file"
+        return 1
+    fi
+    
+    # Try to identify model if ID not provided
+    if [[ -z "$model_id" ]]; then
+        local basename=$(basename "$model_file")
+        for id in "${!LEONARDO_MODEL_REGISTRY[@]}"; do
+            if [[ "${LEONARDO_MODEL_REGISTRY[$id]}" == "$basename" ]]; then
+                model_id="$id"
+                break
+            fi
+        done
+        
+        if [[ -z "$model_id" ]]; then
+            log_message "ERROR" "Cannot identify model from filename: $basename"
+            echo "Please specify model ID explicitly"
+            return 1
+        fi
+    fi
+    
+    # Validate model exists in registry
+    if [[ -z "${LEONARDO_MODEL_REGISTRY[$model_id]:-}" ]]; then
+        log_message "ERROR" "Unknown model ID: $model_id"
+        return 1
+    fi
+    
+    # Get expected filename
+    local expected_filename="${LEONARDO_MODEL_REGISTRY[$model_id]}"
+    local target_path="$LEONARDO_MODEL_DIR/$expected_filename"
+    
+    echo "${COLOR_CYAN}Importing model: $(get_model_metadata "$model_id" "name")${COLOR_RESET}"
+    
+    # Validate model file
+    local expected_sha256=$(get_model_metadata "$model_id" "sha256")
+    if [[ -n "$expected_sha256" ]] && [[ "$LEONARDO_VERIFY_CHECKSUMS" == "true" ]]; then
+        echo -n "Verifying checksum... "
+        if validate_model_file "$model_file" "$expected_sha256"; then
+            echo "${COLOR_GREEN}✓${COLOR_RESET}"
+        else
+            echo "${COLOR_RED}✗${COLOR_RESET}"
+            return 1
+        fi
+    fi
+    
+    # Copy model to model directory
+    echo -n "Copying model file... "
+    if cp "$model_file" "$target_path"; then
+        echo "${COLOR_GREEN}✓${COLOR_RESET}"
+        
+        # Update state
+        LEONARDO_INSTALLED_MODELS[$model_id]="$target_path"
+        LEONARDO_MODEL_STATUS[$model_id]="installed"
+        
+        # Save metadata
+        save_model_metadata "$model_id" "$target_path"
+        
+        show_status "success" "Model imported successfully!"
+        return 0
+    else
+        echo "${COLOR_RED}✗${COLOR_RESET}"
+        return 1
+    fi
+}
+
+# Export model
+export_model() {
+    local model_id="$1"
+    local export_path="${2:-$PWD}"
+    
+    if [[ -z "${LEONARDO_INSTALLED_MODELS[$model_id]:-}" ]]; then
+        log_message "ERROR" "Model not installed: $model_id"
+        return 1
+    fi
+    
+    local model_path="${LEONARDO_INSTALLED_MODELS[$model_id]}"
+    local filename=$(basename "$model_path")
+    local target_file="$export_path/$filename"
+    
+    # Check if directory
+    if [[ -d "$export_path" ]]; then
+        target_file="$export_path/$filename"
+    else
+        target_file="$export_path"
+    fi
+    
+    echo "${COLOR_CYAN}Exporting model: $(get_model_metadata "$model_id" "name")${COLOR_RESET}"
+    echo "Target: $target_file"
+    
+    # Copy with progress
+    if copy_with_progress "$model_path" "$target_file"; then
+        # Also export metadata
+        cp "${model_path}.meta" "${target_file}.meta" 2>/dev/null || true
+        
+        show_status "success" "Model exported successfully!"
+        echo "You can import this model on another Leonardo installation using:"
+        echo "  ${COLOR_CYAN}leonardo model import \"$target_file\" $model_id${COLOR_RESET}"
+        return 0
+    else
+        log_message "ERROR" "Failed to export model"
+        return 1
+    fi
+}
+
+# Update model registry from remote
+update_model_registry() {
+    log_message "INFO" "Updating model registry..."
+    
+    local registry_url="$LEONARDO_MODEL_REGISTRY_URL"
+    local cache_file="$LEONARDO_MODEL_CACHE_DIR/registry.json"
+    
+    # Download latest registry
+    if fetch_model_registry "$registry_url" "$cache_file"; then
+        show_status "success" "Model registry updated"
+        
+        # TODO: Parse and update registry from JSON
+        # For now, using hardcoded registry
+        
+        return 0
+    else
+        log_message "ERROR" "Failed to update model registry"
+        return 1
+    fi
+}
+
+# Get model status
+get_model_status() {
+    local model_id="$1"
+    echo "${LEONARDO_MODEL_STATUS[$model_id]:-not_installed}"
+}
+
+# Load model (placeholder for inference engine integration)
+load_model() {
+    local model_id="$1"
+    
+    if [[ -z "${LEONARDO_INSTALLED_MODELS[$model_id]:-}" ]]; then
+        log_message "ERROR" "Model not installed: $model_id"
+        return 1
+    fi
+    
+    local model_path="${LEONARDO_INSTALLED_MODELS[$model_id]}"
+    local name=$(get_model_metadata "$model_id" "name")
+    
+    echo "${COLOR_CYAN}Loading model: $name${COLOR_RESET}"
+    show_spinner "Initializing inference engine..." &
+    local spinner_pid=$!
+    
+    # Simulate loading (placeholder)
+    sleep 2
+    
+    kill $spinner_pid 2>/dev/null
+    wait $spinner_pid 2>/dev/null
+    
+    LEONARDO_ACTIVE_MODEL="$model_id"
+    show_status "success" "Model loaded: $name"
+    
+    return 0
+}
+
+# Model selection menu
+model_selection_menu() {
+    local models=()
+    local names=()
+    
+    # Build model list
+    for model_id in "${!LEONARDO_MODEL_REGISTRY[@]}"; do
+        models+=("$model_id")
+        names+=("$(get_model_metadata "$model_id" "name") ($(get_model_metadata "$model_id" "size"))")
+    done
+    
+    # Show menu
+    local selected=$(show_menu "Select a model:" "${names[@]}")
+    
+    if [[ -n "$selected" ]]; then
+        echo "${models[$selected]}"
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Export model manager functions
+export -f init_model_manager scan_installed_models download_model delete_model
+export -f list_installed_models import_model export_model update_model_registry
+export -f get_model_status load_model model_selection_menu
+
+# ==== Component: src/models/selector.sh ====
+# ==============================================================================
+# Leonardo AI Universal - Model Selector
+# ==============================================================================
+# Description: Interactive model selection and configuration interface
+# Version: 7.0.0
+# Dependencies: colors.sh, logging.sh, menu.sh, progress.sh, registry.sh, manager.sh
+# ==============================================================================
+
+# Model selector state
+LEONARDO_SELECTED_MODEL=""
+LEONARDO_MODEL_PREFERENCES=()
+
+# Interactive model selector
+interactive_model_selector() {
+    local use_case="${1:-general}"
+    
+    clear
+    show_banner
+    
+    echo "${COLOR_CYAN}Model Selection Assistant${COLOR_RESET}"
+    echo "${COLOR_DIM}Let's find the perfect AI model for your needs${COLOR_RESET}"
+    echo ""
+    
+    # Step 1: Use case selection
+    local use_cases=(
+        "General Chat:general"
+        "Code Generation:code"
+        "Creative Writing:creative"
+        "Analysis & Research:analysis"
+        "Lightweight/Fast:small"
+        "Advanced/Large:large"
+        "Custom Selection:custom"
+    )
+    
+    local selected_use_case=$(show_radio_menu "What will you primarily use the model for?" "${use_cases[@]}")
+    
+    if [[ -z "$selected_use_case" ]]; then
+        return 1
+    fi
+    
+    use_case="${use_cases[$selected_use_case]##*:}"
+    
+    if [[ "$use_case" == "custom" ]]; then
+        # Custom selection - show all models
+        custom_model_selection
+        return $?
+    fi
+    
+    # Step 2: Get recommended models
+    local recommended=($(get_recommended_models "$use_case"))
+    
+    echo ""
+    echo "${COLOR_CYAN}Recommended models for $use_case:${COLOR_RESET}"
+    echo ""
+    
+    # Show recommended models with details
+    local options=()
+    local model_details=()
+    
+    for model_id in "${recommended[@]}"; do
+        local name=$(get_model_metadata "$model_id" "name")
+        local size=$(get_model_metadata "$model_id" "size")
+        local status=$(get_model_status "$model_id")
+        
+        # Status indicator
+        local status_text=""
+        case "$status" in
+            "installed")
+                status_text="${COLOR_GREEN}[Installed]${COLOR_RESET}"
+                ;;
+            "downloading")
+                status_text="${COLOR_YELLOW}[Downloading]${COLOR_RESET}"
+                ;;
+            "not_installed")
+                status_text="${COLOR_DIM}[Not Installed]${COLOR_RESET}"
+                ;;
+        esac
+        
+        options+=("$model_id:$name ($size) $status_text")
+        model_details+=("$model_id")
+    done
+    
+    # Add option to see all models
+    options+=("all:Browse All Models")
+    
+    # Show selection menu
+    local selected=$(show_radio_menu "Select a model:" "${options[@]}")
+    
+    if [[ -z "$selected" ]]; then
+        return 1
+    fi
+    
+    local choice="${options[$selected]%%:*}"
+    
+    if [[ "$choice" == "all" ]]; then
+        custom_model_selection
+        return $?
+    fi
+    
+    # Selected a specific model
+    LEONARDO_SELECTED_MODEL="$choice"
+    
+    # Show model details and actions
+    show_model_details_and_actions "$LEONARDO_SELECTED_MODEL"
+}
+
+# Custom model selection
+custom_model_selection() {
+    clear
+    echo "${COLOR_CYAN}All Available Models${COLOR_RESET}"
+    echo ""
+    
+    # Build filtered list interface
+    local models=()
+    local display_names=()
+    
+    for model_id in $(list_models "" "simple" | sort); do
+        models+=("$model_id")
+        local name=$(get_model_metadata "$model_id" "name")
+        local size=$(get_model_metadata "$model_id" "size")
+        local family=$(get_model_metadata "$model_id" "family")
+        display_names+=("$name - $size [$family]")
+    done
+    
+    # Show filtered list
+    local selected=$(show_filtered_list "Search and select a model:" "${display_names[@]}")
+    
+    if [[ -n "$selected" ]]; then
+        LEONARDO_SELECTED_MODEL="${models[$selected]}"
+        show_model_details_and_actions "$LEONARDO_SELECTED_MODEL"
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Show model details and actions
+show_model_details_and_actions() {
+    local model_id="$1"
+    
+    clear
+    echo "${COLOR_CYAN}Model Selected${COLOR_RESET}"
+    echo ""
+    
+    # Show model info
+    get_model_info "$model_id"
+    echo ""
+    
+    # Check status
+    local status=$(get_model_status "$model_id")
+    
+    # Show appropriate actions
+    local actions=()
+    
+    case "$status" in
+        "installed")
+            echo "${COLOR_GREEN}✓ This model is installed and ready to use${COLOR_RESET}"
+            actions=(
+                "load:Load Model"
+                "export:Export Model"
+                "delete:Delete Model"
+                "back:Select Different Model"
+            )
+            ;;
+        "downloading")
+            echo "${COLOR_YELLOW}⟳ This model is currently downloading...${COLOR_RESET}"
+            actions=(
+                "status:Check Download Status"
+                "back:Select Different Model"
+            )
+            ;;
+        "not_installed")
+            echo "${COLOR_DIM}○ This model is not installed${COLOR_RESET}"
+            actions=(
+                "download:Download Model"
+                "info:View More Info"
+                "back:Select Different Model"
+            )
+            ;;
+    esac
+    
+    echo ""
+    local action=$(show_menu "What would you like to do?" "${actions[@]##*:}")
+    
+    if [[ -n "$action" ]]; then
+        local action_key="${actions[$action]%%:*}"
+        
+        case "$action_key" in
+            "load")
+                load_model "$model_id"
+                ;;
+            "download")
+                if download_model "$model_id"; then
+                    echo ""
+                    echo "${COLOR_GREEN}Model ready to use!${COLOR_RESET}"
+                    read -p "Press Enter to continue..."
+                    show_model_details_and_actions "$model_id"
+                fi
+                ;;
+            "export")
+                echo ""
+                local export_path=$(show_input_dialog "Export path:" "$PWD")
+                if [[ -n "$export_path" ]]; then
+                    export_model "$model_id" "$export_path"
+                    read -p "Press Enter to continue..."
+                fi
+                ;;
+            "delete")
+                if delete_model "$model_id"; then
+                    echo ""
+                    read -p "Press Enter to continue..."
+                    interactive_model_selector
+                else
+                    show_model_details_and_actions "$model_id"
+                fi
+                ;;
+            "info")
+                clear
+                get_model_info "$model_id"
+                echo ""
+                echo "${COLOR_DIM}Download URL:${COLOR_RESET}"
+                echo "$(get_model_metadata "$model_id" "url")"
+                echo ""
+                read -p "Press Enter to continue..."
+                show_model_details_and_actions "$model_id"
+                ;;
+            "status")
+                # TODO: Show download progress
+                echo "Download status check not yet implemented"
+                read -p "Press Enter to continue..."
+                show_model_details_and_actions "$model_id"
+                ;;
+            "back")
+                interactive_model_selector
+                ;;
+        esac
+    fi
+}
+
+# Model comparison tool
+compare_models() {
+    local model1="$1"
+    local model2="$2"
+    
+    if [[ -z "$model1" ]] || [[ -z "$model2" ]]; then
+        # Interactive selection
+        echo "${COLOR_CYAN}Model Comparison Tool${COLOR_RESET}"
+        echo ""
+        
+        echo "Select first model:"
+        model1=$(model_selection_menu)
+        [[ -z "$model1" ]] && return 1
+        
+        echo "Select second model:"
+        model2=$(model_selection_menu)
+        [[ -z "$model2" ]] && return 1
+    fi
+    
+    # Validate models exist
+    if [[ -z "${LEONARDO_MODEL_REGISTRY[$model1]:-}" ]] || [[ -z "${LEONARDO_MODEL_REGISTRY[$model2]:-}" ]]; then
+        log_message "ERROR" "Invalid model IDs"
+        return 1
+    fi
+    
+    clear
+    echo "${COLOR_CYAN}Model Comparison${COLOR_RESET}"
+    echo "${COLOR_DIM}$(printf '%80s' | tr ' ' '=')${COLOR_RESET}"
+    
+    # Header
+    printf "${COLOR_GREEN}%-25s${COLOR_RESET} | ${COLOR_YELLOW}%-25s${COLOR_RESET} | ${COLOR_CYAN}%-25s${COLOR_RESET}\n" \
+        "Attribute" "$(get_model_metadata "$model1" "name")" "$(get_model_metadata "$model2" "name")"
+    echo "${COLOR_DIM}$(printf '%80s' | tr ' ' '-')${COLOR_RESET}"
+    
+    # Compare attributes
+    local attributes=("size" "format" "quantization" "family" "license")
+    
+    for attr in "${attributes[@]}"; do
+        local val1=$(get_model_metadata "$model1" "$attr")
+        local val2=$(get_model_metadata "$model2" "$attr")
+        
+        printf "%-25s | %-25s | %-25s\n" "$attr" "$val1" "$val2"
+    done
+    
+    # Status
+    echo "${COLOR_DIM}$(printf '%80s' | tr ' ' '-')${COLOR_RESET}"
+    local status1=$(get_model_status "$model1")
+    local status2=$(get_model_status "$model2")
+    printf "%-25s | ${COLOR_GREEN}%-25s${COLOR_RESET} | ${COLOR_GREEN}%-25s${COLOR_RESET}\n" \
+        "Status" "$status1" "$status2"
+    
+    echo ""
+}
+
+# Model preference configuration
+configure_model_preferences() {
+    clear
+    echo "${COLOR_CYAN}Model Preferences${COLOR_RESET}"
+    echo "${COLOR_DIM}Configure your model selection preferences${COLOR_RESET}"
+    echo ""
+    
+    # Preference options
+    local preferences=(
+        "max_size:Maximum model size"
+        "quantization:Preferred quantization"
+        "auto_download:Auto-download models"
+        "verify_checksums:Verify checksums"
+        "default_model:Default model"
+    )
+    
+    local selected=$(show_checklist "Select preferences to configure:" "${preferences[@]##*:}")
+    
+    if [[ -n "$selected" ]]; then
+        for idx in $selected; do
+            local pref="${preferences[$idx]%%:*}"
+            
+            case "$pref" in
+                "max_size")
+                    local size=$(show_menu "Maximum model size:" "2GB" "5GB" "10GB" "20GB" "50GB" "No Limit")
+                    [[ -n "$size" ]] && LEONARDO_MODEL_PREFERENCES["max_size"]="${size}"
+                    ;;
+                "quantization")
+                    local quant=$(show_menu "Preferred quantization:" "Q4_K_M" "Q5_K_M" "Q8_0" "f16")
+                    [[ -n "$quant" ]] && LEONARDO_MODEL_PREFERENCES["quantization"]="${quant}"
+                    ;;
+                "auto_download")
+                    local auto=$(show_menu "Auto-download models:" "Yes" "No")
+                    [[ -n "$auto" ]] && LEONARDO_MODEL_PREFERENCES["auto_download"]="${auto}"
+                    ;;
+                "verify_checksums")
+                    local verify=$(show_menu "Verify checksums:" "Always" "Never" "Ask")
+                    [[ -n "$verify" ]] && LEONARDO_MODEL_PREFERENCES["verify_checksums"]="${verify}"
+                    ;;
+                "default_model")
+                    local model=$(model_selection_menu)
+                    [[ -n "$model" ]] && LEONARDO_MODEL_PREFERENCES["default_model"]="${model}"
+                    ;;
+            esac
+        done
+        
+        echo ""
+        show_status "success" "Preferences updated"
+        
+        # Save preferences
+        save_model_preferences
+    fi
+}
+
+# Save model preferences
+save_model_preferences() {
+    local pref_file="$LEONARDO_CONFIG_DIR/model_preferences.conf"
+    
+    mkdir -p "$(dirname "$pref_file")"
+    
+    {
+        echo "# Leonardo Model Preferences"
+        echo "# Generated: $(date)"
+        echo ""
+        
+        for key in "${!LEONARDO_MODEL_PREFERENCES[@]}"; do
+            echo "${key}=${LEONARDO_MODEL_PREFERENCES[$key]}"
+        done
+    } > "$pref_file"
+}
+
+# Load model preferences
+load_model_preferences() {
+    local pref_file="$LEONARDO_CONFIG_DIR/model_preferences.conf"
+    
+    if [[ -f "$pref_file" ]]; then
+        while IFS='=' read -r key value; do
+            [[ "$key" =~ ^#.*$ ]] && continue
+            [[ -z "$key" ]] && continue
+            LEONARDO_MODEL_PREFERENCES["$key"]="$value"
+        done < "$pref_file"
+    fi
+}
+
+# Quick model installer
+quick_install_model() {
+    local use_case="${1:-general}"
+    
+    echo "${COLOR_CYAN}Quick Model Installation${COLOR_RESET}"
+    echo ""
+    
+    # Get recommended model for use case
+    local recommended=($(get_recommended_models "$use_case"))
+    
+    if [[ ${#recommended[@]} -eq 0 ]]; then
+        log_message "ERROR" "No recommendations for use case: $use_case"
+        return 1
+    fi
+    
+    # Find first non-installed model
+    local model_to_install=""
+    for model_id in "${recommended[@]}"; do
+        if [[ "$(get_model_status "$model_id")" == "not_installed" ]]; then
+            model_to_install="$model_id"
+            break
+        fi
+    done
+    
+    if [[ -z "$model_to_install" ]]; then
+        echo "${COLOR_GREEN}All recommended models are already installed!${COLOR_RESET}"
+        return 0
+    fi
+    
+    # Download the model
+    download_model "$model_to_install"
+}
+
+# Export model selector functions
+export -f interactive_model_selector custom_model_selection compare_models
+export -f configure_model_preferences quick_install_model
+
+# ==== Component: src/models/cli.sh ====
+# ==============================================================================
+# Leonardo AI Universal - Model CLI
+# ==============================================================================
+# Description: Command-line interface for model management
+# Version: 7.0.0
+# Dependencies: all model modules, colors.sh, logging.sh
+# ==============================================================================
+
+# Model CLI help
+show_model_help() {
+    cat << EOF
+${COLOR_CYAN}Leonardo Model Management${COLOR_RESET}
+
+${COLOR_GREEN}Usage:${COLOR_RESET}
+  leonardo model <command> [options]
+
+${COLOR_GREEN}Commands:${COLOR_RESET}
+  list              List available models
+  installed         List installed models
+  info <model>      Show model information
+  download <model>  Download a model
+  delete <model>    Delete an installed model
+  import <file>     Import a model from file
+  export <model>    Export a model to file
+  search <query>    Search for models
+  compare           Compare two models
+  select            Interactive model selector
+  update            Update model registry
+  preferences       Configure model preferences
+
+${COLOR_GREEN}Examples:${COLOR_RESET}
+  leonardo model list
+  leonardo model download llama3-8b
+  leonardo model info mistral-7b
+  leonardo model search llama
+  leonardo model import ~/models/llama-3-8b.gguf
+  leonardo model export llama3-8b ~/backup/
+
+${COLOR_GREEN}Quick Start:${COLOR_RESET}
+  leonardo model select    # Interactive model selection
+
+EOF
+}
+
+# Model CLI router
+handle_model_command() {
+    local command="${1:-help}"
+    shift
+    
+    # Initialize model manager if needed
+    if [[ -z "${LEONARDO_MODEL_REGISTRY[*]:-}" ]]; then
+        init_model_manager
+    fi
+    
+    case "$command" in
+        "list"|"ls")
+            handle_model_list "$@"
+            ;;
+        "installed"|"i")
+            list_installed_models
+            ;;
+        "info"|"show")
+            handle_model_info "$@"
+            ;;
+        "download"|"dl"|"get")
+            handle_model_download "$@"
+            ;;
+        "delete"|"rm"|"remove")
+            handle_model_delete "$@"
+            ;;
+        "import")
+            handle_model_import "$@"
+            ;;
+        "export")
+            handle_model_export "$@"
+            ;;
+        "search"|"find")
+            handle_model_search "$@"
+            ;;
+        "compare"|"diff")
+            handle_model_compare "$@"
+            ;;
+        "select"|"choose")
+            interactive_model_selector "$@"
+            ;;
+        "update"|"refresh")
+            update_model_registry
+            ;;
+        "preferences"|"prefs"|"config")
+            configure_model_preferences
+            ;;
+        "help"|"--help"|"-h")
+            show_model_help
+            ;;
+        *)
+            echo "${COLOR_RED}Unknown model command: $command${COLOR_RESET}"
+            echo "Run 'leonardo model help' for usage"
+            return 1
+            ;;
+    esac
+}
+
+# Handle model list command
+handle_model_list() {
+    local filter="${1:-}"
+    local format="${2:-table}"
+    
+    # Parse options
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --json)
+                format="json"
+                ;;
+            --simple)
+                format="simple"
+                ;;
+            --filter=*)
+                filter="${1#*=}"
+                ;;
+            --family=*)
+                filter="${1#*=}"
+                ;;
+            --installed)
+                filter="installed"
+                ;;
+            *)
+                filter="$1"
+                ;;
+        esac
+        shift
+    done
+    
+    # Special case for installed filter
+    if [[ "$filter" == "installed" ]]; then
+        list_installed_models
+        return
+    fi
+    
+    list_models "$filter" "$format"
+}
+
+# Handle model info command
+handle_model_info() {
+    local model_id="$1"
+    
+    if [[ -z "$model_id" ]]; then
+        echo "${COLOR_RED}Error: Model ID required${COLOR_RESET}"
+        echo "Usage: leonardo model info <model-id>"
+        return 1
+    fi
+    
+    get_model_info "$model_id"
+}
+
+# Handle model download command
+handle_model_download() {
+    local model_id="$1"
+    local force=false
+    
+    # Parse options
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --force|-f)
+                force=true
+                ;;
+            --*)
+                echo "${COLOR_RED}Unknown option: $1${COLOR_RESET}"
+                return 1
+                ;;
+            *)
+                model_id="$1"
+                ;;
+        esac
+        shift
+    done
+    
+    if [[ -z "$model_id" ]]; then
+        # Interactive selection
+        model_id=$(model_selection_menu)
+        [[ -z "$model_id" ]] && return 1
+    fi
+    
+    download_model "$model_id" "$force"
+}
+
+# Handle model delete command
+handle_model_delete() {
+    local model_id="$1"
+    
+    if [[ -z "$model_id" ]]; then
+        # Show installed models for selection
+        echo "${COLOR_CYAN}Select model to delete:${COLOR_RESET}"
+        list_installed_models
+        echo ""
+        model_id=$(show_input_dialog "Model ID to delete:")
+        [[ -z "$model_id" ]] && return 1
+    fi
+    
+    delete_model "$model_id"
+}
+
+# Handle model import command
+handle_model_import() {
+    local file_path="$1"
+    local model_id="$2"
+    
+    if [[ -z "$file_path" ]]; then
+        echo "${COLOR_RED}Error: File path required${COLOR_RESET}"
+        echo "Usage: leonardo model import <file> [model-id]"
+        return 1
+    fi
+    
+    import_model "$file_path" "$model_id"
+}
+
+# Handle model export command
+handle_model_export() {
+    local model_id="$1"
+    local export_path="${2:-$PWD}"
+    
+    if [[ -z "$model_id" ]]; then
+        # Show installed models for selection
+        echo "${COLOR_CYAN}Select model to export:${COLOR_RESET}"
+        list_installed_models
+        echo ""
+        model_id=$(show_input_dialog "Model ID to export:")
+        [[ -z "$model_id" ]] && return 1
+    fi
+    
+    export_model "$model_id" "$export_path"
+}
+
+# Handle model search command
+handle_model_search() {
+    local query="$1"
+    
+    if [[ -z "$query" ]]; then
+        query=$(show_input_dialog "Search query:")
+        [[ -z "$query" ]] && return 1
+    fi
+    
+    search_models "$query"
+}
+
+# Handle model compare command
+handle_model_compare() {
+    local model1="$1"
+    local model2="$2"
+    
+    compare_models "$model1" "$model2"
+}
+
+# Model batch operations
+batch_download_models() {
+    local models=("$@")
+    
+    if [[ ${#models[@]} -eq 0 ]]; then
+        # Interactive multi-select
+        local all_models=()
+        local display_names=()
+        
+        for model_id in $(list_models "" "simple" | sort); do
+            if [[ "$(get_model_status "$model_id")" != "installed" ]]; then
+                all_models+=("$model_id")
+                display_names+=("$(get_model_metadata "$model_id" "name") ($(get_model_metadata "$model_id" "size"))")
+            fi
+        done
+        
+        local selected=$(show_checklist "Select models to download:" "${display_names[@]}")
+        
+        if [[ -z "$selected" ]]; then
+            return 1
+        fi
+        
+        for idx in $selected; do
+            models+=("${all_models[$idx]}")
+        done
+    fi
+    
+    echo "${COLOR_CYAN}Batch download: ${#models[@]} models${COLOR_RESET}"
+    echo ""
+    
+    local success=0
+    local failed=0
+    
+    for model_id in "${models[@]}"; do
+        echo "${COLOR_YELLOW}Downloading: $model_id${COLOR_RESET}"
+        if download_model "$model_id"; then
+            ((success++))
+        else
+            ((failed++))
+        fi
+        echo ""
+    done
+    
+    echo "${COLOR_CYAN}Batch download complete${COLOR_RESET}"
+    echo "${COLOR_GREEN}Success: $success${COLOR_RESET}"
+    [[ $failed -gt 0 ]] && echo "${COLOR_RED}Failed: $failed${COLOR_RESET}"
+}
+
+# Model statistics
+show_model_statistics() {
+    echo "${COLOR_CYAN}Model Statistics${COLOR_RESET}"
+    echo "${COLOR_DIM}$(printf '%60s' | tr ' ' '-')${COLOR_RESET}"
+    
+    # Total models
+    echo "Total models available: ${#LEONARDO_MODEL_REGISTRY[@]}"
+    echo "Models installed: ${#LEONARDO_INSTALLED_MODELS[@]}"
+    
+    # By family
+    echo ""
+    echo "${COLOR_GREEN}Models by family:${COLOR_RESET}"
+    declare -A family_count
+    for model_id in "${!LEONARDO_MODEL_REGISTRY[@]}"; do
+        local family=$(get_model_metadata "$model_id" "family")
+        ((family_count[$family]++))
+    done
+    
+    for family in "${!family_count[@]}"; do
+        printf "  %-15s %3d models\n" "$family:" "${family_count[$family]}"
+    done
+    
+    # Disk usage
+    if [[ ${#LEONARDO_INSTALLED_MODELS[@]} -gt 0 ]]; then
+        echo ""
+        echo "${COLOR_GREEN}Disk usage:${COLOR_RESET}"
+        local total_size=0
+        for model_path in "${LEONARDO_INSTALLED_MODELS[@]}"; do
+            if [[ -f "$model_path" ]]; then
+                local size=$(stat -f%z "$model_path" 2>/dev/null || stat -c%s "$model_path" 2>/dev/null || echo 0)
+                ((total_size += size))
+            fi
+        done
+        echo "  Total: $(format_bytes $total_size)"
+        echo "  Average: $(format_bytes $((total_size / ${#LEONARDO_INSTALLED_MODELS[@]})))"
+    fi
+}
+
+# Export CLI functions
+export -f handle_model_command show_model_help batch_download_models show_model_statistics
 
 # ==== Footer ====
 # If main hasn't been called, call it now

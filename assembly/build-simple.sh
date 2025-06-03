@@ -37,6 +37,8 @@ COMPONENTS=(
     "src/utils/logging.sh"
     "src/utils/validation.sh"
     "src/utils/filesystem.sh"
+    "src/network/download.sh"
+    "src/network/transfer.sh"
     "src/utils/network.sh"
     "src/ui/menu.sh"
     "src/ui/progress.sh"
@@ -59,6 +61,23 @@ for component in "${COMPONENTS[@]}"; do
         echo "# TODO: Implement $component" >> "$OUTPUT_FILE"
     fi
 done
+
+# Add model management components
+echo -e "${BLUE}Adding${NC}: src/models/registry.sh"
+echo -e "\n# ==== Component: src/models/registry.sh ====" >> "$OUTPUT_FILE"
+tail -n +2 "$PROJECT_ROOT/src/models/registry.sh" >> "$OUTPUT_FILE"
+
+echo -e "${BLUE}Adding${NC}: src/models/manager.sh"
+echo -e "\n# ==== Component: src/models/manager.sh ====" >> "$OUTPUT_FILE"
+tail -n +2 "$PROJECT_ROOT/src/models/manager.sh" >> "$OUTPUT_FILE"
+
+echo -e "${BLUE}Adding${NC}: src/models/selector.sh"
+echo -e "\n# ==== Component: src/models/selector.sh ====" >> "$OUTPUT_FILE"
+tail -n +2 "$PROJECT_ROOT/src/models/selector.sh" >> "$OUTPUT_FILE"
+
+echo -e "${BLUE}Adding${NC}: src/models/cli.sh"
+echo -e "\n# ==== Component: src/models/cli.sh ====" >> "$OUTPUT_FILE"
+tail -n +2 "$PROJECT_ROOT/src/models/cli.sh" >> "$OUTPUT_FILE"
 
 # Add footer
 cat >> "$OUTPUT_FILE" << 'EOF'
