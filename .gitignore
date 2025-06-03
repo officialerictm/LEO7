@@ -1,0 +1,99 @@
+# Leonardo AI Universal - Git Ignore File
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+*~
+*.swp
+*.swo
+
+# Leonardo specific
+/tmp/
+/downloads/
+/models/*.bin
+/models/*.gguf
+/models/*.pth
+/logs/
+*.log
+leonardo_universal_seed.sh
+leonardo_assembled.sh
+
+# Build artifacts
+/build/
+/dist/
+/out/
+*.o
+*.so
+*.dylib
+*.dll
+*.exe
+
+# IDE files
+.vscode/
+.idea/
+*.iml
+.project
+.classpath
+.settings/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.env
+.venv
+env/
+venv/
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+
+# Go
+vendor/
+go.sum
+
+# Test coverage
+coverage/
+*.cover
+*.coverage
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.backup
+*.old
+
+# USB health tracking data (contains sensitive info)
+.leonardo_health/
+usb_health_*.json
+
+# Model checksums and manifests (regenerated)
+checksums.sha256
+model_manifest.json
+
+# User configuration (may contain paths/preferences)
+user_config.json
+.leonardo_config
+
+# Downloaded models (too large for git)
+models/downloaded/
+models/imported/
+
+# Assembly build artifacts
+assembly/build/
+assembly/cache/

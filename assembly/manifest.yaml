@@ -1,0 +1,206 @@
+# Leonardo AI Universal - Assembly Manifest
+# Version: 7.0.0
+# This manifest controls the assembly order and dependencies
+
+metadata:
+  name: "Leonardo AI Universal"
+  version: "7.0.0"
+  description: "Cross-platform AI deployment system"
+  authors:
+    - "Eric TM"
+    - "AI Assistant Team"
+  license: "MIT"
+
+# Global configuration
+config:
+  shell: "bash"
+  min_bash_version: "4.0"
+  compression: true
+  debug_mode: false
+
+# Component definitions with dependencies
+components:
+  # Core components (00)
+  - id: "header"
+    path: "src/core/header.sh"
+    description: "Script header and metadata"
+    dependencies: []
+    
+  - id: "termfix"
+    path: "src/core/termfix.sh"
+    description: "Terminal compatibility fixes"
+    dependencies: ["header"]
+    
+  - id: "config"
+    path: "src/core/config.sh"
+    description: "Global configuration and constants"
+    dependencies: ["header", "termfix"]
+    
+  - id: "colors"
+    path: "src/core/colors.sh"
+    description: "Color definitions and theme support"
+    dependencies: ["config"]
+    
+  - id: "logging"
+    path: "src/core/logging.sh"
+    description: "Logging system"
+    dependencies: ["config", "colors"]
+
+  # Utility functions (01)
+  - id: "system"
+    path: "src/core/utils/system.sh"
+    description: "System detection and utilities"
+    dependencies: ["config", "logging"]
+    
+  - id: "validation"
+    path: "src/core/utils/validation.sh"
+    description: "Input validation functions"
+    dependencies: ["logging"]
+
+  # UI components (02)
+  - id: "ui_basic"
+    path: "src/ui/basic.sh"
+    description: "Basic UI elements"
+    dependencies: ["colors", "logging"]
+    
+  - id: "ui_interactive"
+    path: "src/ui/interactive.sh"
+    description: "Interactive menus and prompts"
+    dependencies: ["ui_basic", "validation"]
+    
+  - id: "ui_progress"
+    path: "src/ui/progress.sh"
+    description: "Progress bars and spinners"
+    dependencies: ["ui_basic"]
+    
+  - id: "ui_warnings"
+    path: "src/ui/warnings.sh"
+    description: "Warning and error displays"
+    dependencies: ["ui_basic"]
+
+  # Filesystem operations (03)
+  - id: "fs_device"
+    path: "src/core/filesystem/device.sh"
+    description: "Device detection and management"
+    dependencies: ["system", "logging"]
+    
+  - id: "fs_operations"
+    path: "src/core/filesystem/operations.sh"
+    description: "File and directory operations"
+    dependencies: ["fs_device", "logging"]
+    
+  - id: "fs_health"
+    path: "src/core/filesystem/health.sh"
+    description: "USB health monitoring"
+    dependencies: ["fs_device", "config"]
+
+  # Network operations (04)
+  - id: "net_download"
+    path: "src/core/network/download.sh"
+    description: "Download manager with progress"
+    dependencies: ["ui_progress", "logging"]
+    
+  - id: "net_checksum"
+    path: "src/core/network/checksum.sh"
+    description: "File integrity verification"
+    dependencies: ["fs_operations"]
+    
+  - id: "net_api"
+    path: "src/core/network/api.sh"
+    description: "API client for model registry"
+    dependencies: ["net_download", "config"]
+
+  # Model management (05)
+  - id: "model_registry"
+    path: "src/models/registry.sh"
+    description: "Model registry and metadata"
+    dependencies: ["config", "net_api"]
+    
+  - id: "model_installer"
+    path: "src/models/installer.sh"
+    description: "Model installation logic"
+    dependencies: ["model_registry", "net_download", "net_checksum"]
+    
+  - id: "model_import"
+    path: "src/models/import.sh"
+    description: "Custom model import"
+    dependencies: ["model_registry", "fs_operations"]
+    
+  - id: "model_router"
+    path: "src/models/router.sh"
+    description: "Intelligent model routing"
+    dependencies: ["model_registry", "system"]
+
+  # Deployment modules (06)
+  - id: "deploy_usb"
+    path: "src/modules/usb/deploy.sh"
+    description: "USB deployment module"
+    dependencies: ["fs_device", "fs_health", "model_installer"]
+    
+  - id: "deploy_local"
+    path: "src/modules/local/deploy.sh"
+    description: "Local installation module"
+    dependencies: ["system", "model_installer"]
+    
+  - id: "deploy_container"
+    path: "src/modules/container/deploy.sh"
+    description: "Container deployment module"
+    dependencies: ["system", "model_installer"]
+    
+  - id: "deploy_cloud"
+    path: "src/modules/cloud/deploy.sh"
+    description: "Cloud deployment module"
+    dependencies: ["net_api", "model_installer"]
+    
+  - id: "deploy_airgap"
+    path: "src/modules/airgap/deploy.sh"
+    description: "Air-gapped deployment module"
+    dependencies: ["fs_operations", "model_installer"]
+
+  # Main application (07)
+  - id: "main_cli"
+    path: "src/ui/cli.sh"
+    description: "Command-line interface"
+    dependencies: ["ui_interactive", "ui_warnings"]
+    
+  - id: "main_operations"
+    path: "src/core/operations.sh"
+    description: "Core operation workflows"
+    dependencies: ["deploy_usb", "deploy_local", "deploy_container", "deploy_cloud", "deploy_airgap"]
+    
+  - id: "main_app"
+    path: "src/core/main.sh"
+    description: "Main application entry point"
+    dependencies: ["main_cli", "main_operations"]
+
+  # Footer
+  - id: "footer"
+    path: "src/core/footer.sh"
+    description: "Script footer and cleanup"
+    dependencies: ["main_app"]
+
+# Build configuration
+build:
+  output: "leonardo.sh"
+  temp_dir: "assembly/build"
+  include_metadata: true
+  strip_comments: false
+  minify: false
+  
+# Validation rules
+validation:
+  check_dependencies: true
+  verify_syntax: true
+  run_tests: true
+  
+# Hooks for build process
+hooks:
+  pre_build:
+    - "echo 'Starting Leonardo AI Universal assembly...'"
+    - "mkdir -p assembly/build"
+  post_build:
+    - "chmod +x leonardo.sh"
+    - "echo 'Assembly complete! Run ./leonardo.sh to start'"
+  on_error:
+    - "echo 'Assembly failed! Check logs for details'"
+    - "rm -rf assembly/build"
