@@ -38,6 +38,10 @@ COMPONENTS=(
     "src/utils/validation.sh"
     "src/utils/filesystem.sh"
     "src/utils/network.sh"
+    "src/ui/menu.sh"
+    "src/ui/progress.sh"
+    "src/ui/dashboard.sh"
+    "src/ui/web.sh"
     "src/core/main.sh"
 )
 

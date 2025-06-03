@@ -26,7 +26,6 @@ readonly LEONARDO_MIN_USB_SIZE=$((16 * 1024 * 1024 * 1024))  # 16GB minimum
 
 # Model registry configuration
 readonly LEONARDO_MODEL_REGISTRY_URL="https://models.leonardo-ai.dev/registry.json"
-readonly LEONARDO_MODEL_CACHE_DIR="${HOME}/.leonardo/models"
 readonly LEONARDO_MODEL_TIMEOUT=300  # 5 minutes for model downloads
 
 # Supported model formats
@@ -53,23 +52,39 @@ readonly LEONARDO_UI_PADDING=2
 readonly LEONARDO_SPINNER_CHARS="⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 readonly LEONARDO_PROGRESS_STYLE="unicode"  # unicode, ascii, or simple
 
-# Security settings
-readonly LEONARDO_PARANOID_MODE="${LEONARDO_PARANOID_MODE:-true}"
+# Security defaults - these are overridden by exports later
 readonly LEONARDO_VERIFY_CHECKSUMS="${LEONARDO_VERIFY_CHECKSUMS:-true}"
-readonly LEONARDO_SECURE_DELETE="${LEONARDO_SECURE_DELETE:-true}"
-readonly LEONARDO_AUDIT_LOG="${LEONARDO_AUDIT_LOG:-true}"
 
 # Network configuration
-readonly LEONARDO_USER_AGENT="Leonardo-AI-Universal/$LEONARDO_VERSION"
-readonly LEONARDO_DOWNLOAD_RETRIES=3
-readonly LEONARDO_DOWNLOAD_TIMEOUT=30
+# User agent is set later as export
+
+# Default timeouts and retries
+readonly LEONARDO_DEFAULT_TIMEOUT=30
+readonly LEONARDO_MAX_RETRIES=3
+readonly LEONARDO_USB_SCAN_TIMEOUT=5
+readonly LEONARDO_USB_FORMAT_TIMEOUT=300
+readonly LEONARDO_MODEL_VERIFY_TIMEOUT=60
+readonly LEONARDO_HEALTH_CHECK_INTERVAL=3600  # 1 hour
 readonly LEONARDO_CHUNK_SIZE=$((1024 * 1024))  # 1MB chunks
 
-# Paths and directories
-readonly LEONARDO_BASE_DIR="${LEONARDO_BASE_DIR:-$HOME/.leonardo}"
-readonly LEONARDO_TMP_DIR="${LEONARDO_TMP_DIR:-/tmp/leonardo-$$}"
-readonly LEONARDO_LOG_DIR="${LEONARDO_LOG_DIR:-$LEONARDO_BASE_DIR/logs}"
-readonly LEONARDO_CONFIG_FILE="${LEONARDO_CONFIG_FILE:-$LEONARDO_BASE_DIR/config.json}"
+# Installation paths
+export LEONARDO_BASE_DIR="${LEONARDO_BASE_DIR:-$HOME/.leonardo}"
+export LEONARDO_INSTALL_DIR="${LEONARDO_INSTALL_DIR:-$LEONARDO_BASE_DIR}"
+export LEONARDO_MODEL_DIR="${LEONARDO_MODEL_DIR:-$LEONARDO_BASE_DIR/models}"
+export LEONARDO_CONFIG_DIR="${LEONARDO_CONFIG_DIR:-$LEONARDO_BASE_DIR/config}"
+export LEONARDO_LOG_DIR="${LEONARDO_LOG_DIR:-$LEONARDO_BASE_DIR/logs}"
+export LEONARDO_TEMP_DIR="${LEONARDO_TEMP_DIR:-/tmp/leonardo}"
+export LEONARDO_BACKUP_DIR="${LEONARDO_BACKUP_DIR:-$LEONARDO_BASE_DIR/backups}"
+export LEONARDO_MODEL_CACHE_DIR="${LEONARDO_MODEL_CACHE_DIR:-$LEONARDO_MODEL_DIR/cache}"
+
+# Download settings
+export LEONARDO_USER_AGENT="${LEONARDO_USER_AGENT:-Leonardo-AI-Universal/7.0.0}"
+export LEONARDO_DOWNLOAD_RETRIES="${LEONARDO_DOWNLOAD_RETRIES:-3}"
+export LEONARDO_DOWNLOAD_TIMEOUT="${LEONARDO_DOWNLOAD_TIMEOUT:-30}"
+
+# Legacy compatibility
+export LEONARDO_TMP_DIR="${LEONARDO_TMP_DIR:-$LEONARDO_TEMP_DIR}"
+export LEONARDO_CONFIG_FILE="${LEONARDO_CONFIG_FILE:-$LEONARDO_CONFIG_DIR/config.json}"
 
 # USB health tracking
 readonly LEONARDO_USB_HEALTH_FILE=".leonardo_health.json"
@@ -96,6 +111,12 @@ readonly LEONARDO_FEATURES=(
     "auto_update:false"
     "experimental:false"
 )
+
+# Default behavior flags
+export LEONARDO_PARANOID_MODE="${LEONARDO_PARANOID_MODE:-false}"
+export LEONARDO_SECURE_DELETE="${LEONARDO_SECURE_DELETE:-false}"
+export LEONARDO_AUDIT_LOG="${LEONARDO_AUDIT_LOG:-false}"
+export LEONARDO_NO_TELEMETRY="${LEONARDO_NO_TELEMETRY:-true}"
 
 # Export configuration for use in other modules
 export LEONARDO_CONFIG_LOADED=true

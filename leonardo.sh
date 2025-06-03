@@ -114,7 +114,6 @@ readonly LEONARDO_MIN_USB_SIZE=$((16 * 1024 * 1024 * 1024))  # 16GB minimum
 
 # Model registry configuration
 readonly LEONARDO_MODEL_REGISTRY_URL="https://models.leonardo-ai.dev/registry.json"
-readonly LEONARDO_MODEL_CACHE_DIR="${HOME}/.leonardo/models"
 readonly LEONARDO_MODEL_TIMEOUT=300  # 5 minutes for model downloads
 
 # Supported model formats
@@ -141,23 +140,39 @@ readonly LEONARDO_UI_PADDING=2
 readonly LEONARDO_SPINNER_CHARS="⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 readonly LEONARDO_PROGRESS_STYLE="unicode"  # unicode, ascii, or simple
 
-# Security settings
-readonly LEONARDO_PARANOID_MODE="${LEONARDO_PARANOID_MODE:-true}"
+# Security defaults - these are overridden by exports later
 readonly LEONARDO_VERIFY_CHECKSUMS="${LEONARDO_VERIFY_CHECKSUMS:-true}"
-readonly LEONARDO_SECURE_DELETE="${LEONARDO_SECURE_DELETE:-true}"
-readonly LEONARDO_AUDIT_LOG="${LEONARDO_AUDIT_LOG:-true}"
 
 # Network configuration
-readonly LEONARDO_USER_AGENT="Leonardo-AI-Universal/$LEONARDO_VERSION"
-readonly LEONARDO_DOWNLOAD_RETRIES=3
-readonly LEONARDO_DOWNLOAD_TIMEOUT=30
+# User agent is set later as export
+
+# Default timeouts and retries
+readonly LEONARDO_DEFAULT_TIMEOUT=30
+readonly LEONARDO_MAX_RETRIES=3
+readonly LEONARDO_USB_SCAN_TIMEOUT=5
+readonly LEONARDO_USB_FORMAT_TIMEOUT=300
+readonly LEONARDO_MODEL_VERIFY_TIMEOUT=60
+readonly LEONARDO_HEALTH_CHECK_INTERVAL=3600  # 1 hour
 readonly LEONARDO_CHUNK_SIZE=$((1024 * 1024))  # 1MB chunks
 
-# Paths and directories
-readonly LEONARDO_BASE_DIR="${LEONARDO_BASE_DIR:-$HOME/.leonardo}"
-readonly LEONARDO_TMP_DIR="${LEONARDO_TMP_DIR:-/tmp/leonardo-$$}"
-readonly LEONARDO_LOG_DIR="${LEONARDO_LOG_DIR:-$LEONARDO_BASE_DIR/logs}"
-readonly LEONARDO_CONFIG_FILE="${LEONARDO_CONFIG_FILE:-$LEONARDO_BASE_DIR/config.json}"
+# Installation paths
+export LEONARDO_BASE_DIR="${LEONARDO_BASE_DIR:-$HOME/.leonardo}"
+export LEONARDO_INSTALL_DIR="${LEONARDO_INSTALL_DIR:-$LEONARDO_BASE_DIR}"
+export LEONARDO_MODEL_DIR="${LEONARDO_MODEL_DIR:-$LEONARDO_BASE_DIR/models}"
+export LEONARDO_CONFIG_DIR="${LEONARDO_CONFIG_DIR:-$LEONARDO_BASE_DIR/config}"
+export LEONARDO_LOG_DIR="${LEONARDO_LOG_DIR:-$LEONARDO_BASE_DIR/logs}"
+export LEONARDO_TEMP_DIR="${LEONARDO_TEMP_DIR:-/tmp/leonardo}"
+export LEONARDO_BACKUP_DIR="${LEONARDO_BACKUP_DIR:-$LEONARDO_BASE_DIR/backups}"
+export LEONARDO_MODEL_CACHE_DIR="${LEONARDO_MODEL_CACHE_DIR:-$LEONARDO_MODEL_DIR/cache}"
+
+# Download settings
+export LEONARDO_USER_AGENT="${LEONARDO_USER_AGENT:-Leonardo-AI-Universal/7.0.0}"
+export LEONARDO_DOWNLOAD_RETRIES="${LEONARDO_DOWNLOAD_RETRIES:-3}"
+export LEONARDO_DOWNLOAD_TIMEOUT="${LEONARDO_DOWNLOAD_TIMEOUT:-30}"
+
+# Legacy compatibility
+export LEONARDO_TMP_DIR="${LEONARDO_TMP_DIR:-$LEONARDO_TEMP_DIR}"
+export LEONARDO_CONFIG_FILE="${LEONARDO_CONFIG_FILE:-$LEONARDO_CONFIG_DIR/config.json}"
 
 # USB health tracking
 readonly LEONARDO_USB_HEALTH_FILE=".leonardo_health.json"
@@ -184,6 +199,12 @@ readonly LEONARDO_FEATURES=(
     "auto_update:false"
     "experimental:false"
 )
+
+# Default behavior flags
+export LEONARDO_PARANOID_MODE="${LEONARDO_PARANOID_MODE:-false}"
+export LEONARDO_SECURE_DELETE="${LEONARDO_SECURE_DELETE:-false}"
+export LEONARDO_AUDIT_LOG="${LEONARDO_AUDIT_LOG:-false}"
+export LEONARDO_NO_TELEMETRY="${LEONARDO_NO_TELEMETRY:-true}"
 
 # Export configuration for use in other modules
 export LEONARDO_CONFIG_LOADED=true
@@ -1712,6 +1733,1804 @@ fetch_model_registry() {
 # Export network functions
 export -f check_connectivity download_file download_parallel
 export -f get_remote_file_size check_for_updates fetch_model_registry
+
+# ==== Component: src/ui/menu.sh ====
+# ==============================================================================
+# Leonardo AI Universal - Menu System
+# ==============================================================================
+# Description: Interactive menu navigation and selection
+# Version: 7.0.0
+# Dependencies: colors.sh, logging.sh, validation.sh
+# ==============================================================================
+
+# Menu state tracking
+declare -g MENU_SELECTION=""
+declare -g MENU_POSITION=1
+declare -g MENU_MAX_ITEMS=0
+
+# Display menu with arrow key navigation
+show_menu() {
+    local title="$1"
+    shift
+    local options=("$@")
+    local num_options=${#options[@]}
+    
+    MENU_MAX_ITEMS=$num_options
+    MENU_POSITION=1
+    MENU_SELECTION=""
+    
+    # Hide cursor
+    tput civis
+    
+    # Trap for cleanup
+    trap 'tput cnorm; echo' INT TERM
+    
+    while true; do
+        # Clear screen and display menu
+        clear
+        display_menu_frame "$title" "${options[@]}"
+        
+        # Read user input
+        read -rsn1 key
+        
+        case "$key" in
+            # Arrow keys
+            $'\x1b')
+                read -rsn2 -t 0.1 key
+                case "$key" in
+                    '[A') # Up arrow
+                        ((MENU_POSITION--))
+                        [[ $MENU_POSITION -lt 1 ]] && MENU_POSITION=$num_options
+                        ;;
+                    '[B') # Down arrow
+                        ((MENU_POSITION++))
+                        [[ $MENU_POSITION -gt $num_options ]] && MENU_POSITION=1
+                        ;;
+                esac
+                ;;
+            # Enter key
+            '')
+                MENU_SELECTION="${options[$((MENU_POSITION-1))]}"
+                break
+                ;;
+            # Number keys for quick selection
+            [1-9])
+                if [[ $key -le $num_options ]]; then
+                    MENU_POSITION=$key
+                    MENU_SELECTION="${options[$((key-1))]}"
+                    break
+                fi
+                ;;
+            # Escape or q to quit
+            $'\x1b'|q|Q)
+                MENU_SELECTION=""
+                break
+                ;;
+        esac
+    done
+    
+    # Show cursor again
+    tput cnorm
+    trap - INT TERM
+    
+    # Return selection
+    echo "$MENU_SELECTION"
+}
+
+# Display menu frame with highlighting
+display_menu_frame() {
+    local title="$1"
+    shift
+    local options=("$@")
+    
+    # Draw title box
+    echo -e "${GREEN}╔════════════════════════════════════════════╗${RESET}"
+    printf "${GREEN}║${RESET} %-42s ${GREEN}║${RESET}\n" "$title"
+    echo -e "${GREEN}╚════════════════════════════════════════════╝${RESET}"
+    echo
+    
+    # Display options
+    local i=1
+    for option in "${options[@]}"; do
+        if [[ $i -eq $MENU_POSITION ]]; then
+            # Highlighted option
+            echo -e "${CYAN}▶ ${BRIGHT}${option}${RESET}"
+        else
+            echo -e "  ${DIM}${option}${RESET}"
+        fi
+        ((i++))
+    done
+    
+    echo
+    echo -e "${DIM}Use ↑/↓ arrows or numbers to select, Enter to confirm, q to quit${RESET}"
+}
+
+# Simple yes/no menu
+confirm_menu() {
+    local prompt="$1"
+    local default="${2:-n}"
+    
+    echo -e "${YELLOW}${prompt}${RESET}"
+    
+    local options=("Yes" "No")
+    local selection=$(show_menu "Confirm Action" "${options[@]}")
+    
+    case "$selection" in
+        "Yes") return 0 ;;
+        "No"|"") return 1 ;;
+    esac
+}
+
+# Multi-select checklist menu
+show_checklist() {
+    local title="$1"
+    shift
+    local options=("$@")
+    local num_options=${#options[@]}
+    local -a selected=()
+    
+    # Initialize all as unselected
+    for ((i=0; i<num_options; i++)); do
+        selected[i]=0
+    done
+    
+    MENU_POSITION=1
+    
+    # Hide cursor
+    tput civis
+    trap 'tput cnorm; echo' INT TERM
+    
+    while true; do
+        clear
+        display_checklist_frame "$title" "${options[@]}" "${selected[@]}"
+        
+        # Read user input
+        read -rsn1 key
+        
+        case "$key" in
+            $'\x1b')
+                read -rsn2 -t 0.1 key
+                case "$key" in
+                    '[A') # Up arrow
+                        ((MENU_POSITION--))
+                        [[ $MENU_POSITION -lt 1 ]] && MENU_POSITION=$num_options
+                        ;;
+                    '[B') # Down arrow
+                        ((MENU_POSITION++))
+                        [[ $MENU_POSITION -gt $num_options ]] && MENU_POSITION=1
+                        ;;
+                esac
+                ;;
+            ' ') # Space to toggle
+                local idx=$((MENU_POSITION-1))
+                selected[idx]=$((1 - selected[idx]))
+                ;;
+            '') # Enter to confirm
+                break
+                ;;
+            q|Q) # Quit
+                selected=()
+                break
+                ;;
+        esac
+    done
+    
+    # Show cursor again
+    tput cnorm
+    trap - INT TERM
+    
+    # Return selected items
+    local result=()
+    for ((i=0; i<num_options; i++)); do
+        if [[ ${selected[i]} -eq 1 ]]; then
+            result+=("${options[i]}")
+        fi
+    done
+    
+    printf '%s\n' "${result[@]}"
+}
+
+# Display checklist frame
+display_checklist_frame() {
+    local title="$1"
+    shift
+    local num_options=$(($# / 2))
+    local -a options=("${@:1:$num_options}")
+    local -a selected=("${@:$((num_options+1))}")
+    
+    # Draw title box
+    echo -e "${GREEN}╔════════════════════════════════════════════╗${RESET}"
+    printf "${GREEN}║${RESET} %-42s ${GREEN}║${RESET}\n" "$title"
+    echo -e "${GREEN}╚════════════════════════════════════════════╝${RESET}"
+    echo
+    
+    # Display options with checkboxes
+    local i=1
+    for ((idx=0; idx<num_options; idx++)); do
+        local checkbox="[ ]"
+        [[ ${selected[idx]} -eq 1 ]] && checkbox="[✓]"
+        
+        if [[ $i -eq $MENU_POSITION ]]; then
+            echo -e "${CYAN}▶ ${checkbox} ${BRIGHT}${options[idx]}${RESET}"
+        else
+            echo -e "  ${checkbox} ${DIM}${options[idx]}${RESET}"
+        fi
+        ((i++))
+    done
+    
+    echo
+    echo -e "${DIM}Use ↑/↓ to navigate, Space to select, Enter to confirm${RESET}"
+}
+
+# Radio button menu (single selection)
+show_radio_menu() {
+    local title="$1"
+    local current="$2"
+    shift 2
+    local options=("$@")
+    
+    # Find current selection index
+    local current_idx=0
+    for ((i=0; i<${#options[@]}; i++)); do
+        if [[ "${options[i]}" == "$current" ]]; then
+            current_idx=$((i+1))
+            break
+        fi
+    done
+    
+    MENU_POSITION=${current_idx:-1}
+    local selection=$(show_menu "$title" "${options[@]}")
+    echo "$selection"
+}
+
+# Progress menu with cancel option
+show_progress_menu() {
+    local title="$1"
+    local message="$2"
+    local -n progress_var=$3
+    local -n cancel_var=$4
+    
+    # Run in background
+    (
+        while [[ ${cancel_var} -eq 0 ]] && [[ ${progress_var} -lt 100 ]]; do
+            clear
+            echo -e "${GREEN}╔════════════════════════════════════════════╗${RESET}"
+            printf "${GREEN}║${RESET} %-42s ${GREEN}║${RESET}\n" "$title"
+            echo -e "${GREEN}╚════════════════════════════════════════════╝${RESET}"
+            echo
+            echo -e "${message}"
+            echo
+            print_progress ${progress_var} 40
+            echo
+            echo -e "${DIM}Press 'c' to cancel${RESET}"
+            sleep 0.1
+        done
+    ) &
+    
+    local bg_pid=$!
+    
+    # Wait for input or completion
+    while kill -0 $bg_pid 2>/dev/null; do
+        read -rsn1 -t 0.1 key
+        if [[ "$key" == "c" ]] || [[ "$key" == "C" ]]; then
+            cancel_var=1
+            kill $bg_pid 2>/dev/null
+            wait $bg_pid 2>/dev/null
+            return 1
+        fi
+    done
+    
+    return 0
+}
+
+# Input dialog
+show_input_dialog() {
+    local title="$1"
+    local prompt="$2"
+    local default="$3"
+    local validation_func="${4:-}"
+    
+    clear
+    echo -e "${GREEN}╔════════════════════════════════════════════╗${RESET}"
+    printf "${GREEN}║${RESET} %-42s ${GREEN}║${RESET}\n" "$title"
+    echo -e "${GREEN}╚════════════════════════════════════════════╝${RESET}"
+    echo
+    echo -e "${prompt}"
+    
+    if [[ -n "$default" ]]; then
+        echo -e "${DIM}(default: $default)${RESET}"
+    fi
+    
+    echo
+    
+    local input
+    while true; do
+        read -er -p "> " input
+        
+        # Use default if empty
+        if [[ -z "$input" ]] && [[ -n "$default" ]]; then
+            input="$default"
+        fi
+        
+        # Validate if function provided
+        if [[ -n "$validation_func" ]]; then
+            if $validation_func "$input"; then
+                break
+            else
+                echo -e "${RED}Invalid input. Please try again.${RESET}"
+            fi
+        else
+            break
+        fi
+    done
+    
+    echo "$input"
+}
+
+# List selection with filtering
+show_filtered_list() {
+    local title="$1"
+    shift
+    local items=("$@")
+    local filtered_items=("${items[@]}")
+    local filter=""
+    local selected=""
+    
+    while true; do
+        clear
+        echo -e "${GREEN}╔════════════════════════════════════════════╗${RESET}"
+        printf "${GREEN}║${RESET} %-42s ${GREEN}║${RESET}\n" "$title"
+        echo -e "${GREEN}╚════════════════════════════════════════════╝${RESET}"
+        echo
+        echo -e "Filter: ${YELLOW}$filter${RESET}_"
+        echo -e "${DIM}Type to filter, ↑/↓ to select, Enter to confirm, Esc to cancel${RESET}"
+        echo
+        
+        # Apply filter
+        if [[ -n "$filter" ]]; then
+            filtered_items=()
+            for item in "${items[@]}"; do
+                if [[ "${item,,}" == *"${filter,,}"* ]]; then
+                    filtered_items+=("$item")
+                fi
+            done
+        fi
+        
+        # Display filtered items
+        if [[ ${#filtered_items[@]} -eq 0 ]]; then
+            echo -e "${DIM}No items match filter${RESET}"
+        else
+            selected=$(show_menu "Select Item" "${filtered_items[@]}")
+            if [[ -n "$selected" ]]; then
+                echo "$selected"
+                return 0
+            fi
+        fi
+        
+        # Read input for filtering
+        read -rsn1 key
+        case "$key" in
+            $'\x1b') # Escape
+                return 1
+                ;;
+            $'\x7f'|$'\b') # Backspace
+                filter="${filter%?}"
+                ;;
+            '') # Enter
+                if [[ ${#filtered_items[@]} -eq 1 ]]; then
+                    echo "${filtered_items[0]}"
+                    return 0
+                fi
+                ;;
+            *)
+                if [[ "$key" =~ ^[[:print:]]$ ]]; then
+                    filter="${filter}${key}"
+                fi
+                ;;
+        esac
+    done
+}
+
+# Export menu functions
+export -f show_menu confirm_menu show_checklist show_radio_menu
+export -f show_progress_menu show_input_dialog show_filtered_list
+
+# ==== Component: src/ui/progress.sh ====
+# ==============================================================================
+# Leonardo AI Universal - Progress Display Components
+# ==============================================================================
+# Description: Progress bars, spinners, and status displays
+# Version: 7.0.0
+# Dependencies: colors.sh, logging.sh
+# ==============================================================================
+
+# Progress bar state
+declare -g PROGRESS_ACTIVE=0
+declare -g PROGRESS_PID=""
+
+# Enhanced progress bar with percentage and ETA
+show_progress_bar() {
+    local current="$1"
+    local total="$2"
+    local width="${3:-50}"
+    local title="${4:-Progress}"
+    local start_time="${5:-$(date +%s)}"
+    
+    # Calculate percentage
+    local percent=$((current * 100 / total))
+    
+    # Calculate filled width
+    local filled=$((percent * width / 100))
+    local empty=$((width - filled))
+    
+    # Calculate ETA
+    local elapsed=$(($(date +%s) - start_time))
+    local eta=""
+    if [[ $elapsed -gt 0 ]] && [[ $current -gt 0 ]]; then
+        local rate=$(echo "scale=2; $current / $elapsed" | bc 2>/dev/null || echo "0")
+        if [[ $(echo "$rate > 0" | bc 2>/dev/null) == "1" ]]; then
+            local remaining=$((total - current))
+            local eta_seconds=$(echo "scale=0; $remaining / $rate" | bc 2>/dev/null || echo "0")
+            eta=$(format_duration "$eta_seconds")
+        fi
+    fi
+    
+    # Build progress bar
+    printf "\r${YELLOW}%s${RESET} [" "$title"
+    
+    # Filled portion with gradient effect
+    if [[ $filled -gt 0 ]]; then
+        local gradient=""
+        for ((i=0; i<filled; i++)); do
+            if [[ $percent -lt 33 ]]; then
+                gradient+="${RED}█"
+            elif [[ $percent -lt 66 ]]; then
+                gradient+="${YELLOW}█"
+            else
+                gradient+="${GREEN}█"
+            fi
+        done
+        printf "%b" "$gradient${RESET}"
+    fi
+    
+    # Empty portion
+    printf "%${empty}s" | tr ' ' '░'
+    
+    # Percentage and ETA
+    printf "] ${BRIGHT}%3d%%${RESET}" "$percent"
+    if [[ -n "$eta" ]]; then
+        printf " ${DIM}ETA: %s${RESET}" "$eta"
+    fi
+    
+    # Add data info if provided
+    if [[ -n "${6:-}" ]] && [[ -n "${7:-}" ]]; then
+        local current_size="$6"
+        local total_size="$7"
+        printf " ${DIM}(%s/%s)${RESET}" \
+            "$(format_bytes "$current_size")" \
+            "$(format_bytes "$total_size")"
+    fi
+    
+    # Newline if complete
+    if [[ $percent -eq 100 ]]; then
+        echo
+    fi
+}
+
+# Multi-line progress display
+show_multi_progress() {
+    local -n tasks=$1
+    local -n progress=$2
+    local title="${3:-Tasks Progress}"
+    
+    # Save cursor position
+    tput sc
+    
+    # Clear area
+    local num_tasks=${#tasks[@]}
+    for ((i=0; i<=num_tasks+3; i++)); do
+        echo -e "\033[K"
+    done
+    
+    # Restore cursor
+    tput rc
+    
+    # Display title
+    echo -e "${GREEN}╔════════════════════════════════════════════╗${RESET}"
+    printf "${GREEN}║${RESET} %-42s ${GREEN}║${RESET}\n" "$title"
+    echo -e "${GREEN}╚════════════════════════════════════════════╝${RESET}"
+    echo
+    
+    # Display each task progress
+    local all_complete=true
+    for ((i=0; i<num_tasks; i++)); do
+        local task="${tasks[i]}"
+        local prog="${progress[i]:-0}"
+        
+        printf "%-20s " "$task:"
+        
+        # Mini progress bar
+        local bar_width=20
+        local filled=$((prog * bar_width / 100))
+        local empty=$((bar_width - filled))
+        
+        printf "["
+        if [[ $prog -eq 100 ]]; then
+            printf "${GREEN}%${bar_width}s${RESET}" | tr ' ' '█'
+        else
+            all_complete=false
+            printf "${YELLOW}%${filled}s${RESET}" | tr ' ' '█'
+            printf "%${empty}s" | tr ' ' '░'
+        fi
+        printf "] %3d%%\n" "$prog"
+    done
+    
+    # Return whether all tasks are complete
+    [[ "$all_complete" == "true" ]]
+}
+
+# Animated spinner styles
+declare -a SPINNER_STYLES=(
+    "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"                    # Braille dots
+    "◐◓◑◒"                              # Circle quarters
+    "▁▂▃▄▅▆▇█▇▆▅▄▃▂"                    # Building blocks
+    "⣾⣽⣻⢿⡿⣟⣯⣷"                    # Braille blocks
+    "←↖↑↗→↘↓↙"                          # Arrows
+    "|/-\\"                             # Classic
+    "◢◣◤◥"                              # Triangles
+    "⬒⬔⬓⬕"                              # Diamond
+    "⠁⠂⠄⡀⢀⠠⠐⠈"                    # Dots
+)
+
+# Show spinner with message
+show_spinner() {
+    local message="$1"
+    local style_idx="${2:-0}"
+    local style="${SPINNER_STYLES[$style_idx]}"
+    local delay="${3:-0.1}"
+    
+    PROGRESS_ACTIVE=1
+    
+    # Run spinner in background
+    (
+        local i=0
+        while [[ $PROGRESS_ACTIVE -eq 1 ]]; do
+            local char="${style:$i:1}"
+            printf "\r${CYAN}%s${RESET} %s" "$char" "$message"
+            sleep "$delay"
+            i=$(( (i + 1) % ${#style} ))
+        done
+        printf "\r\033[K"  # Clear line
+    ) &
+    
+    PROGRESS_PID=$!
+}
+
+# Stop spinner
+stop_spinner() {
+    PROGRESS_ACTIVE=0
+    if [[ -n "$PROGRESS_PID" ]]; then
+        kill "$PROGRESS_PID" 2>/dev/null
+        wait "$PROGRESS_PID" 2>/dev/null
+        PROGRESS_PID=""
+    fi
+    printf "\r\033[K"  # Clear line
+}
+
+# Matrix-style progress
+show_matrix_progress() {
+    local message="$1"
+    local duration="${2:-5}"
+    local width="${3:-$(tput cols)}"
+    
+    # Matrix rain characters
+    local chars="ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ0123456789"
+    local drops=()
+    
+    # Initialize drops
+    for ((i=0; i<width; i++)); do
+        drops[i]=$((RANDOM % 20 - 10))
+    done
+    
+    # Save screen state
+    tput smcup
+    clear
+    
+    local start_time=$(date +%s)
+    while [[ $(($(date +%s) - start_time)) -lt $duration ]]; do
+        clear
+        
+        # Update and draw drops
+        for ((x=0; x<width; x++)); do
+            local y=${drops[x]}
+            if [[ $y -ge 0 ]]; then
+                # Draw the trail
+                for ((ty=0; ty<y && ty<20; ty++)); do
+                    tput cup $ty $x
+                    local brightness=$((255 - (y - ty) * 12))
+                    printf "\033[38;2;0;%d;0m%s\033[0m" \
+                        "$brightness" \
+                        "${chars:$((RANDOM % ${#chars})):1}"
+                done
+            fi
+            
+            # Move drop down
+            drops[x]=$((drops[x] + 1))
+            
+            # Reset drop if it goes off screen
+            if [[ ${drops[x]} -gt 25 ]]; then
+                drops[x]=$((RANDOM % 10 - 10))
+            fi
+        done
+        
+        # Display message in center
+        local msg_y=$(($(tput lines) / 2))
+        local msg_x=$(((width - ${#message}) / 2))
+        tput cup $msg_y $msg_x
+        echo -e "${BRIGHT}${GREEN}$message${RESET}"
+        
+        sleep 0.05
+    done
+    
+    # Restore screen
+    tput rmcup
+}
+
+# Download progress with speed and time
+show_download_progress() {
+    local url="$1"
+    local current_bytes="$2"
+    local total_bytes="$3"
+    local start_time="${4:-$(date +%s)}"
+    
+    # Calculate speed
+    local elapsed=$(($(date +%s) - start_time))
+    local speed=0
+    if [[ $elapsed -gt 0 ]]; then
+        speed=$((current_bytes / elapsed))
+    fi
+    
+    # Extract filename from URL
+    local filename=$(basename "$url" | cut -c1-30)
+    [[ ${#filename} -eq 30 ]] && filename="${filename}..."
+    
+    # Show progress
+    show_progress_bar "$current_bytes" "$total_bytes" 40 "$filename" \
+        "$start_time" "$current_bytes" "$total_bytes"
+    
+    # Add speed indicator
+    if [[ $speed -gt 0 ]]; then
+        printf " ${DIM}↓ %s/s${RESET}" "$(format_bytes "$speed")"
+    fi
+}
+
+# Status indicator with icon
+show_status() {
+    local status="$1"
+    local message="$2"
+    local icon=""
+    local color=""
+    
+    case "$status" in
+        success|ok|done)
+            icon="✓"
+            color="$GREEN"
+            ;;
+        error|fail|failed)
+            icon="✗"
+            color="$RED"
+            ;;
+        warning|warn)
+            icon="⚠"
+            color="$YELLOW"
+            ;;
+        info)
+            icon="ℹ"
+            color="$BLUE"
+            ;;
+        loading|progress)
+            icon="◌"
+            color="$CYAN"
+            ;;
+        *)
+            icon="•"
+            color="$WHITE"
+            ;;
+    esac
+    
+    echo -e "${color}${icon}${RESET} ${message}"
+}
+
+# Countdown timer
+show_countdown() {
+    local seconds="$1"
+    local message="${2:-Countdown}"
+    
+    for ((i=seconds; i>0; i--)); do
+        printf "\r${YELLOW}%s:${RESET} %02d:%02d" \
+            "$message" \
+            $((i / 60)) \
+            $((i % 60))
+        sleep 1
+    done
+    printf "\r\033[K"
+    show_status "done" "$message complete!"
+}
+
+# Format duration for display
+format_duration() {
+    local seconds="$1"
+    
+    if [[ $seconds -lt 60 ]]; then
+        echo "${seconds}s"
+    elif [[ $seconds -lt 3600 ]]; then
+        printf "%dm %ds" $((seconds / 60)) $((seconds % 60))
+    else
+        printf "%dh %dm" $((seconds / 3600)) $((seconds % 3600 / 60))
+    fi
+}
+
+# Format bytes for display
+format_bytes() {
+    local bytes="$1"
+    local units=("B" "KB" "MB" "GB" "TB")
+    local unit=0
+    
+    # Use bc for floating point math
+    local size=$bytes
+    while [[ $(echo "$size >= 1024" | bc 2>/dev/null) == "1" ]] && [[ $unit -lt 4 ]]; do
+        size=$(echo "scale=2; $size / 1024" | bc 2>/dev/null)
+        ((unit++))
+    done
+    
+    # Format with appropriate precision
+    if [[ $unit -eq 0 ]]; then
+        printf "%d %s" "$bytes" "${units[unit]}"
+    else
+        printf "%.2f %s" "$size" "${units[unit]}"
+    fi
+}
+
+# ASCII art progress animations
+show_ascii_progress() {
+    local type="$1"
+    local progress="$2"
+    
+    case "$type" in
+        rocket)
+            local pos=$((progress * 50 / 100))
+            printf "\r"
+            printf "%${pos}s" | tr ' ' '.'
+            printf "🚀"
+            printf "%$((50 - pos))s" | tr ' ' '.'
+            printf " %3d%%" "$progress"
+            ;;
+            
+        pac)
+            local pos=$((progress * 40 / 100))
+            local mouth=$((progress % 20 < 10))
+            printf "\r"
+            printf "%${pos}s" | tr ' ' ' '
+            if [[ $mouth -eq 1 ]]; then
+                printf "${YELLOW}ᗧ${RESET}"
+            else
+                printf "${YELLOW}ᗤ${RESET}"
+            fi
+            printf "%$((40 - pos))s" | tr ' ' '·'
+            printf " %3d%%" "$progress"
+            ;;
+            
+        train)
+            local pos=$((progress * 35 / 100))
+            printf "\r["
+            printf "%${pos}s" | tr ' ' '='
+            printf "🚂"
+            printf "%$((35 - pos))s" | tr ' ' '-'
+            printf "] %3d%%" "$progress"
+            ;;
+    esac
+}
+
+# Export progress functions
+export -f show_progress_bar show_multi_progress show_spinner stop_spinner
+export -f show_download_progress show_status show_countdown format_duration
+export -f format_bytes show_matrix_progress show_ascii_progress
+
+# ==== Component: src/ui/dashboard.sh ====
+# ==============================================================================
+# Leonardo AI Universal - Dashboard Display
+# ==============================================================================
+# Description: Interactive dashboard and system status displays
+# Version: 7.0.0
+# Dependencies: colors.sh, logging.sh, filesystem.sh
+# ==============================================================================
+
+# Dashboard state
+declare -g DASHBOARD_ACTIVE=0
+declare -g DASHBOARD_REFRESH_RATE=1
+
+# Main dashboard display
+show_dashboard() {
+    local usb_device="${1:-}"
+    
+    DASHBOARD_ACTIVE=1
+    
+    # Hide cursor and setup terminal
+    tput civis
+    tput smcup
+    clear
+    
+    # Trap for cleanup
+    trap 'DASHBOARD_ACTIVE=0; tput rmcup; tput cnorm' INT TERM EXIT
+    
+    while [[ $DASHBOARD_ACTIVE -eq 1 ]]; do
+        clear
+        draw_dashboard_frame
+        
+        # System info section
+        tput cup 3 2
+        show_system_info
+        
+        # USB status section
+        tput cup 3 40
+        show_usb_status "$usb_device"
+        
+        # Model status section
+        tput cup 12 2
+        show_model_status
+        
+        # Performance metrics
+        tput cup 12 40
+        show_performance_metrics
+        
+        # Recent activity
+        tput cup 20 2
+        show_recent_activity
+        
+        # Footer with controls
+        local rows=$(tput lines)
+        tput cup $((rows - 2)) 2
+        echo -e "${DIM}Press 'q' to quit, 'r' to refresh${RESET}"
+        
+        # Check for input with timeout
+        if read -rsn1 -t "$DASHBOARD_REFRESH_RATE" key; then
+            case "$key" in
+                q|Q) DASHBOARD_ACTIVE=0 ;;
+                r|R) continue ;;
+            esac
+        fi
+    done
+    
+    # Cleanup
+    DASHBOARD_ACTIVE=0
+    tput rmcup
+    tput cnorm
+    trap - INT TERM EXIT
+}
+
+# Draw dashboard frame
+draw_dashboard_frame() {
+    local cols=$(tput cols)
+    local rows=$(tput lines)
+    
+    # Title bar
+    echo -e "${GREEN}╔$(printf '═%.0s' $(seq 2 $((cols-2))))╗${RESET}"
+    printf "${GREEN}║${RESET} ${BRIGHT}%-$((cols-4))s${RESET} ${GREEN}║${RESET}\n" \
+        "Leonardo AI Universal - System Dashboard"
+    echo -e "${GREEN}╠$(printf '═%.0s' $(seq 2 $((cols-2))))╣${RESET}"
+    
+    # Main area
+    for ((i=3; i<rows-2; i++)); do
+        tput cup $i 0
+        echo -e "${GREEN}║${RESET}$(printf ' %.0s' $(seq 2 $((cols-2))))${GREEN}║${RESET}"
+    done
+    
+    # Bottom border
+    tput cup $((rows-2)) 0
+    echo -e "${GREEN}╚$(printf '═%.0s' $(seq 2 $((cols-2))))╝${RESET}"
+    
+    # Section dividers
+    tput cup 11 0
+    echo -e "${GREEN}╟$(printf '─%.0s' $(seq 2 $((cols-2))))╢${RESET}"
+    tput cup 19 0
+    echo -e "${GREEN}╟$(printf '─%.0s' $(seq 2 $((cols-2))))╢${RESET}"
+    
+    # Vertical divider
+    for ((i=3; i<11; i++)); do
+        tput cup $i 38
+        echo -e "${GREEN}│${RESET}"
+    done
+    for ((i=12; i<19; i++)); do
+        tput cup $i 38
+        echo -e "${GREEN}│${RESET}"
+    done
+}
+
+# System information display
+show_system_info() {
+    echo -e "${YELLOW}System Information${RESET}"
+    echo -e "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    
+    # OS info
+    local os_name=$(uname -s)
+    local os_version=$(uname -r)
+    printf "OS: ${CYAN}%-25s${RESET}\n" "$os_name $os_version"
+    
+    # CPU info
+    local cpu_model="Unknown"
+    local cpu_cores=1
+    if [[ -f /proc/cpuinfo ]]; then
+        cpu_model=$(grep "model name" /proc/cpuinfo | head -1 | cut -d: -f2 | xargs)
+        cpu_cores=$(grep -c "processor" /proc/cpuinfo)
+    elif command -v sysctl >/dev/null 2>&1; then
+        cpu_model=$(sysctl -n machdep.cpu.brand_string 2>/dev/null || echo "Unknown")
+        cpu_cores=$(sysctl -n hw.ncpu 2>/dev/null || echo "1")
+    fi
+    printf "CPU: ${CYAN}%-24s${RESET}\n" "${cpu_model:0:24}"
+    printf "Cores: ${CYAN}%-22s${RESET}\n" "$cpu_cores"
+    
+    # Memory info
+    local total_mem=0
+    local free_mem=0
+    if command -v free >/dev/null 2>&1; then
+        total_mem=$(free -b | awk '/^Mem:/ {print $2}')
+        free_mem=$(free -b | awk '/^Mem:/ {print $4}')
+    elif command -v vm_stat >/dev/null 2>&1; then
+        local pages=$(vm_stat | grep "Pages free" | awk '{print $3}' | tr -d '.')
+        free_mem=$((pages * 4096))
+        total_mem=$(sysctl -n hw.memsize 2>/dev/null || echo "0")
+    fi
+    
+    printf "Memory: ${CYAN}%s / %s${RESET}\n" \
+        "$(format_bytes "$free_mem")" \
+        "$(format_bytes "$total_mem")"
+    
+    # Disk space
+    local disk_info=$(df -h / | tail -1)
+    local disk_used=$(echo "$disk_info" | awk '{print $3}')
+    local disk_total=$(echo "$disk_info" | awk '{print $2}')
+    printf "Disk: ${CYAN}%s / %s${RESET}\n" "$disk_used" "$disk_total"
+}
+
+# USB device status
+show_usb_status() {
+    local device="$1"
+    
+    echo -e "${YELLOW}USB Device Status${RESET}"
+    echo -e "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    
+    if [[ -z "$device" ]]; then
+        echo -e "${DIM}No USB device selected${RESET}"
+        return
+    fi
+    
+    # Device info
+    printf "Device: ${CYAN}%-21s${RESET}\n" "$device"
+    
+    # Mount status
+    local mount_point=$(findmnt -rno TARGET "$device" 2>/dev/null | head -1)
+    if [[ -n "$mount_point" ]]; then
+        printf "Status: ${GREEN}%-21s${RESET}\n" "Mounted"
+        printf "Path: ${CYAN}%-23s${RESET}\n" "$mount_point"
+        
+        # Space info
+        local space_info=$(df -B1 "$mount_point" | tail -1)
+        local used=$(echo "$space_info" | awk '{print $3}')
+        local total=$(echo "$space_info" | awk '{print $2}')
+        local percent=$(echo "$space_info" | awk '{print $5}')
+        
+        printf "Space: ${CYAN}%s / %s${RESET}\n" \
+            "$(format_bytes "$used")" \
+            "$(format_bytes "$total")"
+        
+        # Visual usage bar
+        show_usage_bar "Usage" "${percent%\%}" 30
+    else
+        printf "Status: ${RED}%-21s${RESET}\n" "Not Mounted"
+    fi
+    
+    # Health status (placeholder)
+    printf "Health: ${GREEN}%-21s${RESET}\n" "Good"
+    printf "Write Cycles: ${CYAN}%-15s${RESET}\n" "1,234 / 10,000"
+}
+
+# Model status display
+show_model_status() {
+    echo -e "${YELLOW}AI Models${RESET}"
+    echo -e "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    
+    # Mock model data
+    local models=(
+        "llama3:8b|7.2GB|Ready"
+        "mistral:7b|4.1GB|Ready"
+        "mixtral:8x7b|26GB|Downloading"
+        "claude:opus|15GB|Not Installed"
+    )
+    
+    for model in "${models[@]}"; do
+        IFS='|' read -r name size status <<< "$model"
+        
+        case "$status" in
+            "Ready")
+                printf "${GREEN}◉${RESET} %-20s %10s\n" "$name" "$size"
+                ;;
+            "Downloading")
+                printf "${YELLOW}◐${RESET} %-20s %10s\n" "$name" "$size"
+                ;;
+            *)
+                printf "${DIM}○${RESET} ${DIM}%-20s %10s${RESET}\n" "$name" "$size"
+                ;;
+        esac
+    done
+    
+    echo
+    printf "Total Models: ${CYAN}%d${RESET}\n" "${#models[@]}"
+    printf "Total Size: ${CYAN}%s${RESET}\n" "52.3 GB"
+}
+
+# Performance metrics
+show_performance_metrics() {
+    echo -e "${YELLOW}Performance${RESET}"
+    echo -e "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    
+    # CPU usage
+    local cpu_usage=0
+    if command -v top >/dev/null 2>&1; then
+        if [[ "$OSTYPE" == "darwin"* ]]; then
+            cpu_usage=$(top -l 1 | grep "CPU usage" | awk '{print int($3)}')
+        else
+            cpu_usage=$(top -bn1 | grep "Cpu(s)" | awk '{print int($2)}')
+        fi
+    fi
+    show_usage_bar "CPU" "$cpu_usage" 30
+    
+    # Memory usage
+    local mem_usage=0
+    if command -v free >/dev/null 2>&1; then
+        mem_usage=$(free | awk '/^Mem:/ {print int($3/$2 * 100)}')
+    elif command -v vm_stat >/dev/null 2>&1; then
+        local pages_free=$(vm_stat | grep "Pages free" | awk '{print $3}' | tr -d '.')
+        local pages_total=$(sysctl -n hw.memsize 2>/dev/null || echo "1")
+        pages_total=$((pages_total / 4096))
+        mem_usage=$(( (pages_total - pages_free) * 100 / pages_total ))
+    fi
+    show_usage_bar "Memory" "$mem_usage" 30
+    
+    # Network activity
+    echo
+    printf "Network: ${GREEN}▲${RESET} 1.2 MB/s ${RED}▼${RESET} 0.3 MB/s\n"
+    
+    # Temperature (if available)
+    local temp="N/A"
+    if command -v sensors >/dev/null 2>&1; then
+        temp=$(sensors | grep "Core 0" | awk '{print $3}' | head -1)
+    fi
+    printf "Temperature: ${CYAN}%-15s${RESET}\n" "$temp"
+}
+
+# Recent activity log
+show_recent_activity() {
+    echo -e "${YELLOW}Recent Activity${RESET}"
+    echo -e "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    
+    # Mock activity entries
+    local activities=(
+        "$(date '+%H:%M:%S') ${GREEN}[SUCCESS]${RESET} Model llama3:8b loaded"
+        "$(date '+%H:%M:%S' -d '1 minute ago' 2>/dev/null || date '+%H:%M:%S') ${BLUE}[INFO]${RESET} USB device mounted"
+        "$(date '+%H:%M:%S' -d '2 minutes ago' 2>/dev/null || date '+%H:%M:%S') ${YELLOW}[DOWNLOAD]${RESET} mistral:7b - 85% complete"
+        "$(date '+%H:%M:%S' -d '5 minutes ago' 2>/dev/null || date '+%H:%M:%S') ${GREEN}[SUCCESS]${RESET} System initialized"
+    )
+    
+    for activity in "${activities[@]}"; do
+        echo -e "$activity"
+    done
+}
+
+# Usage bar display
+show_usage_bar() {
+    local label="$1"
+    local percent="$2"
+    local width="${3:-30}"
+    
+    printf "%-8s [" "$label:"
+    
+    local filled=$((percent * width / 100))
+    local empty=$((width - filled))
+    
+    # Color based on usage
+    local color="$GREEN"
+    if [[ $percent -gt 80 ]]; then
+        color="$RED"
+    elif [[ $percent -gt 60 ]]; then
+        color="$YELLOW"
+    fi
+    
+    # Draw bar
+    if [[ $filled -gt 0 ]]; then
+        printf "${color}%${filled}s${RESET}" | tr ' ' '█'
+    fi
+    if [[ $empty -gt 0 ]]; then
+        printf "%${empty}s" | tr ' ' '░'
+    fi
+    
+    printf "] %3d%%\n" "$percent"
+}
+
+# Mini dashboard for quick status
+show_mini_dashboard() {
+    local device="$1"
+    
+    clear
+    echo -e "${GREEN}┌─────────────────────────────────────┐${RESET}"
+    echo -e "${GREEN}│${RESET} ${BRIGHT}Leonardo AI - Quick Status${RESET}        ${GREEN}│${RESET}"
+    echo -e "${GREEN}├─────────────────────────────────────┤${RESET}"
+    
+    # Device status
+    if [[ -n "$device" ]]; then
+        local mount_point=$(findmnt -rno TARGET "$device" 2>/dev/null | head -1)
+        if [[ -n "$mount_point" ]]; then
+            echo -e "${GREEN}│${RESET} Device: ${CYAN}$device${RESET} ${GREEN}[OK]${RESET}"
+            
+            # Space
+            local space_info=$(df -h "$mount_point" | tail -1)
+            local used=$(echo "$space_info" | awk '{print $3}')
+            local total=$(echo "$space_info" | awk '{print $2}')
+            echo -e "${GREEN}│${RESET} Space: ${CYAN}$used / $total${RESET}"
+        else
+            echo -e "${GREEN}│${RESET} Device: ${RED}Not Mounted${RESET}"
+        fi
+    else
+        echo -e "${GREEN}│${RESET} Device: ${DIM}None Selected${RESET}"
+    fi
+    
+    # Model count
+    echo -e "${GREEN}│${RESET} Models: ${CYAN}3 Ready, 1 Downloading${RESET}"
+    
+    # System load
+    local load=$(uptime | awk -F'load average:' '{print $2}' | xargs)
+    echo -e "${GREEN}│${RESET} Load: ${CYAN}$load${RESET}"
+    
+    echo -e "${GREEN}└─────────────────────────────────────┘${RESET}"
+}
+
+# System health check display
+show_health_check() {
+    echo -e "${YELLOW}System Health Check${RESET}"
+    echo -e "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    
+    local checks=(
+        "Internet Connectivity|check_connectivity|Network"
+        "USB Write Speed|test_usb_speed|USB"
+        "Available Memory|check_memory|System"
+        "Disk Space|check_disk_space|System"
+        "Model Integrity|verify_models|Models"
+    )
+    
+    for check in "${checks[@]}"; do
+        IFS='|' read -r name func category <<< "$check"
+        
+        printf "%-25s " "$name"
+        
+        # Simulate check (replace with actual function calls)
+        if [[ $((RANDOM % 10)) -gt 1 ]]; then
+            echo -e "${GREEN}✓ PASS${RESET}"
+        else
+            echo -e "${RED}✗ FAIL${RESET}"
+        fi
+    done
+}
+
+# Export dashboard functions
+export -f show_dashboard show_mini_dashboard show_health_check
+
+# ==== Component: src/ui/web.sh ====
+# ==============================================================================
+# Leonardo AI Universal - Web UI Foundation
+# ==============================================================================
+# Description: Web server and browser-based UI components
+# Version: 7.0.0
+# Dependencies: colors.sh, logging.sh, network.sh
+# ==============================================================================
+
+# Web server configuration
+LEONARDO_WEB_PORT="${LEONARDO_WEB_PORT:-7777}"
+LEONARDO_WEB_HOST="${LEONARDO_WEB_HOST:-0.0.0.0}"
+LEONARDO_WEB_ROOT="${LEONARDO_WEB_ROOT:-$LEONARDO_INSTALL_DIR/web}"
+LEONARDO_WEB_PID=""
+
+# Start web UI server
+start_web_ui() {
+    local port="${1:-$LEONARDO_WEB_PORT}"
+    local host="${2:-$LEONARDO_WEB_HOST}"
+    
+    log_message "INFO" "Starting Leonardo Web UI on $host:$port"
+    
+    # Check if port is already in use
+    if check_port_in_use "$port"; then
+        log_message "ERROR" "Port $port is already in use"
+        return 1
+    fi
+    
+    # Create web root if it doesn't exist
+    if [[ ! -d "$LEONARDO_WEB_ROOT" ]]; then
+        mkdir -p "$LEONARDO_WEB_ROOT"
+        generate_web_ui_files
+    fi
+    
+    # Start Python simple HTTP server (fallback)
+    if command -v python3 >/dev/null 2>&1; then
+        (
+            cd "$LEONARDO_WEB_ROOT"
+            python3 -m http.server "$port" --bind "$host" >/dev/null 2>&1
+        ) &
+        LEONARDO_WEB_PID=$!
+        
+    elif command -v python >/dev/null 2>&1; then
+        (
+            cd "$LEONARDO_WEB_ROOT"
+            python -m SimpleHTTPServer "$port" >/dev/null 2>&1
+        ) &
+        LEONARDO_WEB_PID=$!
+        
+    else
+        log_message "ERROR" "No Python found to start web server"
+        return 1
+    fi
+    
+    # Wait for server to start
+    sleep 2
+    
+    if kill -0 "$LEONARDO_WEB_PID" 2>/dev/null; then
+        log_message "INFO" "Web UI started successfully"
+        show_status "success" "Web UI available at http://$host:$port"
+        
+        # Try to open browser
+        open_browser "http://localhost:$port"
+        return 0
+    else
+        log_message "ERROR" "Failed to start web server"
+        return 1
+    fi
+}
+
+# Stop web UI server
+stop_web_ui() {
+    if [[ -n "$LEONARDO_WEB_PID" ]] && kill -0 "$LEONARDO_WEB_PID" 2>/dev/null; then
+        log_message "INFO" "Stopping Web UI server (PID: $LEONARDO_WEB_PID)"
+        kill "$LEONARDO_WEB_PID"
+        wait "$LEONARDO_WEB_PID" 2>/dev/null
+        LEONARDO_WEB_PID=""
+        show_status "success" "Web UI stopped"
+    else
+        log_message "WARN" "Web UI server not running"
+    fi
+}
+
+# Check if port is in use
+check_port_in_use() {
+    local port="$1"
+    
+    if command -v nc >/dev/null 2>&1; then
+        nc -z localhost "$port" 2>/dev/null
+    elif command -v lsof >/dev/null 2>&1; then
+        lsof -i ":$port" >/dev/null 2>&1
+    else
+        # Fallback: try to bind to the port
+        (python3 -c "import socket; s=socket.socket(); s.bind(('', $port)); s.close()" 2>/dev/null) || return 0
+        return 1
+    fi
+}
+
+# Open browser
+open_browser() {
+    local url="$1"
+    
+    log_message "INFO" "Opening browser: $url"
+    
+    # Platform-specific browser opening
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        open "$url" 2>/dev/null &
+    elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
+        if command -v xdg-open >/dev/null 2>&1; then
+            xdg-open "$url" 2>/dev/null &
+        elif command -v gnome-open >/dev/null 2>&1; then
+            gnome-open "$url" 2>/dev/null &
+        fi
+    elif [[ "$OSTYPE" == "msys" ]] || [[ "$OSTYPE" == "cygwin" ]]; then
+        start "$url" 2>/dev/null &
+    fi
+}
+
+# Generate web UI files
+generate_web_ui_files() {
+    log_message "INFO" "Generating Web UI files"
+    
+    # Create index.html
+    cat > "$LEONARDO_WEB_ROOT/index.html" << 'EOF'
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Leonardo AI Universal</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <pre class="ascii-banner">
+ ▄▄▌  ▄▄▄ .       ▐ ▄  ▄▄▄· ▄▄▄  ·▄▄▄▄       ▄▄▄      
+ ██•  ▀▄.▀·▪     •█▌▐█▐█ ▀█ ▀▄ █·██▪ ██ ▪     ▀▄ █·    
+ ██▪  ▐▀▀▪▄ ▄█▀▄ ▐█▐▐▌▄█▀▀█ ▐▀▀▄ ▐█· ▐█▌ ▄█▀▄ ▐▀▀▄     
+ ▐█▌▐▌▐█▄▄▌▐█▌.▐▌██▐█▌▐█ ▪▐▌▐█•█▌██. ██ ▐█▌.▐▌▐█•█▌    
+ .▀▀▀  ▀▀▀  ▀█▄▀▪▀▀ █▪ ▀  ▀ .▀  ▀▀▀▀▀▀• ▀█▄▀▪.▀  ▀     
+            </pre>
+            <h1>AI Universal Control Panel</h1>
+        </header>
+
+        <nav class="main-nav">
+            <button class="nav-btn active" data-section="status">System Status</button>
+            <button class="nav-btn" data-section="models">AI Models</button>
+            <button class="nav-btn" data-section="usb">USB Management</button>
+            <button class="nav-btn" data-section="settings">Settings</button>
+        </nav>
+
+        <main id="content">
+            <!-- Dynamic content loaded here -->
+        </main>
+
+        <div class="terminal" id="terminal">
+            <div class="terminal-header">
+                <span>Terminal Output</span>
+                <button class="terminal-toggle">_</button>
+            </div>
+            <div class="terminal-content" id="terminal-output"></div>
+        </div>
+    </div>
+
+    <script src="leonardo.js"></script>
+</body>
+</html>
+EOF
+
+    # Create CSS file
+    cat > "$LEONARDO_WEB_ROOT/style.css" << 'EOF'
+:root {
+    --bg-primary: #0a0a0a;
+    --bg-secondary: #1a1a1a;
+    --bg-tertiary: #2a2a2a;
+    --text-primary: #00ff00;
+    --text-secondary: #00cc00;
+    --text-dim: #008800;
+    --accent: #00ffff;
+    --error: #ff3333;
+    --warning: #ffcc00;
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'Courier New', monospace;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+}
+
+.container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 20px;
+    flex: 1;
+}
+
+header {
+    text-align: center;
+    margin-bottom: 30px;
+}
+
+.ascii-banner {
+    color: var(--text-primary);
+    font-size: 0.8em;
+    line-height: 1.2;
+    margin-bottom: 20px;
+    text-shadow: 0 0 10px var(--text-primary);
+}
+
+h1 {
+    font-size: 2em;
+    text-transform: uppercase;
+    letter-spacing: 3px;
+    text-shadow: 0 0 20px var(--accent);
+}
+
+.main-nav {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 30px;
+    justify-content: center;
+}
+
+.nav-btn {
+    background: var(--bg-secondary);
+    border: 1px solid var(--text-dim);
+    color: var(--text-secondary);
+    padding: 10px 20px;
+    cursor: pointer;
+    transition: all 0.3s;
+    text-transform: uppercase;
+    font-family: inherit;
+}
+
+.nav-btn:hover {
+    background: var(--bg-tertiary);
+    border-color: var(--text-primary);
+    color: var(--text-primary);
+    box-shadow: 0 0 10px var(--text-primary);
+}
+
+.nav-btn.active {
+    background: var(--text-dim);
+    color: var(--bg-primary);
+    border-color: var(--text-primary);
+}
+
+main {
+    background: var(--bg-secondary);
+    border: 1px solid var(--text-dim);
+    padding: 20px;
+    min-height: 400px;
+    box-shadow: 0 0 20px rgba(0, 255, 0, 0.1);
+}
+
+.status-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 20px;
+}
+
+.status-card {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--text-dim);
+    padding: 15px;
+    border-radius: 5px;
+}
+
+.status-card h3 {
+    color: var(--accent);
+    margin-bottom: 10px;
+    text-transform: uppercase;
+}
+
+.metric {
+    display: flex;
+    justify-content: space-between;
+    margin: 5px 0;
+}
+
+.metric-value {
+    color: var(--text-primary);
+}
+
+.progress-bar {
+    background: var(--bg-primary);
+    height: 20px;
+    margin: 10px 0;
+    position: relative;
+    border: 1px solid var(--text-dim);
+}
+
+.progress-fill {
+    background: linear-gradient(to right, var(--text-dim), var(--text-primary));
+    height: 100%;
+    transition: width 0.3s;
+    box-shadow: 0 0 10px var(--text-primary);
+}
+
+.terminal {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: var(--bg-primary);
+    border-top: 1px solid var(--text-dim);
+    max-height: 300px;
+    transition: transform 0.3s;
+}
+
+.terminal-header {
+    background: var(--bg-secondary);
+    padding: 10px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    cursor: move;
+}
+
+.terminal-content {
+    height: 200px;
+    overflow-y: auto;
+    padding: 10px;
+    font-size: 0.9em;
+    font-family: 'Courier New', monospace;
+}
+
+.terminal-content .log-entry {
+    margin: 2px 0;
+}
+
+.log-info { color: var(--text-primary); }
+.log-warn { color: var(--warning); }
+.log-error { color: var(--error); }
+
+.model-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+    gap: 15px;
+}
+
+.model-card {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--text-dim);
+    padding: 15px;
+    cursor: pointer;
+    transition: all 0.3s;
+}
+
+.model-card:hover {
+    border-color: var(--text-primary);
+    box-shadow: 0 0 15px rgba(0, 255, 0, 0.3);
+}
+
+.model-status {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    margin-right: 5px;
+}
+
+.status-ready { background: var(--text-primary); }
+.status-downloading { background: var(--warning); }
+.status-offline { background: var(--text-dim); }
+
+@keyframes pulse {
+    0% { opacity: 1; }
+    50% { opacity: 0.5; }
+    100% { opacity: 1; }
+}
+
+.loading {
+    animation: pulse 1.5s infinite;
+}
+
+/* Matrix rain effect background */
+.matrix-bg {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    opacity: 0.1;
+    z-index: -1;
+}
+EOF
+
+    # Create JavaScript file
+    cat > "$LEONARDO_WEB_ROOT/leonardo.js" << 'EOF'
+// Leonardo AI Universal Web Interface
+class LeonardoUI {
+    constructor() {
+        this.currentSection = 'status';
+        this.wsConnection = null;
+        this.initializeUI();
+        this.connectWebSocket();
+    }
+
+    initializeUI() {
+        // Navigation buttons
+        document.querySelectorAll('.nav-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                this.switchSection(e.target.dataset.section);
+            });
+        });
+
+        // Terminal toggle
+        document.querySelector('.terminal-toggle').addEventListener('click', () => {
+            this.toggleTerminal();
+        });
+
+        // Load initial section
+        this.loadSection('status');
+    }
+
+    switchSection(section) {
+        // Update active button
+        document.querySelectorAll('.nav-btn').forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.section === section);
+        });
+
+        this.currentSection = section;
+        this.loadSection(section);
+    }
+
+    loadSection(section) {
+        const content = document.getElementById('content');
+        content.innerHTML = '<div class="loading">Loading...</div>';
+
+        // Simulate content loading
+        setTimeout(() => {
+            switch(section) {
+                case 'status':
+                    this.loadStatusSection();
+                    break;
+                case 'models':
+                    this.loadModelsSection();
+                    break;
+                case 'usb':
+                    this.loadUSBSection();
+                    break;
+                case 'settings':
+                    this.loadSettingsSection();
+                    break;
+            }
+        }, 300);
+    }
+
+    loadStatusSection() {
+        document.getElementById('content').innerHTML = `
+            <h2>System Status</h2>
+            <div class="status-grid">
+                <div class="status-card">
+                    <h3>System Resources</h3>
+                    <div class="metric">
+                        <span>CPU Usage</span>
+                        <span class="metric-value">45%</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div class="progress-fill" style="width: 45%"></div>
+                    </div>
+                    <div class="metric">
+                        <span>Memory</span>
+                        <span class="metric-value">8.2GB / 16GB</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div class="progress-fill" style="width: 51%"></div>
+                    </div>
+                </div>
+                <div class="status-card">
+                    <h3>USB Device</h3>
+                    <div class="metric">
+                        <span>Status</span>
+                        <span class="metric-value">Connected</span>
+                    </div>
+                    <div class="metric">
+                        <span>Space Used</span>
+                        <span class="metric-value">42.7GB / 128GB</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div class="progress-fill" style="width: 33%"></div>
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+
+    loadModelsSection() {
+        document.getElementById('content').innerHTML = `
+            <h2>AI Models</h2>
+            <div class="model-grid">
+                <div class="model-card">
+                    <h3><span class="model-status status-ready"></span>LLaMA 3 8B</h3>
+                    <p>Size: 7.2GB</p>
+                    <p>Status: Ready</p>
+                    <button>Load Model</button>
+                </div>
+                <div class="model-card">
+                    <h3><span class="model-status status-ready"></span>Mistral 7B</h3>
+                    <p>Size: 4.1GB</p>
+                    <p>Status: Ready</p>
+                    <button>Load Model</button>
+                </div>
+                <div class="model-card">
+                    <h3><span class="model-status status-downloading"></span>Mixtral 8x7B</h3>
+                    <p>Size: 26GB</p>
+                    <p>Status: Downloading 65%</p>
+                    <div class="progress-bar">
+                        <div class="progress-fill" style="width: 65%"></div>
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+
+    loadUSBSection() {
+        document.getElementById('content').innerHTML = `
+            <h2>USB Management</h2>
+            <div class="status-card">
+                <h3>Current Device</h3>
+                <p>Device: /dev/sdb1</p>
+                <p>Filesystem: exFAT</p>
+                <p>Label: LEONARDO_AI</p>
+                <button>Scan for Devices</button>
+                <button>Format Device</button>
+                <button>Verify Installation</button>
+            </div>
+        `;
+    }
+
+    loadSettingsSection() {
+        document.getElementById('content').innerHTML = `
+            <h2>Settings</h2>
+            <div class="status-card">
+                <h3>Configuration</h3>
+                <p>Coming soon...</p>
+            </div>
+        `;
+    }
+
+    toggleTerminal() {
+        const terminal = document.querySelector('.terminal');
+        terminal.style.transform = 
+            terminal.style.transform === 'translateY(100%)' ? 
+            'translateY(0)' : 'translateY(100%)';
+    }
+
+    connectWebSocket() {
+        // Placeholder for WebSocket connection
+        this.log('info', 'Leonardo Web UI initialized');
+        this.log('info', 'Waiting for connection to backend...');
+    }
+
+    log(level, message) {
+        const output = document.getElementById('terminal-output');
+        const entry = document.createElement('div');
+        entry.className = `log-entry log-${level}`;
+        entry.textContent = `[${new Date().toLocaleTimeString()}] [${level.toUpperCase()}] ${message}`;
+        output.appendChild(entry);
+        output.scrollTop = output.scrollHeight;
+    }
+}
+
+// Initialize on load
+document.addEventListener('DOMContentLoaded', () => {
+    window.leonardo = new LeonardoUI();
+});
+EOF
+
+    log_message "INFO" "Web UI files generated successfully"
+}
+
+# Serve API endpoint (mock implementation)
+handle_api_request() {
+    local endpoint="$1"
+    local method="$2"
+    local data="$3"
+    
+    case "$endpoint" in
+        "/api/status")
+            echo '{"status":"ok","version":"7.0.0","uptime":12345}'
+            ;;
+        "/api/models")
+            echo '[{"name":"llama3","size":"7.2GB","status":"ready"}]'
+            ;;
+        "/api/usb")
+            echo '{"device":"/dev/sdb1","mounted":true,"space_used":45874387968}'
+            ;;
+        *)
+            echo '{"error":"Unknown endpoint"}'
+            ;;
+    esac
+}
+
+# Export web UI functions
+export -f start_web_ui stop_web_ui generate_web_ui_files
 
 # ==== Component: src/core/main.sh ====
 # ==============================================================================
