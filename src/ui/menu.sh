@@ -20,41 +20,65 @@ show_menu() {
     local title="$1"
     shift
     local options=("$@")
-    local num_options=${#options[@]}
     
-    MENU_MAX_ITEMS=$num_options
+    # Initialize menu position
     MENU_POSITION=1
     MENU_SELECTION=""
+    local num_options=${#options[@]}
     
-    # Hide cursor
-    tput civis
+    # Hide cursor if possible (only if tput is available)
+    if command -v tput >/dev/null 2>&1 && [ -n "$TERM" ]; then
+        tput civis 2>/dev/null || true
+        # Trap for cleanup
+        trap 'tput cnorm 2>/dev/null || true; echo' INT TERM
+    fi
     
-    # Trap for cleanup
-    trap 'tput cnorm; echo' INT TERM
+    local first_display=true
     
     while true; do
         # Clear screen and display menu
-        clear
+        if [[ "$first_display" == "true" ]]; then
+            first_display=false
+        else
+            # Clear screen using /dev/tty
+            echo -e "\033[H\033[2J" >/dev/tty
+        fi
+        
         display_menu_frame "$title" "${options[@]}"
         
-        # Read user input
-        read -rsn1 key
+        # Read user input - check if stdin is available
+        if [[ ! -t 0 ]]; then
+            echo "ERROR: No terminal input available" >&2
+            return 1
+        fi
+        
+        # Read a single character
+        IFS= read -rsn1 key
+        
+        # Handle arrow keys (multi-byte sequences)
+        if [[ $key == $'\x1b' ]]; then
+            # Read the rest of the escape sequence
+            read -rsn2 -t 0.1 key2
+            case "$key2" in
+                '[A') # Up arrow
+                    ((MENU_POSITION--))
+                    [[ $MENU_POSITION -lt 1 ]] && MENU_POSITION=$num_options
+                    ;;
+                '[B') # Down arrow
+                    ((MENU_POSITION++))
+                    [[ $MENU_POSITION -gt $num_options ]] && MENU_POSITION=1
+                    ;;
+                '[C'|'[D') # Right/Left arrows - ignore
+                    ;;
+                '') # Just escape key pressed
+                    MENU_SELECTION=""
+                    break
+                    ;;
+            esac
+            continue
+        fi
         
         case "$key" in
-            # Arrow keys
-            $'\x1b')
-                read -rsn2 -t 0.1 key
-                case "$key" in
-                    '[A') # Up arrow
-                        ((MENU_POSITION--))
-                        [[ $MENU_POSITION -lt 1 ]] && MENU_POSITION=$num_options
-                        ;;
-                    '[B') # Down arrow
-                        ((MENU_POSITION++))
-                        [[ $MENU_POSITION -gt $num_options ]] && MENU_POSITION=1
-                        ;;
-                esac
-                ;;
             # Enter key
             '')
                 MENU_SELECTION="${options[$((MENU_POSITION-1))]}"
@@ -68,17 +92,27 @@ show_menu() {
                     break
                 fi
                 ;;
-            # Escape or q to quit
-            $'\x1b'|q|Q)
+            # Vim-style navigation
+            j) # Down
+                ((MENU_POSITION++))
+                [[ $MENU_POSITION -gt $num_options ]] && MENU_POSITION=1
+                ;;
+            k) # Up
+                ((MENU_POSITION--))
+                [[ $MENU_POSITION -lt 1 ]] && MENU_POSITION=$num_options
+                ;;
+            # q to quit
+            q|Q)
                 MENU_SELECTION=""
                 break
                 ;;
         esac
     done
     
-    # Show cursor again
-    tput cnorm
-    trap - INT TERM
+    # Restore cursor
+    if command -v tput >/dev/null 2>&1 && [ -n "$TERM" ]; then
+        tput cnorm 2>/dev/null || true
+    fi
     
     # Return selection
     echo "$MENU_SELECTION"
@@ -90,26 +124,26 @@ display_menu_frame() {
     shift
     local options=("$@")
     
-    # Draw title box
-    echo -e "${GREEN}╔════════════════════════════════════════════╗${COLOR_RESET}"
-    printf "${GREEN}║${COLOR_RESET} %-42s ${GREEN}║${COLOR_RESET}\n" "$title"
-    echo -e "${GREEN}╚════════════════════════════════════════════╝${COLOR_RESET}"
-    echo
+    # Draw title box - force output to terminal
+    echo -e "${GREEN}╔════════════════════════════════════════════╗${COLOR_RESET}" >/dev/tty
+    printf "${GREEN}║${COLOR_RESET} %-42s ${GREEN}║${COLOR_RESET}\n" "$title" >/dev/tty
+    echo -e "${GREEN}╚════════════════════════════════════════════╝${COLOR_RESET}" >/dev/tty
+    echo >/dev/tty
     
     # Display options
     local i=1
     for option in "${options[@]}"; do
         if [[ $i -eq $MENU_POSITION ]]; then
             # Highlighted option
-            echo -e "${CYAN}▶ ${BRIGHT}${option}${COLOR_RESET}"
+            echo -e "${CYAN}▶ ${BRIGHT}${option}${COLOR_RESET}" >/dev/tty
         else
-            echo -e "  ${DIM}${option}${COLOR_RESET}"
+            echo -e "  ${DIM}${option}${COLOR_RESET}" >/dev/tty
         fi
         ((i++))
     done
     
-    echo
-    echo -e "${DIM}Use ↑/↓ arrows or numbers to select, Enter to confirm, q to quit${COLOR_RESET}"
+    echo >/dev/tty
+    echo -e "${DIM}Use ↑/↓ arrows or numbers to select, Enter to confirm, q to quit${COLOR_RESET}" >/dev/tty
 }
 
 # Simple yes/no menu
@@ -148,20 +182,22 @@ show_checklist() {
     
     MENU_POSITION=1
     
-    # Hide cursor
-    tput civis
-    trap 'tput cnorm; echo' INT TERM
+    # Hide cursor if possible (only if tput is available)
+    if command -v tput >/dev/null 2>&1 && [ -n "$TERM" ]; then
+        tput civis 2>/dev/null || true
+        trap 'tput cnorm 2>/dev/null || true; echo' INT TERM
+    fi
     
     while true; do
         clear
         display_checklist_frame "$title" "${options[@]}" "${selected[@]}"
         
         # Read user input
-        read -rsn1 key
+        IFS= read -sn1 key
         
         case "$key" in
             $'\x1b')
-                read -rsn2 -t 0.1 key
+                read -sn2 -t 0.1 key
                 case "$key" in
                     '[A') # Up arrow
                         ((MENU_POSITION--))
@@ -187,9 +223,11 @@ show_checklist() {
         esac
     done
     
-    # Show cursor again
-    tput cnorm
-    trap - INT TERM
+    # Show cursor again (only if tput is available)
+    if command -v tput >/dev/null 2>&1 && [ -n "$TERM" ]; then
+        tput cnorm 2>/dev/null || true
+        trap - INT TERM
+    fi
     
     # Return selected items
     local result=()
@@ -283,7 +321,7 @@ show_progress_menu() {
     
     # Wait for input or completion
     while kill -0 $bg_pid 2>/dev/null; do
-        read -rsn1 -t 0.1 key
+        IFS= read -rsn1 -t 0.1 key
         if [[ "$key" == "c" ]] || [[ "$key" == "C" ]]; then
             cancel_var=1
             kill $bg_pid 2>/dev/null
@@ -380,7 +418,7 @@ show_filtered_list() {
         fi
         
         # Read input for filtering
-        read -rsn1 key
+        IFS= read -sn1 key
         case "$key" in
             $'\x1b') # Escape
                 return 1

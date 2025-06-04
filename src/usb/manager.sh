@@ -79,7 +79,7 @@ format_usb_drive() {
     fi
     
     # Confirm formatting
-    echo "${COLOR_YELLOW}WARNING: This will erase all data on $device${COLOR_RESET}"
+    echo -e "${COLOR_YELLOW}WARNING: This will erase all data on $device${COLOR_RESET}"
     if ! confirm_action "Format USB drive"; then
         return 1
     fi
@@ -347,7 +347,7 @@ install_leonardo_to_usb() {
     
     # Copy Leonardo executable
     if cp "$leonardo_script" "$mount_point/leonardo.sh"; then
-        chmod +x "$mount_point/leonardo.sh" 2>/dev/null
+        chmod +x "$mount_point/leonardo.sh" 2>/dev/null || true
         
         # Create platform-specific launchers
         create_usb_launchers "$mount_point"
@@ -356,7 +356,7 @@ install_leonardo_to_usb() {
         
         # Show summary
         echo ""
-        echo "${COLOR_GREEN}Installation complete!${COLOR_RESET}"
+        echo -e "${COLOR_GREEN}Installation complete!${COLOR_RESET}"
         echo ""
         echo "USB Drive: $LEONARDO_USB_DEVICE"
         echo "Mount Point: $mount_point"
@@ -423,7 +423,7 @@ fi
 cd "$DIR"
 exec ./leonardo.sh "$@"
 EOF
-    chmod +x "$mount_point/launch-leonardo.sh" 2>/dev/null
+    chmod +x "$mount_point/launch-leonardo.sh" 2>/dev/null || true
     
     # Create .desktop file for Linux
     cat > "$mount_point/leonardo.desktop" << EOF
@@ -437,7 +437,7 @@ Icon=$mount_point/leonardo/icon.png
 Terminal=true
 Categories=Development;Science;
 EOF
-    chmod +x "$mount_point/leonardo.desktop" 2>/dev/null
+    chmod +x "$mount_point/leonardo.desktop" 2>/dev/null || true
 }
 
 # Backup USB Leonardo data
@@ -483,7 +483,7 @@ restore_usb_data() {
     
     # Confirm restore
     if [[ -d "$mount_point/leonardo" ]]; then
-        echo "${COLOR_YELLOW}WARNING: This will overwrite existing Leonardo data${COLOR_RESET}"
+        echo -e "${COLOR_YELLOW}WARNING: This will overwrite existing Leonardo data${COLOR_RESET}"
         if ! confirm_action "Restore Leonardo data"; then
             return 1
         fi

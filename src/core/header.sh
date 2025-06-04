@@ -7,6 +7,11 @@
 # Dependencies: none
 # ==============================================================================
 
+# Ensure TERM is set for terminal operations
+if [[ -z "$TERM" ]]; then
+    export TERM=xterm
+fi
+
 # Script metadata
 readonly LEONARDO_VERSION="7.0.0"
 readonly LEONARDO_NAME="Leonardo AI Universal"

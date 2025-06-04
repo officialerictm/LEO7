@@ -18,49 +18,78 @@ OUTPUT_FILE="$PROJECT_ROOT/leonardo.sh"
 echo -e "${CYAN}Leonardo AI Universal - Simple Assembler${NC}"
 echo "Building leonardo.sh..."
 
-# Start the output file
+# Start the output file with shebang and header
 cat > "$OUTPUT_FILE" << 'EOF'
 #!/usr/bin/env bash
 # Leonardo AI Universal - Portable AI Deployment System
 # Version: 7.0.0
 # This file was automatically generated - DO NOT EDIT
 
-set -euo pipefail
+# Ensure TERM is set for terminal operations
+if [[ -z "${TERM:-}" ]]; then
+    export TERM=xterm
+fi
 
 EOF
 
-# Add components in order (simplified, based on manifest structure)
+# Components to build
 COMPONENTS=(
+    # Core components (required)
     "src/core/header.sh"
     "src/core/config.sh"
-    "src/utils/colors.sh"
+    
+    # Utilities
     "src/utils/logging.sh"
+    "src/utils/colors.sh"
     "src/utils/validation.sh"
     "src/utils/filesystem.sh"
-    "src/network/download.sh"
-    "src/network/transfer.sh"
     "src/utils/network.sh"
+    "src/utils/terminal.sh"
     
-    # USB modules
+    # UI components
+    "src/ui/menu.sh"
+    "src/ui/progress.sh"
+    "src/ui/dashboard.sh"
+    "src/ui/web.sh"
+    "src/ui/web_server.sh"
+    
+    # Security (stubs for now)
+    "src/security/audit.sh"
+    "src/security/memory.sh" 
+    "src/security/encryption.sh"
+    
+    # Model management
+    "src/models/model_database.sh"
+    "src/models/registry.sh"
+    "src/models/metadata.sh"
+    "src/models/providers/ollama.sh"
+    "src/models/manager.sh"
+    "src/models/selector.sh"
+    "src/models/cli.sh"
+    
+    # Deployment
+    "src/deployment/validator.sh"
+    "src/deployment/deployment.sh"
+    "src/deployment/usb_deploy.sh"
+    "src/deployment/cli.sh"
+    
+    # USB management
     "src/usb/detector.sh"
     "src/usb/manager.sh"
     "src/usb/health.sh"
     "src/usb/cli.sh"
     
-    # Network modules
-    "src/network/checksum.sh"
-    
-    # Deployment modules
-    "src/deployment/usb_deploy.sh"
-    "src/deployment/local_deploy.sh"
-    "src/deployment/cli.sh"
-    
-    # UI modules
-    "src/ui/menu.sh"
-    "src/ui/progress.sh"
-    "src/ui/dashboard.sh"
-    "src/ui/web.sh"
+    # Main entry point (must be last)
     "src/core/main.sh"
+)
+
+# Stub files to create if missing
+STUB_FILES=(
+    "src/security/audit.sh"
+    "src/security/memory.sh"
+    "src/security/encryption.sh"
+    "src/deployment/validator.sh"
+    "src/deployment/deployment.sh"
 )
 
 # Assemble components
@@ -72,37 +101,22 @@ for component in "${COMPONENTS[@]}"; do
         # Skip the shebang line
         tail -n +2 "$component_path" >> "$OUTPUT_FILE"
     else
-        echo -e "${BLUE}Creating stub for${NC}: $component"
-        echo -e "\n# ==== Component: $component (STUB) ====" >> "$OUTPUT_FILE"
-        echo "# TODO: Implement $component" >> "$OUTPUT_FILE"
+        if [[ " ${STUB_FILES[@]} " =~ " $component " ]]; then
+            echo -e "${BLUE}Creating stub for${NC}: $component"
+            echo -e "\n# ==== Component: $component (STUB) ====" >> "$OUTPUT_FILE"
+            echo "# TODO: Implement $component" >> "$OUTPUT_FILE"
+        else
+            echo -e "${BLUE}Error: Missing component${NC}: $component"
+            exit 1
+        fi
     fi
 done
 
-# Add model management components
-echo -e "${BLUE}Adding${NC}: src/models/registry.sh"
-echo -e "\n# ==== Component: src/models/registry.sh ====" >> "$OUTPUT_FILE"
-tail -n +2 "$PROJECT_ROOT/src/models/registry.sh" >> "$OUTPUT_FILE"
-
-echo -e "${BLUE}Adding${NC}: src/models/manager.sh"
-echo -e "\n# ==== Component: src/models/manager.sh ====" >> "$OUTPUT_FILE"
-tail -n +2 "$PROJECT_ROOT/src/models/manager.sh" >> "$OUTPUT_FILE"
-
-echo -e "${BLUE}Adding${NC}: src/models/selector.sh"
-echo -e "\n# ==== Component: src/models/selector.sh ====" >> "$OUTPUT_FILE"
-tail -n +2 "$PROJECT_ROOT/src/models/selector.sh" >> "$OUTPUT_FILE"
-
-echo -e "${BLUE}Adding${NC}: src/models/cli.sh"
-echo -e "\n# ==== Component: src/models/cli.sh ====" >> "$OUTPUT_FILE"
-tail -n +2 "$PROJECT_ROOT/src/models/cli.sh" >> "$OUTPUT_FILE"
-
-# Add footer
+# Add main call at the end
 cat >> "$OUTPUT_FILE" << 'EOF'
 
-# ==== Footer ====
-# If main hasn't been called, call it now
-if [ "${LEONARDO_MAIN_CALLED:-false}" = "false" ]; then
-    main "$@"
-fi
+# Call main function with all arguments
+main "$@"
 EOF
 
 # Make executable

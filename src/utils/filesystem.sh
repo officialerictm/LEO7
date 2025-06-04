@@ -7,6 +7,32 @@
 # Dependencies: logging.sh, colors.sh, validation.sh
 # ==============================================================================
 
+# Create directory with proper permissions
+create_directory() {
+    local dir="$1"
+    local mode="${2:-755}"
+    
+    if [[ -z "$dir" ]]; then
+        log_error "create_directory: No directory specified"
+        return 1
+    fi
+    
+    if [[ -d "$dir" ]]; then
+        log_debug "Directory already exists: $dir"
+        return 0
+    fi
+    
+    log_debug "Creating directory: $dir"
+    if mkdir -p "$dir" 2>/dev/null; then
+        chmod "$mode" "$dir" 2>/dev/null || true
+        log_debug "Directory created successfully: $dir"
+        return 0
+    else
+        log_error "Failed to create directory: $dir"
+        return 1
+    fi
+}
+
 # Detect available USB devices
 detect_usb_devices() {
     local devices=()
@@ -365,3 +391,4 @@ cleanup_temp_files() {
 export -f detect_usb_devices format_usb_device mount_device unmount_device
 export -f check_available_space create_leonardo_structure copy_with_progress
 export -f safe_delete get_file_checksum create_temp_dir
+export -f create_directory

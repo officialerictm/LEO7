@@ -314,7 +314,7 @@ on_usb_change() {
     log_message "INFO" "USB Event: $event"
     
     # Refresh USB device list
-    echo "${COLOR_YELLOW}USB device change detected. Refreshing...${COLOR_RESET}"
+    echo -e "${YELLOW}USB device change detected. Refreshing...${COLOR_RESET}"
     list_usb_drives
 }
 
@@ -323,11 +323,11 @@ list_usb_drives() {
     local format="${1:-table}"
     local drives_found=0
     
-    echo "${COLOR_CYAN}Detecting USB drives...${COLOR_RESET}"
+    echo -e "${CYAN}Detecting USB drives...${COLOR_RESET}"
     echo ""
     
     if [[ "$format" == "table" ]]; then
-        printf "${COLOR_CYAN}%-15s %-30s %-10s %-30s${COLOR_RESET}\n" \
+        printf "%-15s %-30s %-10s %-30s\n" \
             "Device" "Name" "Size" "Mount Point"
         echo "--------------------------------------------------------------------------------"
     fi
@@ -350,11 +350,11 @@ list_usb_drives() {
     done < <(detect_usb_drives)
     
     if [[ $drives_found -eq 0 ]]; then
-        echo "${COLOR_YELLOW}No USB drives detected${COLOR_RESET}"
+        echo -e "${YELLOW}No USB drives detected${COLOR_RESET}"
         return 1
     else
         [[ "$format" == "table" ]] && echo ""
-        echo "${COLOR_GREEN}Found $drives_found USB drive(s)${COLOR_RESET}"
+        echo -e "${GREEN}Found $drives_found USB drive(s)${COLOR_RESET}"
     fi
     
     return 0
@@ -386,7 +386,7 @@ test_usb_write_speed() {
         return 1
     fi
     
-    echo "${COLOR_CYAN}Testing USB write speed on $device...${COLOR_RESET}"
+    echo -e "${CYAN}Testing USB write speed on $device...${COLOR_RESET}"
     echo "Mount point: $mount_point"
     
     local test_file="$mount_point/.leonardo_speed_test_$$"
@@ -404,7 +404,7 @@ test_usb_write_speed() {
         
         rm -f "$test_file"
     else
-        echo "${COLOR_RED}Write test failed${COLOR_RESET}"
+        echo -e "${RED}Write test failed${COLOR_RESET}"
         return 1
     fi
 }

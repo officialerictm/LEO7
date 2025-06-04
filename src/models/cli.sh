@@ -8,334 +8,303 @@
 # ==============================================================================
 
 # Model CLI help
-show_model_help() {
+model_cli_help() {
     cat << EOF
-${COLOR_CYAN}Leonardo Model Management${COLOR_RESET}
+Leonardo Model Management
 
-${COLOR_GREEN}Usage:${COLOR_RESET}
-  leonardo model <command> [options]
+Commands:
+  list [--installed]       List available or installed models
+  info <model>            Show detailed model information
+  install <model>         Download and install a model
+  remove <model>          Remove an installed model
+  run <model>             Run a model (if supported)
+  update                  Update model registry
 
-${COLOR_GREEN}Commands:${COLOR_RESET}
-  list              List available models
-  installed         List installed models
-  info <model>      Show model information
-  download <model>  Download a model
-  delete <model>    Delete an installed model
-  import <file>     Import a model from file
-  export <model>    Export a model to file
-  search <query>    Search for models
-  compare           Compare two models
-  select            Interactive model selector
-  update            Update model registry
-  preferences       Configure model preferences
+Model Format:
+  <provider>:<model>:<variant>  Full specification
+  <model>:<variant>             Model with variant (assumes Ollama)
+  <model>                       Just model name (assumes Ollama:latest)
 
-${COLOR_GREEN}Examples:${COLOR_RESET}
-  leonardo model list
-  leonardo model download llama3-8b
-  leonardo model info mistral-7b
-  leonardo model search llama
-  leonardo model import ~/models/llama-3-8b.gguf
-  leonardo model export llama3-8b ~/backup/
+Examples:
+  leonardo model list              # List available models
+  leonardo model install llama2    # Install Llama 2 (latest)
+  leonardo model install mistral:7b # Install Mistral 7B
+  leonardo model run codellama     # Run Code Llama
+  leonardo model info phi          # Show info about Phi model
 
-${COLOR_GREEN}Quick Start:${COLOR_RESET}
-  leonardo model select    # Interactive model selection
+Providers:
+  ollama        Ollama models (default)
+  huggingface   HuggingFace models (coming soon)
+  custom        Custom models
 
 EOF
 }
+
+# Parse model CLI commands
+parse_model_command() {
+    local command="$1"
+    shift
+    
+    case "$command" in
+        list)
+            model_list_command "$@"
+            ;;
+        info)
+            model_info_command "$@"
+            ;;
+        install|download)
+            model_install_command "$@"
+            ;;
+        remove|delete|uninstall)
+            model_remove_command "$@"
+            ;;
+        run|start)
+            model_run_command "$@"
+            ;;
+        update)
+            model_update_command "$@"
+            ;;
+        help|--help|-h)
+            model_cli_help
+            ;;
+        *)
+            log_error "Unknown model command: $command"
+            model_cli_help
+            return 1
+            ;;
+    esac
+}
+
+# List models command
+model_list_command() {
+    local installed_only=false
+    
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --installed|-i)
+                installed_only=true
+                ;;
+            *)
+                log_error "Unknown option: $1"
+                return 1
+                ;;
+        esac
+        shift
+    done
+    
+    if [[ "$installed_only" == "true" ]]; then
+        list_installed_models
+    else
+        list_available_models
+    fi
+}
+
+# Model info command
+model_info_command() {
+    local model_spec="$1"
+    
+    if [[ -z "$model_spec" ]]; then
+        log_error "Model name required"
+        echo "Usage: leonardo model info <model>"
+        return 1
+    fi
+    
+    local info=$(get_model_info "$model_spec")
+    
+    if [[ -n "$info" ]]; then
+        echo "Model Information:"
+        echo "=================="
+        echo "$info" | python3 -m json.tool 2>/dev/null || echo "$info"
+    else
+        log_error "Failed to get model information"
+        return 1
+    fi
+}
+
+# Install model command
+model_install_command() {
+    local model_spec="$1"
+    
+    if [[ -z "$model_spec" ]]; then
+        echo -e "${RED}Error: No model specified${COLOR_RESET}"
+        echo "Usage: leonardo model install <model_id>"
+        echo ""
+        echo "Examples:"
+        echo "  leonardo model install llama2"
+        echo "  leonardo model install mistral:7b"
+        echo "  leonardo model install codellama:13b"
+        return 1
+    fi
+    
+    # Initialize model system if needed
+    if [[ ! -d "$LEONARDO_MODELS_DIR" ]]; then
+        init_model_system || return 1
+    fi
+    
+    # Check if Ollama needs to be installed
+    if [[ "$model_spec" != *":"* ]] || [[ "$model_spec" == ollama:* ]]; then
+        if ! check_ollama_installed; then
+            log_warn "Ollama is not installed"
+            echo -n "Would you like to install Ollama? [y/N] "
+            read -r response
+            if [[ "$response" =~ ^[Yy] ]]; then
+                install_ollama || {
+                    log_error "Failed to install Ollama"
+                    return 1
+                }
+            else
+                log_info "Installing without Ollama CLI (limited functionality)"
+            fi
+        fi
+    fi
+    
+    # Install the model
+    install_model "$model_spec"
+}
+
+# Remove model command
+model_remove_command() {
+    local model_spec="$1"
+    
+    if [[ -z "$model_spec" ]]; then
+        log_error "Model name required"
+        echo "Usage: leonardo model remove <model>"
+        return 1
+    fi
+    
+    # Confirm removal
+    echo -n "Are you sure you want to remove model '$model_spec'? [y/N] "
+    read -r response
+    
+    if [[ "$response" =~ ^[Yy] ]]; then
+        remove_model "$model_spec"
+    else
+        log_info "Model removal cancelled"
+    fi
+}
+
+# Run model command
+model_run_command() {
+    local model_spec="$1"
+    shift
+    
+    if [[ -z "$model_spec" ]]; then
+        log_error "Model name required"
+        echo "Usage: leonardo model run <model>"
+        return 1
+    fi
+    
+    run_model "$model_spec" "$@"
+}
+
+# Update model registry
+model_update_command() {
+    update_model_registry
+}
+
+# Model menu for interactive mode
+model_management_menu() {
+    while true; do
+        local options=(
+            "List Available Models"
+            "List Installed Models"
+            "Install Model"
+            "Remove Model"
+            "Model Information"
+            "Run Model"
+            "Update Registry"
+            "Back to Main Menu"
+        )
+        
+        local selection=$(show_menu "Model Management" "${options[@]}")
+        
+        case "$selection" in
+            "List Available Models")
+                clear
+                list_available_models
+                echo
+                read -p "Press Enter to continue..."
+                ;;
+            "List Installed Models")
+                clear
+                list_installed_models
+                echo
+                read -p "Press Enter to continue..."
+                ;;
+            "Install Model")
+                clear
+                list_available_models
+                echo
+                read -p "Enter model to install (e.g., llama2, mistral:7b): " model_spec
+                if [[ -n "$model_spec" ]]; then
+                    model_install_command "$model_spec"
+                fi
+                echo
+                read -p "Press Enter to continue..."
+                ;;
+            "Remove Model")
+                clear
+                list_installed_models
+                echo
+                read -p "Enter model to remove: " model_spec
+                if [[ -n "$model_spec" ]]; then
+                    model_remove_command "$model_spec"
+                fi
+                echo
+                read -p "Press Enter to continue..."
+                ;;
+            "Model Information")
+                clear
+                list_available_models
+                echo
+                read -p "Enter model name: " model_spec
+                if [[ -n "$model_spec" ]]; then
+                    model_info_command "$model_spec"
+                fi
+                echo
+                read -p "Press Enter to continue..."
+                ;;
+            "Run Model")
+                clear
+                list_installed_models
+                echo
+                read -p "Enter model to run: " model_spec
+                if [[ -n "$model_spec" ]]; then
+                    model_run_command "$model_spec"
+                fi
+                ;;
+            "Update Registry")
+                clear
+                model_update_command
+                echo
+                read -p "Press Enter to continue..."
+                ;;
+            "Back to Main Menu"|"")
+                break
+                ;;
+        esac
+    done
+}
+
+# Export functions
+export -f parse_model_command
+export -f model_list_command
+export -f model_info_command
+export -f model_install_command
+export -f model_remove_command
+export -f model_run_command
+export -f model_update_command
+export -f model_management_menu
 
 # Model CLI router
 handle_model_command() {
     local command="${1:-help}"
     shift
     
-    # Initialize model manager if needed
-    if [[ -z "${LEONARDO_MODEL_REGISTRY[*]:-}" ]]; then
-        init_model_manager
-    fi
-    
-    case "$command" in
-        "list"|"ls")
-            handle_model_list "$@"
-            ;;
-        "installed"|"i")
-            list_installed_models
-            ;;
-        "info"|"show")
-            handle_model_info "$@"
-            ;;
-        "download"|"dl"|"get")
-            handle_model_download "$@"
-            ;;
-        "delete"|"rm"|"remove")
-            handle_model_delete "$@"
-            ;;
-        "import")
-            handle_model_import "$@"
-            ;;
-        "export")
-            handle_model_export "$@"
-            ;;
-        "search"|"find")
-            handle_model_search "$@"
-            ;;
-        "compare"|"diff")
-            handle_model_compare "$@"
-            ;;
-        "select"|"choose")
-            interactive_model_selector "$@"
-            ;;
-        "update"|"refresh")
-            update_model_registry
-            ;;
-        "preferences"|"prefs"|"config")
-            configure_model_preferences
-            ;;
-        "help"|"--help"|"-h")
-            show_model_help
-            ;;
-        *)
-            echo "${COLOR_RED}Unknown model command: $command${COLOR_RESET}"
-            echo "Run 'leonardo model help' for usage"
-            return 1
-            ;;
-    esac
-}
-
-# Handle model list command
-handle_model_list() {
-    local filter="${1:-}"
-    local format="${2:-table}"
-    
-    # Parse options
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            --json)
-                format="json"
-                ;;
-            --simple)
-                format="simple"
-                ;;
-            --filter=*)
-                filter="${1#*=}"
-                ;;
-            --family=*)
-                filter="${1#*=}"
-                ;;
-            --installed)
-                filter="installed"
-                ;;
-            *)
-                filter="$1"
-                ;;
-        esac
-        shift
-    done
-    
-    # Special case for installed filter
-    if [[ "$filter" == "installed" ]]; then
-        list_installed_models
-        return
-    fi
-    
-    list_models "$filter" "$format"
-}
-
-# Handle model info command
-handle_model_info() {
-    local model_id="$1"
-    
-    if [[ -z "$model_id" ]]; then
-        echo "${COLOR_RED}Error: Model ID required${COLOR_RESET}"
-        echo "Usage: leonardo model info <model-id>"
-        return 1
-    fi
-    
-    get_model_info "$model_id"
-}
-
-# Handle model download command
-handle_model_download() {
-    local model_id="$1"
-    local force=false
-    
-    # Parse options
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            --force|-f)
-                force=true
-                ;;
-            --*)
-                echo "${COLOR_RED}Unknown option: $1${COLOR_RESET}"
-                return 1
-                ;;
-            *)
-                model_id="$1"
-                ;;
-        esac
-        shift
-    done
-    
-    if [[ -z "$model_id" ]]; then
-        # Interactive selection
-        model_id=$(model_selection_menu)
-        [[ -z "$model_id" ]] && return 1
-    fi
-    
-    download_model "$model_id" "$force"
-}
-
-# Handle model delete command
-handle_model_delete() {
-    local model_id="$1"
-    
-    if [[ -z "$model_id" ]]; then
-        # Show installed models for selection
-        echo "${COLOR_CYAN}Select model to delete:${COLOR_RESET}"
-        list_installed_models
-        echo ""
-        model_id=$(show_input_dialog "Model ID to delete:")
-        [[ -z "$model_id" ]] && return 1
-    fi
-    
-    delete_model "$model_id"
-}
-
-# Handle model import command
-handle_model_import() {
-    local file_path="$1"
-    local model_id="$2"
-    
-    if [[ -z "$file_path" ]]; then
-        echo "${COLOR_RED}Error: File path required${COLOR_RESET}"
-        echo "Usage: leonardo model import <file> [model-id]"
-        return 1
-    fi
-    
-    import_model "$file_path" "$model_id"
-}
-
-# Handle model export command
-handle_model_export() {
-    local model_id="$1"
-    local export_path="${2:-$PWD}"
-    
-    if [[ -z "$model_id" ]]; then
-        # Show installed models for selection
-        echo "${COLOR_CYAN}Select model to export:${COLOR_RESET}"
-        list_installed_models
-        echo ""
-        model_id=$(show_input_dialog "Model ID to export:")
-        [[ -z "$model_id" ]] && return 1
-    fi
-    
-    export_model "$model_id" "$export_path"
-}
-
-# Handle model search command
-handle_model_search() {
-    local query="$1"
-    
-    if [[ -z "$query" ]]; then
-        query=$(show_input_dialog "Search query:")
-        [[ -z "$query" ]] && return 1
-    fi
-    
-    search_models "$query"
-}
-
-# Handle model compare command
-handle_model_compare() {
-    local model1="$1"
-    local model2="$2"
-    
-    compare_models "$model1" "$model2"
-}
-
-# Model batch operations
-batch_download_models() {
-    local models=("$@")
-    
-    if [[ ${#models[@]} -eq 0 ]]; then
-        # Interactive multi-select
-        local all_models=()
-        local display_names=()
-        
-        for model_id in $(list_models "" "simple" | sort); do
-            if [[ "$(get_model_status "$model_id")" != "installed" ]]; then
-                all_models+=("$model_id")
-                display_names+=("$(get_model_metadata "$model_id" "name") ($(get_model_metadata "$model_id" "size"))")
-            fi
-        done
-        
-        local selected=$(show_checklist "Select models to download:" "${display_names[@]}")
-        
-        if [[ -z "$selected" ]]; then
-            return 1
-        fi
-        
-        for idx in $selected; do
-            models+=("${all_models[$idx]}")
-        done
-    fi
-    
-    echo "${COLOR_CYAN}Batch download: ${#models[@]} models${COLOR_RESET}"
-    echo ""
-    
-    local success=0
-    local failed=0
-    
-    for model_id in "${models[@]}"; do
-        echo "${COLOR_YELLOW}Downloading: $model_id${COLOR_RESET}"
-        if download_model "$model_id"; then
-            ((success++))
-        else
-            ((failed++))
-        fi
-        echo ""
-    done
-    
-    echo "${COLOR_CYAN}Batch download complete${COLOR_RESET}"
-    echo "${COLOR_GREEN}Success: $success${COLOR_RESET}"
-    [[ $failed -gt 0 ]] && echo "${COLOR_RED}Failed: $failed${COLOR_RESET}"
-}
-
-# Model statistics
-show_model_statistics() {
-    echo "${COLOR_CYAN}Model Statistics${COLOR_RESET}"
-    echo "${COLOR_DIM}$(printf '%60s' | tr ' ' '-')${COLOR_RESET}"
-    
-    # Total models
-    echo "Total models available: ${#LEONARDO_MODEL_REGISTRY[@]}"
-    echo "Models installed: ${#LEONARDO_INSTALLED_MODELS[@]}"
-    
-    # By family
-    echo ""
-    echo "${COLOR_GREEN}Models by family:${COLOR_RESET}"
-    declare -A family_count
-    for model_id in "${!LEONARDO_MODEL_REGISTRY[@]}"; do
-        local family=$(get_model_metadata "$model_id" "family")
-        ((family_count[$family]++))
-    done
-    
-    for family in "${!family_count[@]}"; do
-        printf "  %-15s %3d models\n" "$family:" "${family_count[$family]}"
-    done
-    
-    # Disk usage
-    if [[ ${#LEONARDO_INSTALLED_MODELS[@]} -gt 0 ]]; then
-        echo ""
-        echo "${COLOR_GREEN}Disk usage:${COLOR_RESET}"
-        local total_size=0
-        for model_path in "${LEONARDO_INSTALLED_MODELS[@]}"; do
-            if [[ -f "$model_path" ]]; then
-                local size=$(stat -f%z "$model_path" 2>/dev/null || stat -c%s "$model_path" 2>/dev/null || echo 0)
-                ((total_size += size))
-            fi
-        done
-        echo "  Total: $(format_bytes $total_size)"
-        echo "  Average: $(format_bytes $((total_size / ${#LEONARDO_INSTALLED_MODELS[@]})))"
-    fi
+    # Parse new-style commands
+    parse_model_command "$command" "$@"
 }
 
 # Export CLI functions
-export -f handle_model_command show_model_help batch_download_models show_model_statistics
+export -f handle_model_command

@@ -102,7 +102,7 @@ usb_cli() {
             usb_cli_help
             ;;
         *)
-            echo "${COLOR_RED}Unknown command: $command${COLOR_RESET}"
+            echo -e "${COLOR_RED}Unknown command: $command${COLOR_RESET}"
             echo "Use 'leonardo usb help' for usage information"
             return 1
             ;;
@@ -138,13 +138,13 @@ usb_cli_info() {
     local device="$1"
     
     if [[ -z "$device" ]]; then
-        echo "${COLOR_RED}Error: No device specified${COLOR_RESET}"
+        echo -e "${COLOR_RED}Error: No device specified${COLOR_RESET}"
         echo "Usage: leonardo usb info <device>"
         return 1
     fi
     
     if ! is_usb_device "$device"; then
-        echo "${COLOR_RED}Error: Not a USB device: $device${COLOR_RESET}"
+        echo -e "${COLOR_RED}Error: Not a USB device: $device${COLOR_RESET}"
         return 1
     fi
     
@@ -171,13 +171,13 @@ usb_cli_info() {
     
     if [[ -n "$mount_point" ]] && [[ -f "$mount_point/leonardo.sh" ]]; then
         echo ""
-        echo "${COLOR_GREEN}Leonardo Status: Installed${COLOR_RESET}"
+        echo -e "${COLOR_GREEN}Leonardo Status: Installed${COLOR_RESET}"
         if [[ -f "$mount_point/leonardo/VERSION" ]]; then
             echo "Leonardo Version: $(cat "$mount_point/leonardo/VERSION")"
         fi
     else
         echo ""
-        echo "${COLOR_YELLOW}Leonardo Status: Not Installed${COLOR_RESET}"
+        echo -e "${COLOR_YELLOW}Leonardo Status: Not Installed${COLOR_RESET}"
     fi
 }
 
@@ -186,7 +186,7 @@ usb_cli_init() {
     local device="$1"
     
     if [[ -z "$device" ]]; then
-        echo "${COLOR_RED}Error: No device specified${COLOR_RESET}"
+        echo -e "${COLOR_RED}Error: No device specified${COLOR_RESET}"
         echo "Usage: leonardo usb init <device>"
         return 1
     fi
@@ -198,7 +198,7 @@ usb_cli_init() {
     
     # Check if already has Leonardo structure
     if [[ -n "$LEONARDO_USB_MOUNT" ]] && [[ -d "$LEONARDO_USB_MOUNT/leonardo" ]]; then
-        echo "${COLOR_YELLOW}Leonardo structure already exists on USB${COLOR_RESET}"
+        echo -e "${COLOR_YELLOW}Leonardo structure already exists on USB${COLOR_RESET}"
         if ! confirm_action "Reinitialize USB"; then
             return 0
         fi
@@ -210,7 +210,7 @@ usb_cli_init() {
     fi
     
     echo ""
-    echo "${COLOR_GREEN}USB drive initialized for Leonardo!${COLOR_RESET}"
+    echo -e "${COLOR_GREEN}USB drive initialized for Leonardo!${COLOR_RESET}"
     echo "Next step: leonardo usb install"
 }
 
@@ -235,11 +235,11 @@ usb_cli_install() {
     
     # Auto-detect if no device specified
     if [[ -z "$device" ]]; then
-        echo "${COLOR_CYAN}Auto-detecting USB device...${COLOR_RESET}"
+        echo -e "${COLOR_CYAN}Auto-detecting USB device...${COLOR_RESET}"
         device=$(detect_usb_drives | head -1 | cut -d'|' -f1)
         
         if [[ -z "$device" ]]; then
-            echo "${COLOR_RED}No USB device detected${COLOR_RESET}"
+            echo -e "${COLOR_RED}No USB device detected${COLOR_RESET}"
             return 1
         fi
         
@@ -251,7 +251,7 @@ usb_cli_install() {
     
     # Check if Leonardo script exists
     if [[ ! -f "$leonardo_script" ]]; then
-        echo "${COLOR_RED}Leonardo script not found: $leonardo_script${COLOR_RESET}"
+        echo -e "${COLOR_RED}Leonardo script not found: $leonardo_script${COLOR_RESET}"
         return 1
     fi
     
@@ -289,7 +289,7 @@ usb_cli_format() {
     done
     
     if [[ -z "$device" ]]; then
-        echo "${COLOR_RED}Error: No device specified${COLOR_RESET}"
+        echo -e "${COLOR_RED}Error: No device specified${COLOR_RESET}"
         echo "Usage: leonardo usb format <device> [--format <fs>] [--label <name>]"
         return 1
     fi
@@ -299,7 +299,7 @@ usb_cli_format() {
         exfat|fat32|ntfs|ext4)
             ;;
         *)
-            echo "${COLOR_RED}Error: Unsupported filesystem: $filesystem${COLOR_RESET}"
+            echo -e "${COLOR_RED}Error: Unsupported filesystem: $filesystem${COLOR_RESET}"
             echo "Supported: exfat, fat32, ntfs, ext4"
             return 1
             ;;
@@ -314,7 +314,7 @@ usb_cli_mount() {
     local mount_point="$2"
     
     if [[ -z "$device" ]]; then
-        echo "${COLOR_RED}Error: No device specified${COLOR_RESET}"
+        echo -e "${COLOR_RED}Error: No device specified${COLOR_RESET}"
         echo "Usage: leonardo usb mount <device> [mount_point]"
         return 1
     fi
@@ -327,7 +327,7 @@ usb_cli_unmount() {
     local device="$1"
     
     if [[ -z "$device" ]]; then
-        echo "${COLOR_RED}Error: No device specified${COLOR_RESET}"
+        echo -e "${COLOR_RED}Error: No device specified${COLOR_RESET}"
         echo "Usage: leonardo usb unmount <device>"
         return 1
     fi
@@ -364,7 +364,7 @@ usb_cli_health() {
         else
             device=$(detect_usb_drives | head -1 | cut -d'|' -f1)
             if [[ -z "$device" ]]; then
-                echo "${COLOR_RED}No USB device detected${COLOR_RESET}"
+                echo -e "${COLOR_RED}No USB device detected${COLOR_RESET}"
                 return 1
             fi
         fi
@@ -413,7 +413,7 @@ usb_cli_monitor() {
         else
             device=$(detect_usb_drives | head -1 | cut -d'|' -f1)
             if [[ -z "$device" ]]; then
-                echo "${COLOR_RED}No USB device detected${COLOR_RESET}"
+                echo -e "${COLOR_RED}No USB device detected${COLOR_RESET}"
                 return 1
             fi
         fi
@@ -455,7 +455,7 @@ usb_cli_backup() {
         else
             device=$(detect_usb_drives | head -1 | cut -d'|' -f1)
             if [[ -z "$device" ]]; then
-                echo "${COLOR_RED}No USB device detected${COLOR_RESET}"
+                echo -e "${COLOR_RED}No USB device detected${COLOR_RESET}"
                 return 1
             fi
         fi
@@ -468,7 +468,7 @@ usb_cli_backup() {
     
     # Check if Leonardo exists
     if [[ ! -d "$LEONARDO_USB_MOUNT/leonardo" ]]; then
-        echo "${COLOR_RED}Leonardo not found on USB device${COLOR_RESET}"
+        echo -e "${COLOR_RED}Leonardo not found on USB device${COLOR_RESET}"
         return 1
     fi
     
@@ -481,13 +481,13 @@ usb_cli_restore() {
     local device="$2"
     
     if [[ -z "$backup_file" ]]; then
-        echo "${COLOR_RED}Error: No backup file specified${COLOR_RESET}"
+        echo -e "${COLOR_RED}Error: No backup file specified${COLOR_RESET}"
         echo "Usage: leonardo usb restore <backup_file> [device]"
         return 1
     fi
     
     if [[ ! -f "$backup_file" ]]; then
-        echo "${COLOR_RED}Error: Backup file not found: $backup_file${COLOR_RESET}"
+        echo -e "${COLOR_RED}Error: Backup file not found: $backup_file${COLOR_RESET}"
         return 1
     fi
     
@@ -498,7 +498,7 @@ usb_cli_restore() {
         else
             device=$(detect_usb_drives | head -1 | cut -d'|' -f1)
             if [[ -z "$device" ]]; then
-                echo "${COLOR_RED}No USB device detected${COLOR_RESET}"
+                echo -e "${COLOR_RED}No USB device detected${COLOR_RESET}"
                 return 1
             fi
             
@@ -528,7 +528,7 @@ usb_cli_clean() {
         else
             device=$(detect_usb_drives | head -1 | cut -d'|' -f1)
             if [[ -z "$device" ]]; then
-                echo "${COLOR_RED}No USB device detected${COLOR_RESET}"
+                echo -e "${COLOR_RED}No USB device detected${COLOR_RESET}"
                 return 1
             fi
         fi
@@ -541,7 +541,7 @@ usb_cli_clean() {
     
     # Check if Leonardo exists
     if [[ ! -d "$LEONARDO_USB_MOUNT/leonardo" ]]; then
-        echo "${COLOR_RED}Leonardo not found on USB device${COLOR_RESET}"
+        echo -e "${COLOR_RED}Leonardo not found on USB device${COLOR_RESET}"
         return 1
     fi
     
@@ -571,7 +571,7 @@ usb_cli_test() {
         else
             device=$(detect_usb_drives | head -1 | cut -d'|' -f1)
             if [[ -z "$device" ]]; then
-                echo "${COLOR_RED}No USB device detected${COLOR_RESET}"
+                echo -e "${COLOR_RED}No USB device detected${COLOR_RESET}"
                 return 1
             fi
         fi
@@ -582,7 +582,7 @@ usb_cli_test() {
         return 1
     fi
     
-    echo "${COLOR_CYAN}USB Performance Test${COLOR_RESET}"
+    echo -e "${COLOR_CYAN}USB Performance Test${COLOR_RESET}"
     echo "===================="
     echo "Device: $device"
     echo "Mount: $LEONARDO_USB_MOUNT"
@@ -615,7 +615,64 @@ register_usb_commands() {
     log_message "INFO" "USB commands registered"
 }
 
-# Export USB CLI functions
+# Main USB command handler
+handle_usb_command() {
+    local subcommand="${1:-help}"
+    shift || true
+    
+    case "$subcommand" in
+        list)
+            usb_cli_list "$@"
+            ;;
+        info)
+            usb_cli_info "$@"
+            ;;
+        init|initialize)
+            usb_cli_init "$@"
+            ;;
+        install)
+            usb_cli_install "$@"
+            ;;
+        format)
+            usb_cli_format "$@"
+            ;;
+        mount)
+            usb_cli_mount "$@"
+            ;;
+        unmount|umount)
+            usb_cli_unmount "$@"
+            ;;
+        health)
+            usb_cli_health "$@"
+            ;;
+        monitor)
+            usb_cli_monitor "$@"
+            ;;
+        backup)
+            usb_cli_backup "$@"
+            ;;
+        restore)
+            usb_cli_restore "$@"
+            ;;
+        clean)
+            usb_cli_clean "$@"
+            ;;
+        test)
+            usb_cli_test "$@"
+            ;;
+        help|--help|-h)
+            usb_cli_help
+            ;;
+        *)
+            echo -e "${COLOR_RED}Unknown USB command: $subcommand${COLOR_RESET}"
+            echo "Run 'leonardo usb help' for available commands"
+            return 1
+            ;;
+    esac
+}
+
+# Export functions
+export -f handle_usb_command
 export -f usb_cli usb_cli_help
 export -f usb_cli_list usb_cli_info usb_cli_init usb_cli_install
 export -f usb_cli_format usb_cli_mount usb_cli_unmount

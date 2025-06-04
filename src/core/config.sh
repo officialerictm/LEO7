@@ -132,5 +132,8 @@ export LEONARDO_SECURE_DELETE="${LEONARDO_SECURE_DELETE:-false}"
 export LEONARDO_AUDIT_LOG="${LEONARDO_AUDIT_LOG:-false}"
 export LEONARDO_NO_TELEMETRY="${LEONARDO_NO_TELEMETRY:-true}"
 
+# Leonardo description
+export LEONARDO_DESCRIPTION="Portable AI deployment system with integrated model management"
+
 # Export configuration for use in other modules
 export LEONARDO_CONFIG_LOADED=true

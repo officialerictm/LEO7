@@ -267,6 +267,216 @@ show_download_progress() {
     fi
 }
 
+# Track download progress with speed and ETA
+track_download_progress() {
+    local url="$1"
+    local output_file="$2"
+    local expected_size="${3:-0}"
+    
+    # Create a temporary file for curl progress
+    local progress_file="/tmp/leonardo_download_$$"
+    
+    # Start curl in background with progress output
+    curl -L -# -o "$output_file" "$url" 2>&1 | \
+    while IFS= read -r line; do
+        # Parse curl progress output
+        if [[ "$line" =~ ^[[:space:]]*([0-9]+\.[0-9]+)%.*([0-9]+[kMG]?).*([0-9]+[kMG]?/s).*([0-9]+:[0-9]+:[0-9]+|[0-9]+:[0-9]+|[0-9]+s) ]]; then
+            local percent="${BASH_REMATCH[1]}"
+            local downloaded="${BASH_REMATCH[2]}"
+            local speed="${BASH_REMATCH[3]}"
+            local eta="${BASH_REMATCH[4]}"
+            
+            # Update progress bar
+            printf "\r${CYAN}Downloading:${COLOR_RESET} "
+            show_progress_bar "${percent%.*}" 100 30
+            printf " ${percent}%% | ${downloaded} | ${speed} | ETA: ${eta}  "
+        fi
+    done
+    
+    # Clear the line
+    printf "\r%-80s\r" " "
+    
+    # Check if download was successful
+    if [[ -f "$output_file" ]]; then
+        local size=$(format_bytes $(stat -f%z "$output_file" 2>/dev/null || stat -c%s "$output_file"))
+        echo -e "${GREEN}✓ Downloaded successfully${COLOR_RESET} (${size})"
+        return 0
+    else
+        echo -e "${RED}✗ Download failed${COLOR_RESET}"
+        return 1
+    fi
+}
+
+# Enhanced download with retry and resume
+download_with_progress() {
+    local url="$1"
+    local output_file="$2"
+    local description="${3:-Downloading}"
+    local max_retries="${4:-3}"
+    
+    echo -e "${CYAN}${description}${COLOR_RESET}"
+    echo "URL: $url"
+    echo "Target: $output_file"
+    echo ""
+    
+    local attempt=1
+    while [[ $attempt -le $max_retries ]]; do
+        if [[ $attempt -gt 1 ]]; then
+            echo -e "${YELLOW}Retry attempt $attempt/$max_retries${COLOR_RESET}"
+        fi
+        
+        # Check if file partially exists (for resume)
+        local resume_flag=""
+        if [[ -f "$output_file" ]]; then
+            resume_flag="-C -"
+            echo -e "${DIM}Resuming download...${COLOR_RESET}"
+        fi
+        
+        # Download with progress
+        if curl -L $resume_flag -# -o "$output_file" "$url" 2>&1 | \
+        while IFS= read -r line; do
+            if [[ "$line" =~ ^[[:space:]]*([0-9]+)\.?[0-9]*[[:space:]]+([0-9]+[kMG]?)[[:space:]]+([0-9]+)\.?[0-9]*[[:space:]]+([0-9]+[kMG]?/s)[[:space:]]+.*[[:space:]]+([0-9]+:[0-9]+:[0-9]+|[0-9]+:[0-9]+|[0-9]+s|--:--:--) ]]; then
+                local percent="${BASH_REMATCH[1]}"
+                local downloaded="${BASH_REMATCH[2]}"
+                local speed="${BASH_REMATCH[4]}"
+                local eta="${BASH_REMATCH[5]}"
+                
+                # Update progress bar
+                printf "\r"
+                show_progress_bar "$percent" 100 40
+                printf " ${percent}%% | ${speed} | ETA: ${eta}  "
+            fi
+        done; then
+            printf "\r%-80s\r" " "
+            local size=$(format_bytes $(stat -f%z "$output_file" 2>/dev/null || stat -c%s "$output_file"))
+            echo -e "${GREEN}✓ Downloaded successfully${COLOR_RESET} (${size})"
+            return 0
+        else
+            printf "\r%-80s\r" " "
+            echo -e "${RED}✗ Download failed${COLOR_RESET}"
+            ((attempt++))
+            if [[ $attempt -le $max_retries ]]; then
+                sleep 2
+            fi
+        fi
+    done
+    
+    return 1
+}
+
+# Copy files with progress
+copy_with_progress() {
+    local source="$1"
+    local dest="$2"
+    local description="${3:-Copying}"
+    
+    if [[ ! -f "$source" ]]; then
+        echo -e "${RED}Source file not found: $source${COLOR_RESET}"
+        return 1
+    fi
+    
+    local total_size=$(stat -f%z "$source" 2>/dev/null || stat -c%s "$source")
+    local total_size_fmt=$(format_bytes "$total_size")
+    
+    echo -e "${CYAN}${description}${COLOR_RESET}"
+    echo "Source: $(basename "$source") ($total_size_fmt)"
+    echo "Destination: $dest"
+    echo ""
+    
+    # Use dd with progress
+    local block_size=1048576  # 1MB blocks
+    local total_blocks=$((total_size / block_size + 1))
+    
+    (
+        dd if="$source" of="$dest" bs=$block_size 2>&1 | \
+        while IFS= read -r line; do
+            if [[ "$line" =~ ^([0-9]+)\+[0-9]+[[:space:]]records ]]; then
+                local blocks="${BASH_REMATCH[1]}"
+                local percent=$((blocks * 100 / total_blocks))
+                local copied=$((blocks * block_size))
+                local copied_fmt=$(format_bytes "$copied")
+                
+                printf "\r"
+                show_progress_bar "$percent" 100 40
+                printf " ${percent}%% | ${copied_fmt}/${total_size_fmt}  "
+            fi
+        done
+    ) &
+    
+    local dd_pid=$!
+    
+    # Monitor progress
+    while kill -0 $dd_pid 2>/dev/null; do
+        if [[ -f "$dest" ]]; then
+            local current_size=$(stat -f%z "$dest" 2>/dev/null || stat -c%s "$dest")
+            local percent=$((current_size * 100 / total_size))
+            local copied_fmt=$(format_bytes "$current_size")
+            
+            printf "\r"
+            show_progress_bar "$percent" 100 40
+            printf " ${percent}%% | ${copied_fmt}/${total_size_fmt}  "
+        fi
+        sleep 0.1
+    done
+    
+    wait $dd_pid
+    local result=$?
+    
+    printf "\r%-80s\r" " "
+    
+    if [[ $result -eq 0 ]]; then
+        echo -e "${GREEN}✓ Copy completed${COLOR_RESET} ($total_size_fmt)"
+        return 0
+    else
+        echo -e "${RED}✗ Copy failed${COLOR_RESET}"
+        return 1
+    fi
+}
+
+# Multi-file copy with overall progress
+copy_directory_with_progress() {
+    local source_dir="$1"
+    local dest_dir="$2"
+    local description="${3:-Copying files}"
+    
+    if [[ ! -d "$source_dir" ]]; then
+        echo -e "${RED}Source directory not found: $source_dir${COLOR_RESET}"
+        return 1
+    fi
+    
+    # Calculate total size
+    echo -e "${CYAN}Calculating total size...${COLOR_RESET}"
+    local total_size=$(du -sb "$source_dir" 2>/dev/null | cut -f1 || du -sk "$source_dir" | cut -f1)
+    local total_size_fmt=$(format_bytes "$total_size")
+    
+    echo -e "${CYAN}${description}${COLOR_RESET}"
+    echo "Source: $source_dir"
+    echo "Destination: $dest_dir"
+    echo "Total size: $total_size_fmt"
+    echo ""
+    
+    # Create destination directory
+    mkdir -p "$dest_dir"
+    
+    # Copy with rsync and progress
+    rsync -ah --info=progress2 "$source_dir/" "$dest_dir/" 2>&1 | \
+    while IFS= read -r line; do
+        if [[ "$line" =~ ^[[:space:]]*([0-9,]+)[[:space:]]+([0-9]+)%[[:space:]]+([0-9.]+[kMG]B/s)[[:space:]]+([0-9:]+) ]]; then
+            local transferred="${BASH_REMATCH[1]//,/}"
+            local percent="${BASH_REMATCH[2]}"
+            local speed="${BASH_REMATCH[3]}"
+            local eta="${BASH_REMATCH[4]}"
+            
+            printf "\r"
+            show_progress_bar "$percent" 100 40
+            printf " ${percent}%% | ${speed} | ETA: ${eta}  "
+        fi
+    done
+    
+    printf "\r%-80s\r" " "
+    echo -e "${GREEN}✓ Copy completed${COLOR_RESET} ($total_size_fmt)"
+}
+
 # Status indicator with icon
 show_status() {
     local status="$1"
@@ -404,3 +614,4 @@ show_progress() {
 export -f show_progress_bar show_multi_progress show_spinner stop_spinner
 export -f show_progress show_download_progress show_status show_countdown
 export -f format_duration format_bytes show_matrix_progress show_ascii_progress
+export -f track_download_progress download_with_progress copy_with_progress copy_directory_with_progress

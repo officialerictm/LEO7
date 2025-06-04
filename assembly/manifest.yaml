@@ -77,6 +77,11 @@ components:
     path: "src/ui/warnings.sh"
     description: "Warning and error displays"
     dependencies: ["ui_basic"]
+    
+  - id: "ui_web_server"
+    path: "src/ui/web_server.sh"
+    description: "Web server UI component"
+    dependencies: ["ui_basic"]
 
   # Filesystem operations (03)
   - id: "fs_device"

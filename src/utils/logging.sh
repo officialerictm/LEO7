@@ -178,5 +178,34 @@ cleanup_logging() {
     fi
 }
 
+# Convenience logging functions
+log_debug() {
+    log_message "DEBUG" "$@"
+}
+
+log_info() {
+    log_message "INFO" "$@"
+}
+
+log_warn() {
+    log_message "WARN" "$@"
+}
+
+log_error() {
+    log_message "ERROR" "$@"
+}
+
+log_fatal() {
+    log_message "FATAL" "$@"
+}
+
+log_success() {
+    log_message "INFO" "✓ $@"
+}
+
 # Export logging functions
 export -f log_message log_command log_system_info
+export -f log_debug log_info log_warn log_error log_fatal log_success
+
+# Initialize logging on source
+init_logging

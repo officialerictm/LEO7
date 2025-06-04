@@ -58,6 +58,13 @@ init_model_registry() {
     log_message "INFO" "Model registry initialized with ${#LEONARDO_MODEL_REGISTRY[@]} models"
 }
 
+# Source model database if available
+if [[ -f "${LEONARDO_ROOT}/src/models/model_database.sh" ]]; then
+    source "${LEONARDO_ROOT}/src/models/model_database.sh"
+elif [[ -f "$(dirname "${BASH_SOURCE[0]}")/model_database.sh" ]]; then
+    source "$(dirname "${BASH_SOURCE[0]}")/model_database.sh"
+fi
+
 # Get model metadata field
 get_model_metadata() {
     local model_id="$1"
@@ -83,66 +90,71 @@ get_model_metadata() {
     return 1
 }
 
-# List available models
+# List available models from registry with enhanced formatting
 list_models() {
-    local filter="${1:-}"
-    local format="${2:-table}"  # table, json, simple
+    local format="${1:-table}"
+    local provider="${2:-all}"
     
-    log_message "INFO" "Listing models (filter: ${filter:-none})"
-    
-    if [[ "$format" == "table" ]]; then
-        # Header
-        printf "${COLOR_CYAN}%-20s %-25s %-10s %-15s %-10s${COLOR_RESET}\n" \
-            "ID" "Name" "Size" "Quantization" "License"
-        printf "${COLOR_DIM}%s${COLOR_RESET}\n" "$(printf '%80s' | tr ' ' '-')"
-        
-        # Models
-        for model_id in "${!LEONARDO_MODEL_REGISTRY[@]}"; do
-            if [[ -n "$filter" ]] && [[ ! "$model_id" =~ $filter ]]; then
-                continue
-            fi
-            
-            local name=$(get_model_metadata "$model_id" "name")
-            local size=$(get_model_metadata "$model_id" "size")
-            local quant=$(get_model_metadata "$model_id" "quantization")
-            local license=$(get_model_metadata "$model_id" "license")
-            
-            printf "%-20s %-25s ${COLOR_YELLOW}%-10s${COLOR_RESET} %-15s %-10s\n" \
-                "$model_id" "$name" "$size" "$quant" "$license"
-        done
-    elif [[ "$format" == "json" ]]; then
-        echo "{"
-        local first=true
-        for model_id in "${!LEONARDO_MODEL_REGISTRY[@]}"; do
-            if [[ -n "$filter" ]] && [[ ! "$model_id" =~ $filter ]]; then
-                continue
-            fi
-            
-            [[ "$first" == "false" ]] && echo ","
-            first=false
-            
-            echo -n "  \"$model_id\": {"
-            echo -n "\"filename\": \"${LEONARDO_MODEL_REGISTRY[$model_id]}\", "
-            echo -n "\"name\": \"$(get_model_metadata "$model_id" "name")\", "
-            echo -n "\"size\": \"$(get_model_metadata "$model_id" "size")\", "
-            echo -n "\"format\": \"$(get_model_metadata "$model_id" "format")\", "
-            echo -n "\"quantization\": \"$(get_model_metadata "$model_id" "quantization")\", "
-            echo -n "\"family\": \"$(get_model_metadata "$model_id" "family")\", "
-            echo -n "\"license\": \"$(get_model_metadata "$model_id" "license")\", "
-            echo -n "\"url\": \"$(get_model_metadata "$model_id" "url")\", "
-            echo -n "\"sha256\": \"$(get_model_metadata "$model_id" "sha256")\""
-            echo -n "}"
-        done
-        echo -e "\n}"
-    else
-        # Simple format
-        for model_id in "${!LEONARDO_MODEL_REGISTRY[@]}"; do
-            if [[ -n "$filter" ]] && [[ ! "$model_id" =~ $filter ]]; then
-                continue
-            fi
-            echo "$model_id"
-        done | sort
+    # Get models from database
+    local models=()
+    if declare -F get_all_models >/dev/null 2>&1; then
+        mapfile -t models < <(get_all_models)
     fi
+    
+    case "$format" in
+        table)
+            # Header
+            printf "%-20s %-30s %-10s %-15s %-10s\n" \
+                "ID" "Name" "Size" "Quantization" "License"
+            printf "%s\n" "$(printf '%.0s-' {1..80})"
+            
+            # List models from database
+            if [[ ${#models[@]} -gt 0 ]]; then
+                for model in "${models[@]}"; do
+                    IFS='|' read -r id name size quant license desc <<< "$model"
+                    printf "%-20s %-30s %-10s %-15s %-10s\n" \
+                        "$id" "$name" "$size" "$quant" "$license"
+                done
+            else
+                # Fallback to registry
+                for model_id in "${!LEONARDO_MODEL_REGISTRY[@]}"; do
+                    IFS='|' read -r name provider size quantization license tags <<< "${LEONARDO_MODEL_METADATA[$model_id]}"
+                    
+                    if [[ "$provider" == "all" ]] || [[ "$provider" == "$provider" ]]; then
+                        printf "%-20s %-30s %-10s %-15s %-10s\n" \
+                            "$model_id" "$name" "$size" "$quantization" "$license"
+                    fi
+                done
+            fi
+            ;;
+        json)
+            echo "{"
+            local first=true
+            for model_id in "${!LEONARDO_MODEL_REGISTRY[@]}"; do
+                [[ "$first" == "false" ]] && echo ","
+                first=false
+                
+                echo -n "  \"$model_id\": {"
+                echo -n "\"filename\": \"${LEONARDO_MODEL_REGISTRY[$model_id]}\", "
+                echo -n "\"name\": \"$(get_model_metadata "$model_id" "name")\", "
+                echo -n "\"size\": \"$(get_model_metadata "$model_id" "size")\", "
+                echo -n "\"format\": \"$(get_model_metadata "$model_id" "format")\", "
+                echo -n "\"quantization\": \"$(get_model_metadata "$model_id" "quantization")\", "
+                echo -n "\"family\": \"$(get_model_metadata "$model_id" "family")\", "
+                echo -n "\"license\": \"$(get_model_metadata "$model_id" "license")\", "
+                echo -n "\"url\": \"$(get_model_metadata "$model_id" "url")\", "
+                echo -n "\"sha256\": \"$(get_model_metadata "$model_id" "sha256")\""
+                echo -n "}"
+            done
+            echo -e "\n}"
+            ;;
+        *)
+            # Simple format
+            for model_id in "${!LEONARDO_MODEL_REGISTRY[@]}"; do
+                echo "$model_id"
+            done | sort
+            ;;
+    esac
 }
 
 # Get model info
@@ -167,29 +179,36 @@ get_model_info() {
     echo "${COLOR_GREEN}SHA256:${COLOR_RESET}       $(get_model_metadata "$model_id" "sha256")"
 }
 
-# Search models
+# Search models by query
 search_models() {
-    local query="$1"
-    local models=()
+    local query="${1,,}"  # Convert to lowercase
+    local found=false
     
-    log_message "INFO" "Searching models for: $query"
+    echo -e "${CYAN}Searching for models matching: ${WHITE}$query${COLOR_RESET}"
+    echo ""
     
-    for model_id in "${!LEONARDO_MODEL_REGISTRY[@]}"; do
-        local metadata="${LEONARDO_MODEL_METADATA[$model_id]}"
-        if [[ "$model_id" =~ $query ]] || [[ "$metadata" =~ $query ]]; then
-            models+=("$model_id")
+    # Search in database first
+    if declare -F search_models_db >/dev/null 2>&1; then
+        local results=()
+        mapfile -t results < <(search_models_db "$query")
+        
+        if [[ ${#results[@]} -gt 0 ]]; then
+            # Header
+            printf "%-20s %-30s %-10s %-15s\n" \
+                "ID" "Name" "Size" "License"
+            printf "%s\n" "$(printf '%.0s-' {1..75})"
+            
+            for model in "${results[@]}"; do
+                IFS='|' read -r id name size quant license desc <<< "$model"
+                printf "%-20s %-30s %-10s %-15s\n" \
+                    "$id" "$name" "$size" "$license"
+                found=true
+            done
+            echo ""
+            echo -e "${GREEN}Found ${#results[@]} model(s) matching '$query'${COLOR_RESET}"
+            echo -e "${DIM}Tip: Use 'leonardo model download <id>' to download a model${COLOR_RESET}"
         fi
-    done
-    
-    if [[ ${#models[@]} -eq 0 ]]; then
-        log_message "WARN" "No models found matching: $query"
-        return 1
     fi
-    
-    echo "${COLOR_CYAN}Found ${#models[@]} model(s) matching '$query':${COLOR_RESET}"
-    for model in "${models[@]}"; do
-        echo "  - $model ($(get_model_metadata "$model" "name"))"
-    done
 }
 
 # Get recommended models by use case

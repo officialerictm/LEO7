@@ -1,457 +1,283 @@
-#!/usr/bin/env bash
-# ==============================================================================
-# Leonardo AI Universal - Model Manager
-# ==============================================================================
-# Description: Model download, installation, and lifecycle management
-# Version: 7.0.0
-# Dependencies: colors.sh, logging.sh, filesystem.sh, network.sh, progress.sh, registry.sh
-# ==============================================================================
+#!/bin/bash
+#
+# Leonardo AI Universal - Model Management
+# Central model management functionality
+#
 
-# Model management state
-declare -A LEONARDO_INSTALLED_MODELS
-declare -A LEONARDO_MODEL_STATUS
-LEONARDO_ACTIVE_MODEL=""
+# Model directories
+LEONARDO_MODELS_DIR="${LEONARDO_MODEL_DIR:-$LEONARDO_BASE_DIR/models}"
+LEONARDO_MODEL_CACHE="${LEONARDO_MODEL_CACHE_DIR:-$LEONARDO_BASE_DIR/cache/models}"
+LEONARDO_MODEL_REGISTRY="${LEONARDO_CONFIG_DIR}/model_registry.json"
 
-# Initialize model manager
-init_model_manager() {
-    log_message "INFO" "Initializing model manager"
+# Initialize model system
+init_model_system() {
+    log_info "Initializing model system..."
     
     # Create model directories
-    mkdir -p "$LEONARDO_MODEL_DIR"
-    mkdir -p "$LEONARDO_MODEL_CACHE_DIR"
-    mkdir -p "$LEONARDO_MODEL_DIR/downloads"
+    create_directory "$LEONARDO_MODELS_DIR" || return 1
+    create_directory "$LEONARDO_MODEL_CACHE" || return 1
+    create_directory "${LEONARDO_MODELS_DIR}/ollama" || return 1
+    create_directory "${LEONARDO_MODELS_DIR}/huggingface" || return 1
+    create_directory "${LEONARDO_MODELS_DIR}/custom" || return 1
     
-    # Initialize model registry
-    init_model_registry
-    
-    # Scan for installed models
-    scan_installed_models
+    log_success "Model system initialized"
+    return 0
 }
 
-# Scan for installed models
-scan_installed_models() {
-    log_message "INFO" "Scanning for installed models..."
+# List all available models
+list_available_models() {
+    local provider="${1:-all}"
     
-    LEONARDO_INSTALLED_MODELS=()
+    echo "Available Models:"
+    echo "================"
+    echo
     
-    if [[ -d "$LEONARDO_MODEL_DIR" ]]; then
-        while IFS= read -r model_file; do
-            local basename=$(basename "$model_file")
-            
-            # Check if this file matches any known model
-            for model_id in "${!LEONARDO_MODEL_REGISTRY[@]}"; do
-                if [[ "${LEONARDO_MODEL_REGISTRY[$model_id]}" == "$basename" ]]; then
-                    LEONARDO_INSTALLED_MODELS[$model_id]="$model_file"
-                    LEONARDO_MODEL_STATUS[$model_id]="installed"
-                    log_message "INFO" "Found installed model: $model_id"
-                    break
-                fi
-            done
-        done < <(find "$LEONARDO_MODEL_DIR" -name "*.gguf" -o -name "*.ggml" -o -name "*.bin" 2>/dev/null)
+    if [[ "$provider" == "all" || "$provider" == "ollama" ]]; then
+        echo "Ollama Models:"
+        echo "-------------"
+        get_ollama_models | while read -r model; do
+            local info=$(get_ollama_model_info "$model")
+            local desc=$(echo "$info" | grep '"description"' | cut -d'"' -f4)
+            printf "  %-15s - %s\n" "$model" "$desc"
+        done
+        echo
     fi
     
-    log_message "INFO" "Found ${#LEONARDO_INSTALLED_MODELS[@]} installed model(s)"
-}
-
-# Download model
-download_model() {
-    local model_id="$1"
-    local force="${2:-false}"
-    
-    # Validate model ID
-    if [[ -z "${LEONARDO_MODEL_REGISTRY[$model_id]:-}" ]]; then
-        log_message "ERROR" "Unknown model: $model_id"
-        return 1
-    fi
-    
-    # Check if already installed
-    if [[ -n "${LEONARDO_INSTALLED_MODELS[$model_id]:-}" ]] && [[ "$force" != "true" ]]; then
-        log_message "INFO" "Model already installed: $model_id"
-        return 0
-    fi
-    
-    # Get model metadata
-    local filename="${LEONARDO_MODEL_REGISTRY[$model_id]}"
-    local url=$(get_model_metadata "$model_id" "url")
-    local size=$(get_model_metadata "$model_id" "size")
-    local sha256=$(get_model_metadata "$model_id" "sha256")
-    local name=$(get_model_metadata "$model_id" "name")
-    
-    if [[ -z "$url" ]]; then
-        log_message "ERROR" "No download URL for model: $model_id"
-        return 1
-    fi
-    
-    # Show model info
-    echo "${COLOR_CYAN}Downloading Model: $name${COLOR_RESET}"
-    echo "${COLOR_DIM}Size: $size${COLOR_RESET}"
-    echo "${COLOR_DIM}Quantization: $(get_model_metadata "$model_id" "quantization")${COLOR_RESET}"
-    echo ""
-    
-    # Check available space
-    local size_bytes=$(parse_size_to_bytes "$size")
-    if ! check_space_available "$LEONARDO_MODEL_DIR" "$size_bytes"; then
-        log_message "ERROR" "Insufficient space for model download"
-        return 1
-    fi
-    
-    # Set download paths
-    local temp_file="$LEONARDO_MODEL_DIR/downloads/${filename}.tmp"
-    local final_file="$LEONARDO_MODEL_DIR/$filename"
-    
-    # Update status
-    LEONARDO_MODEL_STATUS[$model_id]="downloading"
-    
-    # Download with progress
-    echo "${COLOR_YELLOW}Downloading from: $url${COLOR_RESET}"
-    if download_file_with_progress "$url" "$temp_file"; then
-        # Verify download if checksum available
-        if [[ -n "$sha256" ]] && [[ "$LEONARDO_VERIFY_CHECKSUMS" == "true" ]]; then
-            echo -n "${COLOR_CYAN}Verifying checksum...${COLOR_RESET} "
-            if validate_model_file "$temp_file" "$sha256"; then
-                echo "${COLOR_GREEN}✓${COLOR_RESET}"
-            else
-                echo "${COLOR_RED}✗${COLOR_RESET}"
-                rm -f "$temp_file"
-                LEONARDO_MODEL_STATUS[$model_id]="error"
-                return 1
-            fi
-        fi
-        
-        # Move to final location
-        mv "$temp_file" "$final_file"
-        LEONARDO_INSTALLED_MODELS[$model_id]="$final_file"
-        LEONARDO_MODEL_STATUS[$model_id]="installed"
-        
-        log_message "INFO" "Model downloaded successfully: $model_id"
-        show_status "success" "Model '$name' installed successfully!"
-        
-        # Create metadata file
-        save_model_metadata "$model_id" "$final_file"
-        
-        return 0
-    else
-        rm -f "$temp_file"
-        LEONARDO_MODEL_STATUS[$model_id]="error"
-        log_message "ERROR" "Failed to download model: $model_id"
-        return 1
-    fi
-}
-
-# Parse size string to bytes
-parse_size_to_bytes() {
-    local size_str="$1"
-    local number=$(echo "$size_str" | grep -oE '[0-9.]+')
-    local unit=$(echo "$size_str" | grep -oE '[A-Z]+')
-    
-    case "$unit" in
-        "GB")
-            echo $(awk "BEGIN {printf \"%.0f\", $number * 1024 * 1024 * 1024}")
-            ;;
-        "MB")
-            echo $(awk "BEGIN {printf \"%.0f\", $number * 1024 * 1024}")
-            ;;
-        "KB")
-            echo $(awk "BEGIN {printf \"%.0f\", $number * 1024}")
-            ;;
-        *)
-            echo "$number"
-            ;;
-    esac
-}
-
-# Save model metadata
-save_model_metadata() {
-    local model_id="$1"
-    local model_path="$2"
-    local metadata_file="${model_path}.meta"
-    
-    cat > "$metadata_file" << EOF
-{
-    "id": "$model_id",
-    "name": "$(get_model_metadata "$model_id" "name")",
-    "filename": "$(basename "$model_path")",
-    "size": "$(get_model_metadata "$model_id" "size")",
-    "format": "$(get_model_metadata "$model_id" "format")",
-    "quantization": "$(get_model_metadata "$model_id" "quantization")",
-    "family": "$(get_model_metadata "$model_id" "family")",
-    "license": "$(get_model_metadata "$model_id" "license")",
-    "sha256": "$(get_model_metadata "$model_id" "sha256")",
-    "installed_date": "$(date -u +"%Y-%m-%d %H:%M:%S UTC")",
-    "leonardo_version": "$LEONARDO_VERSION"
-}
-EOF
-}
-
-# Delete model
-delete_model() {
-    local model_id="$1"
-    
-    if [[ -z "${LEONARDO_INSTALLED_MODELS[$model_id]:-}" ]]; then
-        log_message "ERROR" "Model not installed: $model_id"
-        return 1
-    fi
-    
-    local model_path="${LEONARDO_INSTALLED_MODELS[$model_id]}"
-    local name=$(get_model_metadata "$model_id" "name")
-    
-    # Confirm deletion
-    if confirm_action "Delete model '$name'?"; then
-        # Delete model file
-        if [[ "$LEONARDO_SECURE_DELETE" == "true" ]]; then
-            secure_delete "$model_path"
-        else
-            rm -f "$model_path"
-        fi
-        
-        # Delete metadata
-        rm -f "${model_path}.meta"
-        
-        # Update state
-        unset LEONARDO_INSTALLED_MODELS[$model_id]
-        unset LEONARDO_MODEL_STATUS[$model_id]
-        
-        log_message "INFO" "Model deleted: $model_id"
-        show_status "success" "Model '$name' deleted"
-        return 0
-    else
-        log_message "INFO" "Model deletion cancelled"
-        return 1
-    fi
+    # Add other providers here as they are implemented
 }
 
 # List installed models
 list_installed_models() {
-    if [[ ${#LEONARDO_INSTALLED_MODELS[@]} -eq 0 ]]; then
-        echo "${COLOR_YELLOW}No models installed${COLOR_RESET}"
-        echo "Use 'leonardo model download <model-id>' to install models"
-        return
+    echo "Installed Models:"
+    echo "================"
+    echo
+    
+    # Check Ollama models
+    if [[ -d "${LEONARDO_MODELS_DIR}/ollama" ]]; then
+        echo "Ollama Models:"
+        list_ollama_models
+        echo
     fi
     
-    echo "${COLOR_CYAN}Installed Models:${COLOR_RESET}"
-    echo "${COLOR_DIM}$(printf '%60s' | tr ' ' '-')${COLOR_RESET}"
-    
-    for model_id in "${!LEONARDO_INSTALLED_MODELS[@]}"; do
-        local path="${LEONARDO_INSTALLED_MODELS[$model_id]}"
-        local name=$(get_model_metadata "$model_id" "name")
-        local size=$(get_model_metadata "$model_id" "size")
-        local status="${LEONARDO_MODEL_STATUS[$model_id]:-unknown}"
+    # Check for models in the models directory
+    find "$LEONARDO_MODELS_DIR" -name "metadata.json" -type f | while read -r metadata; do
+        local name=$(parse_model_metadata "$metadata" "name")
+        local provider=$(parse_model_metadata "$metadata" "provider")
+        local version=$(parse_model_metadata "$metadata" "version")
+        local size=$(parse_model_metadata "$metadata" "size")
         
-        # Status icon
-        local status_icon="?"
-        local status_color="$COLOR_DIM"
-        case "$status" in
-            "installed")
-                status_icon="✓"
-                status_color="$COLOR_GREEN"
-                ;;
-            "downloading")
-                status_icon="⟳"
-                status_color="$COLOR_YELLOW"
-                ;;
-            "error")
-                status_icon="✗"
-                status_color="$COLOR_RED"
-                ;;
-        esac
-        
-        printf "${status_color}%s${COLOR_RESET} %-15s %-25s %10s\n" \
-            "$status_icon" "$model_id" "$name" "$size"
-        
-        if [[ "$LEONARDO_VERBOSE" == "true" ]]; then
-            echo "  ${COLOR_DIM}Path: $path${COLOR_RESET}"
+        if [[ "$provider" != "ollama" ]]; then  # Avoid duplicates
+            printf "%-15s %-10s %-10s %s\n" "$name" "$provider" "$version" "$size"
         fi
     done
 }
 
-# Import model from file
-import_model() {
-    local model_file="$1"
-    local model_id="${2:-}"
+# Download model from provider
+download_model() {
+    local model_spec="$1"
+    local provider="${2:-ollama}"
     
-    if [[ ! -f "$model_file" ]]; then
-        log_message "ERROR" "Model file not found: $model_file"
-        return 1
-    fi
+    echo -e "${CYAN}Downloading model: $model_spec${COLOR_RESET}"
     
-    # Try to identify model if ID not provided
-    if [[ -z "$model_id" ]]; then
-        local basename=$(basename "$model_file")
-        for id in "${!LEONARDO_MODEL_REGISTRY[@]}"; do
-            if [[ "${LEONARDO_MODEL_REGISTRY[$id]}" == "$basename" ]]; then
-                model_id="$id"
-                break
+    case "$provider" in
+        ollama)
+            if command_exists ollama; then
+                echo "Using Ollama provider..."
+                ollama pull "$model_spec" 2>&1 | \
+                while IFS= read -r line; do
+                    # Parse Ollama progress
+                    if [[ "$line" =~ pulling[[:space:]].*[[:space:]]([0-9]+)%[[:space:]]+\|.*\|[[:space:]]+([0-9.]+[[:space:]]?[KMGT]?B)/([0-9.]+[[:space:]]?[KMGT]?B)[[:space:]]+([0-9.]+[[:space:]]?[KMGT]?B/s) ]]; then
+                        local percent="${BASH_REMATCH[1]}"
+                        local downloaded="${BASH_REMATCH[2]}"
+                        local total="${BASH_REMATCH[3]}"
+                        local speed="${BASH_REMATCH[4]}"
+                        
+                        printf "\r"
+                        show_progress_bar "$percent" 100 40
+                        printf " ${percent}%% | ${downloaded}/${total} | ${speed}  "
+                    elif [[ "$line" =~ "success" ]]; then
+                        printf "\r%-80s\r" " "
+                        echo -e "${GREEN}✓ Model downloaded successfully${COLOR_RESET}"
+                        return 0
+                    fi
+                done
+            else
+                echo -e "${RED}Ollama not installed${COLOR_RESET}"
+                return 1
             fi
-        done
-        
-        if [[ -z "$model_id" ]]; then
-            log_message "ERROR" "Cannot identify model from filename: $basename"
-            echo "Please specify model ID explicitly"
+            ;;
+        huggingface)
+            # Parse model spec
+            local model_id="${model_spec%:*}"
+            local variant="${model_spec#*:}"
+            
+            # Construct HuggingFace URL
+            local hf_url="https://huggingface.co/${model_id}/resolve/main/${variant}.gguf"
+            local output_file="${LEONARDO_MODEL_DIR}/${model_id//\//-}-${variant}.gguf"
+            
+            # Download with progress
+            download_with_progress "$hf_url" "$output_file" "Downloading from HuggingFace"
+            ;;
+        custom)
+            echo -e "${YELLOW}Custom provider not implemented${COLOR_RESET}"
             return 1
-        fi
-    fi
-    
-    # Validate model exists in registry
-    if [[ -z "${LEONARDO_MODEL_REGISTRY[$model_id]:-}" ]]; then
-        log_message "ERROR" "Unknown model ID: $model_id"
-        return 1
-    fi
-    
-    # Get expected filename
-    local expected_filename="${LEONARDO_MODEL_REGISTRY[$model_id]}"
-    local target_path="$LEONARDO_MODEL_DIR/$expected_filename"
-    
-    echo "${COLOR_CYAN}Importing model: $(get_model_metadata "$model_id" "name")${COLOR_RESET}"
-    
-    # Validate model file
-    local expected_sha256=$(get_model_metadata "$model_id" "sha256")
-    if [[ -n "$expected_sha256" ]] && [[ "$LEONARDO_VERIFY_CHECKSUMS" == "true" ]]; then
-        echo -n "Verifying checksum... "
-        if validate_model_file "$model_file" "$expected_sha256"; then
-            echo "${COLOR_GREEN}✓${COLOR_RESET}"
-        else
-            echo "${COLOR_RED}✗${COLOR_RESET}"
+            ;;
+        *)
+            echo -e "${RED}Unknown provider: $provider${COLOR_RESET}"
             return 1
-        fi
-    fi
+            ;;
+    esac
+}
+
+# Install a model
+install_model() {
+    local model_spec="$1"  # Format: provider:model:variant or just model
     
-    # Copy model to model directory
-    echo -n "Copying model file... "
-    if cp "$model_file" "$target_path"; then
-        echo "${COLOR_GREEN}✓${COLOR_RESET}"
-        
-        # Update state
-        LEONARDO_INSTALLED_MODELS[$model_id]="$target_path"
-        LEONARDO_MODEL_STATUS[$model_id]="installed"
-        
-        # Save metadata
-        save_model_metadata "$model_id" "$target_path"
-        
-        show_status "success" "Model imported successfully!"
-        return 0
+    # Parse model specification
+    local provider model variant
+    
+    if [[ "$model_spec" == *:*:* ]]; then
+        # Full specification: provider:model:variant
+        IFS=':' read -r provider model variant <<< "$model_spec"
+    elif [[ "$model_spec" == *:* ]]; then
+        # Partial specification: model:variant (assume ollama)
+        provider="ollama"
+        IFS=':' read -r model variant <<< "$model_spec"
     else
-        echo "${COLOR_RED}✗${COLOR_RESET}"
+        # Just model name (assume ollama:latest)
+        provider="ollama"
+        model="$model_spec"
+        variant="latest"
+    fi
+    
+    log_info "Installing model: $provider:$model:$variant"
+    
+    # Check if already installed
+    if is_model_installed "$provider" "$model" "$variant"; then
+        log_warn "Model already installed: $model:$variant"
+        return 0
+    fi
+    
+    # Download and install
+    download_model "$model_spec" "$provider"
+}
+
+# Remove a model
+remove_model() {
+    local model_spec="$1"
+    
+    # Parse model specification
+    local provider model variant
+    if [[ "$model_spec" == *:*:* ]]; then
+        IFS=':' read -r provider model variant <<< "$model_spec"
+    elif [[ "$model_spec" == *:* ]]; then
+        provider="ollama"
+        IFS=':' read -r model variant <<< "$model_spec"
+    else
+        provider="ollama"
+        model="$model_spec"
+        variant="latest"
+    fi
+    
+    local model_path=$(get_model_install_path "$provider" "$model" "$variant")
+    
+    if [[ -d "$model_path" ]]; then
+        log_info "Removing model: $model:$variant"
+        rm -rf "$model_path"
+        log_success "Model removed successfully"
+    else
+        log_error "Model not found: $model:$variant"
         return 1
     fi
 }
 
-# Export model
-export_model() {
-    local model_id="$1"
-    local export_path="${2:-$PWD}"
+# Run a model
+run_model() {
+    local model_spec="$1"
+    shift
+    local args="$@"
     
-    if [[ -z "${LEONARDO_INSTALLED_MODELS[$model_id]:-}" ]]; then
-        log_message "ERROR" "Model not installed: $model_id"
-        return 1
-    fi
-    
-    local model_path="${LEONARDO_INSTALLED_MODELS[$model_id]}"
-    local filename=$(basename "$model_path")
-    local target_file="$export_path/$filename"
-    
-    # Check if directory
-    if [[ -d "$export_path" ]]; then
-        target_file="$export_path/$filename"
+    # Parse model specification
+    local provider model variant
+    if [[ "$model_spec" == *:* ]]; then
+        IFS=':' read -r model variant <<< "$model_spec"
+        provider="ollama"  # Default for now
     else
-        target_file="$export_path"
+        provider="ollama"
+        model="$model_spec"
+        variant="latest"
     fi
     
-    echo "${COLOR_CYAN}Exporting model: $(get_model_metadata "$model_id" "name")${COLOR_RESET}"
-    echo "Target: $target_file"
-    
-    # Copy with progress
-    if copy_with_progress "$model_path" "$target_file"; then
-        # Also export metadata
-        cp "${model_path}.meta" "${target_file}.meta" 2>/dev/null || true
-        
-        show_status "success" "Model exported successfully!"
-        echo "You can import this model on another Leonardo installation using:"
-        echo "  ${COLOR_CYAN}leonardo model import \"$target_file\" $model_id${COLOR_RESET}"
-        return 0
-    else
-        log_message "ERROR" "Failed to export model"
-        return 1
-    fi
+    case "$provider" in
+        ollama)
+            run_ollama_model "$model" "$variant"
+            ;;
+        *)
+            log_error "Cannot run models from provider: $provider"
+            return 1
+            ;;
+    esac
 }
 
-# Update model registry from remote
+# Get model information
+get_model_info() {
+    local model_spec="$1"
+    
+    # Parse model specification
+    local provider model variant
+    if [[ "$model_spec" == *:* ]]; then
+        IFS=':' read -r model variant <<< "$model_spec"
+        provider="ollama"
+    else
+        provider="ollama"
+        model="$model_spec"
+        variant="7b"  # Default variant
+    fi
+    
+    case "$provider" in
+        ollama)
+            get_ollama_model_info "$model" "$variant"
+            ;;
+        *)
+            log_error "Unknown provider: $provider"
+            return 1
+            ;;
+    esac
+}
+
+# Update model registry
 update_model_registry() {
-    log_message "INFO" "Updating model registry..."
+    log_info "Updating model registry..."
     
-    local registry_url="$LEONARDO_MODEL_REGISTRY_URL"
-    local cache_file="$LEONARDO_MODEL_CACHE_DIR/registry.json"
+    # Scan installed models and update registry
+    local registry_file="${LEONARDO_CONFIG_DIR}/model_registry.json"
     
-    # Download latest registry
-    if fetch_model_registry "$registry_url" "$cache_file"; then
-        show_status "success" "Model registry updated"
-        
-        # TODO: Parse and update registry from JSON
-        # For now, using hardcoded registry
-        
-        return 0
-    else
-        log_message "ERROR" "Failed to update model registry"
-        return 1
-    fi
-}
-
-# Get model status
-get_model_status() {
-    local model_id="$1"
-    echo "${LEONARDO_MODEL_STATUS[$model_id]:-not_installed}"
-}
-
-# Load model (placeholder for inference engine integration)
-load_model() {
-    local model_id="$1"
+    echo "{" > "$registry_file"
+    echo '  "version": "1.0.0",' >> "$registry_file"
+    echo '  "updated": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'",' >> "$registry_file"
+    echo '  "models": [' >> "$registry_file"
     
-    if [[ -z "${LEONARDO_INSTALLED_MODELS[$model_id]:-}" ]]; then
-        log_message "ERROR" "Model not installed: $model_id"
-        return 1
-    fi
-    
-    local model_path="${LEONARDO_INSTALLED_MODELS[$model_id]}"
-    local name=$(get_model_metadata "$model_id" "name")
-    
-    echo "${COLOR_CYAN}Loading model: $name${COLOR_RESET}"
-    show_spinner "Initializing inference engine..." &
-    local spinner_pid=$!
-    
-    # Simulate loading (placeholder)
-    sleep 2
-    
-    kill $spinner_pid 2>/dev/null
-    wait $spinner_pid 2>/dev/null
-    
-    LEONARDO_ACTIVE_MODEL="$model_id"
-    show_status "success" "Model loaded: $name"
-    
-    return 0
-}
-
-# Model selection menu
-model_selection_menu() {
-    local models=()
-    local names=()
-    
-    # Build model list
-    for model_id in "${!LEONARDO_MODEL_REGISTRY[@]}"; do
-        models+=("$model_id")
-        names+=("$(get_model_metadata "$model_id" "name") ($(get_model_metadata "$model_id" "size"))")
+    local first=true
+    find "$LEONARDO_MODELS_DIR" -name "metadata.json" -type f | while read -r metadata; do
+        if [[ "$first" != "true" ]]; then
+            echo "," >> "$registry_file"
+        fi
+        cat "$metadata" | sed 's/^/    /' >> "$registry_file"
+        first=false
     done
     
-    # Show menu
-    local selected=$(show_menu "Select a model:" "${names[@]}")
+    echo "  ]" >> "$registry_file"
+    echo "}" >> "$registry_file"
     
-    if [[ -n "$selected" ]]; then
-        echo "${models[$selected]}"
-        return 0
-    else
-        return 1
-    fi
+    log_success "Model registry updated"
 }
 
-# Export model manager functions
-export -f init_model_manager scan_installed_models download_model delete_model
-export -f list_installed_models import_model export_model update_model_registry
-export -f get_model_status load_model model_selection_menu
+# Export functions
+export -f init_model_system
+export -f list_available_models
+export -f list_installed_models
+export -f install_model
+export -f remove_model
+export -f run_model
+export -f get_model_info
+export -f update_model_registry
