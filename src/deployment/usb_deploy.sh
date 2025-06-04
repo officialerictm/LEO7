@@ -16,161 +16,164 @@ deploy_to_usb() {
     local target_device="${1:-}"
     local options="${2:-}"
     
-    echo -e "${CYAN}Leonardo USB Deployment${COLOR_RESET}"
-    echo "========================"
-    echo ""
+    # Debug output to confirm function is called
+    echo -e "${YELLOW}DEBUG: deploy_to_usb function started${COLOR_RESET}" >&2
+    echo -e "${YELLOW}DEBUG: Terminal test: [[ -t 0 ]] = $([[ -t 0 ]] && echo true || echo false)${COLOR_RESET}" >&2
+    sleep 1  # Give time to see the message
     
-    # Step 1: Detect or select USB device
+    echo
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
+    echo -e "${BOLD}              🚀 Leonardo USB Deployment${COLOR_RESET}"
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
+    echo
+    
+    # Step 1: Detect or use provided USB device
     if [[ -z "$target_device" ]]; then
-        echo "Detecting USB drives..."
-        local devices=$(detect_usb_drives)
+        # Auto-detect USB drives
+        local usb_drives=()
+        echo -e "${DIM}Detecting USB drives...${COLOR_RESET}"
         
-        if [[ -z "$devices" ]]; then
-            log_message "ERROR" "No USB drives detected"
-            echo ""
-            echo "Please insert a USB drive and try again."
+        # Get raw output for debugging
+        local raw_output=$(detect_usb_drives 2>&1)
+        if [[ -n "$raw_output" ]]; then
+            # Extract just the device paths (first field before |)
+            readarray -t usb_drives < <(echo "$raw_output" | cut -d'|' -f1 | grep -E '^/dev/')
+        fi
+        
+        if [[ ${#usb_drives[@]} -eq 0 ]]; then
+            echo -e "${RED}No USB drives detected!${COLOR_RESET}"
+            echo -e "${YELLOW}Please insert a USB drive and try again.${COLOR_RESET}"
+            echo
+            echo -e "${DIM}Tip: Make sure your USB drive is properly connected and recognized by the system.${COLOR_RESET}"
+            echo -e "${DIM}On Linux, you might need to run with sudo for device detection.${COLOR_RESET}"
+            pause
             return 1
-        fi
-        
-        # Show available devices
-        list_usb_drives
-        echo ""
-        
-        # Let user select
-        read -p "Enter device path (e.g., /dev/sdb): " target_device
-        
-        if [[ -z "$target_device" ]]; then
-            log_message "ERROR" "No device selected"
-            return 1
-        fi
-    fi
-    
-    # Validate device
-    if ! is_usb_device "$target_device"; then
-        log_message "ERROR" "Not a valid USB device: $target_device"
-        return 1
-    fi
-    
-    # Step 2: Check USB health
-    echo ""
-    echo -e "${YELLOW}Checking USB health...${COLOR_RESET}"
-    init_usb_device "$target_device" >/dev/null 2>&1
-    
-    local health_status
-    if command -v smartctl >/dev/null 2>&1; then
-        health_status=$(check_usb_smart_health "$target_device" 2>/dev/null | grep "SMART overall-health" || echo "Health check unavailable")
-        echo "Health: $health_status"
-    fi
-    
-    # Check write cycles if available
-    local write_cycles=$(estimate_write_cycles 2>/dev/null || echo "unknown")
-    if [[ "$write_cycles" != "unknown" ]]; then
-        echo "Estimated write cycles: $write_cycles"
-        if [[ $write_cycles -gt 5000 ]]; then
-            echo "${COLOR_YELLOW}Warning: This USB has high write cycles${COLOR_RESET}"
-        fi
-    fi
-    
-    # Step 3: Initialize USB
-    echo ""
-    
-    # Ask about formatting
-    if [[ "$options" != *"format"* ]]; then
-        echo -e "${YELLOW}Format USB drive?${COLOR_RESET}"
-        echo -e "${DIM}This will erase all data on the drive${COLOR_RESET}"
-        if confirm_action "Format USB drive"; then
-            options="${options} format"
-        fi
-        echo ""
-    fi
-    
-    if ! confirm_action "Initialize USB for Leonardo"; then
-        return 1
-    fi
-    
-    echo ""
-    echo -e "${CYAN}Initializing USB...${COLOR_RESET}"
-    
-    # Format if requested
-    if [[ "$options" == *"format"* ]]; then
-        local filesystem="${USB_FORMAT_TYPE:-exfat}"
-        if ! format_usb_drive "$target_device" "$filesystem" "LEONARDO"; then
-            return 1
-        fi
-    fi
-    
-    # Initialize and mount
-    if ! init_usb_device "$target_device"; then
-        return 1
-    fi
-    
-    # Check space
-    if ! check_usb_free_space "$LEONARDO_USB_MOUNT" $((USB_DEPLOY_MIN_SPACE_GB * 1024)); then
-        log_message "ERROR" "Insufficient space. Need at least ${USB_DEPLOY_MIN_SPACE_GB}GB"
-        return 1
-    fi
-    
-    echo "Available space: ${LEONARDO_USB_FREE}"
-    
-    # Step 4: Create Leonardo structure
-    echo ""
-    echo -e "${CYAN}Creating Leonardo structure...${COLOR_RESET}"
-    if ! create_leonardo_structure; then
-        return 1
-    fi
-    
-    # Step 5: Install Leonardo
-    echo ""
-    echo -e "${CYAN}Installing Leonardo...${COLOR_RESET}"
-    
-    local leonardo_script="./leonardo.sh"
-    if [[ ! -f "$leonardo_script" ]]; then
-        # Try to build it
-        if [[ -f "assembly/build-simple.sh" ]]; then
-            echo "Building Leonardo..."
-            (cd assembly && ./build-simple.sh) || return 1
+        elif [[ ${#usb_drives[@]} -eq 1 ]]; then
+            target_device="${usb_drives[0]}"
+            echo -e "${GREEN}Found USB drive: $target_device${COLOR_RESET}"
         else
-            log_message "ERROR" "Leonardo script not found"
-            return 1
+            # Multiple drives - let user select with better formatting
+            echo -e "${YELLOW}Multiple USB drives detected:${COLOR_RESET}"
+            echo
+            
+            # Create formatted menu options
+            local menu_options=()
+            local drive_info
+            while IFS='|' read -r device label size mount; do
+                # Format: /dev/sdc1 - CHATUSB (114.6G)
+                if [[ -n "$label" && "$label" != "Unknown" ]]; then
+                    drive_info="$device - $label ($size)"
+                else
+                    drive_info="$device ($size)"
+                fi
+                menu_options+=("$drive_info")
+            done < <(echo "$raw_output")
+            
+            # Show menu and extract just the device path from selection
+            local selected
+            selected=$(show_menu "Select USB Drive" "${menu_options[@]}")
+            if [[ -z "$selected" ]]; then
+                return 1
+            fi
+            
+            # Extract device path from selection
+            target_device=$(echo "$selected" | awk '{print $1}')
         fi
     fi
     
+    # Get device info
+    local device_size_mb=$(get_device_size_mb "$target_device")
+    local device_size_gb=$((device_size_mb / 1024))
+    
+    echo
+    echo -e "${BOLD}Target USB:${COLOR_RESET} $target_device (${device_size_gb}GB)"
+    echo
+    
+    # Step 2: Initialize USB (includes format option)
+    echo -e "${YELLOW}Step 1/4: Preparing USB Drive${COLOR_RESET}"
+    
+    # Check if already initialized
+    if ! is_leonardo_usb "$target_device"; then
+        # Ask about formatting
+        if confirm_menu "Format USB drive? ${RED}WARNING: This will erase all data!${COLOR_RESET}"; then
+            echo -e "${CYAN}→ Formatting USB drive...${COLOR_RESET}"
+            if ! format_usb_device "$target_device"; then
+                echo -e "${RED}Failed to format USB drive${COLOR_RESET}"
+                pause
+                return 1
+            fi
+        fi
+    fi
+    
+    # Initialize USB
+    if ! init_usb_device "$target_device"; then
+        pause
+        return 1
+    fi
+    
+    # Get Leonardo script location
+    local leonardo_script="${LEONARDO_SCRIPT:-$0}"
+    if [[ ! -f "$leonardo_script" ]]; then
+        leonardo_script="./leonardo.sh"
+    fi
+    
+    # Step 3: Install Leonardo
+    echo
+    echo -e "${YELLOW}Step 2/4: Installing Leonardo AI${COLOR_RESET}"
     copy_leonardo_to_usb "$leonardo_script" "$LEONARDO_USB_MOUNT"
     
-    # Step 6: Configure for first run
-    echo ""
-    echo -e "${CYAN}Configuring Leonardo...${COLOR_RESET}"
+    # Create platform launchers
+    create_platform_launchers "$LEONARDO_USB_MOUNT"
+    
+    # Step 4: Configure
+    echo
+    echo -e "${YELLOW}Step 3/4: Configuring Leonardo${COLOR_RESET}"
     configure_usb_leonardo
     
-    # Step 7: Optionally install models
-    if [[ "$options" != *"no-models"* ]]; then
-        echo ""
-        if confirm_action "Install AI models now"; then
-            deploy_models_to_usb
+    # Step 5: Model deployment
+    echo
+    echo -e "${YELLOW}Step 4/4: AI Model Setup${COLOR_RESET}"
+    
+    # Get USB free space for model recommendations
+    local usb_free_mb=$(get_usb_free_space_mb "$LEONARDO_USB_MOUNT")
+    
+    # Select and install model
+    local selected_model=$(select_model_interactive "$usb_free_mb")
+    
+    if [[ -n "$selected_model" ]]; then
+        echo
+        echo -e "${CYAN}Installing $selected_model...${COLOR_RESET}"
+        if download_model_to_usb "$selected_model"; then
+            echo -e "${GREEN}✓ Model installed successfully${COLOR_RESET}"
+        else
+            echo -e "${YELLOW}⚠ Model installation failed${COLOR_RESET}"
         fi
+    else
+        echo -e "${DIM}Skipping model installation${COLOR_RESET}"
     fi
     
-    # Step 8: Create autorun (if supported)
-    if [[ "$options" == *"autorun"* ]]; then
-        create_usb_autorun
-    fi
-    
-    # Step 9: Final verification
-    echo ""
+    # Final verification
+    echo
     echo -e "${CYAN}Verifying deployment...${COLOR_RESET}"
-    verify_usb_deployment
+    if verify_usb_deployment; then
+        echo
+        echo -e "${GREEN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
+        echo -e "${GREEN}✨ USB deployment successful!${COLOR_RESET}"
+        echo -e "${GREEN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
+        echo
+        echo -e "${BOLD}To use Leonardo on any computer:${COLOR_RESET}"
+        echo -e "1. Insert the USB drive"
+        echo -e "2. Navigate to the USB in terminal"
+        echo -e "3. Run: ${CYAN}./leonardo${COLOR_RESET} (Linux/Mac) or ${CYAN}leonardo.bat${COLOR_RESET} (Windows)"
+        echo
+        echo -e "${DIM}The USB is ready to use on any computer!${COLOR_RESET}"
+    else
+        echo -e "${RED}⚠ Deployment verification failed${COLOR_RESET}"
+        echo -e "${YELLOW}The USB may still work but some features might be missing.${COLOR_RESET}"
+    fi
     
-    # Success!
-    echo ""
-    echo -e "${GREEN}✓ Leonardo successfully deployed to USB!${COLOR_RESET}"
-    echo ""
-    echo "To use Leonardo:"
-    echo "1. Safely eject this USB drive"
-    echo "2. Insert into any computer"
-    echo "3. Run leonardo.sh (Linux/Mac) or leonardo.bat (Windows)"
-    echo ""
-    echo "USB Mount: $LEONARDO_USB_MOUNT"
-    
+    echo
+    pause
     return 0
 }
 
@@ -192,6 +195,48 @@ copy_leonardo_to_usb() {
         cp "$leonardo_script" "$target_dir/leonardo.sh"
         echo -e "${GREEN}✓ Leonardo installed${COLOR_RESET}"
     fi
+}
+
+# Create platform-specific launchers
+create_platform_launchers() {
+    local target_dir="$1"
+    
+    # Create Windows batch launcher
+    cat > "$target_dir/leonardo.bat" << 'EOF'
+@echo off
+title Leonardo AI Universal
+echo Starting Leonardo AI...
+bash leonardo.sh %*
+if errorlevel 1 (
+    echo.
+    echo Leonardo requires Git Bash or WSL on Windows.
+    echo Please install Git for Windows from https://git-scm.com/
+    pause
+)
+EOF
+    
+    # Create Mac/Linux launcher (executable)
+    cat > "$target_dir/leonardo" << 'EOF'
+#!/bin/bash
+# Leonardo AI Universal Launcher
+cd "$(dirname "$0")"
+./leonardo.sh "$@"
+EOF
+    chmod +x "$target_dir/leonardo" 2>/dev/null || true
+    
+    # Create desktop entry for Linux
+    cat > "$target_dir/Leonardo.desktop" << EOF
+[Desktop Entry]
+Name=Leonardo AI
+Comment=Portable AI Assistant
+Exec=bash %f/leonardo.sh
+Icon=%f/leonardo/assets/icon.png
+Terminal=true
+Type=Application
+Categories=Utility;Development;
+EOF
+    
+    echo -e "${GREEN}✓ Platform launchers created${COLOR_RESET}"
 }
 
 # Configure Leonardo for USB deployment
@@ -462,6 +507,41 @@ verify_usb_deployment() {
     return $((checks_total - checks_passed))
 }
 
+# Get recommended models based on USB size
+get_recommended_models() {
+    local usb_size_gb="$1"
+    local models=()
+    
+    # Define model sizes (approximate compressed sizes in GB)
+    local -A model_sizes=(
+        ["phi:2.7b"]="2"
+        ["llama3.2:1b"]="1"
+        ["llama3.2:3b"]="2"
+        ["mistral:7b"]="4"
+        ["llama2:7b"]="4"
+        ["llama2:13b"]="8"
+        ["codellama:7b"]="4"
+        ["mixtral:8x7b"]="26"
+        ["llama3.1:8b"]="5"
+        ["gemma2:2b"]="2"
+        ["qwen2.5:3b"]="2"
+    )
+    
+    # Calculate available space (leave 20% free)
+    local available_gb=$((usb_size_gb * 80 / 100))
+    
+    # Add models that fit
+    for model in "${!model_sizes[@]}"; do
+        local size="${model_sizes[$model]}"
+        if [[ $size -le $available_gb ]]; then
+            models+=("$model (${size}GB)")
+        fi
+    done
+    
+    # Sort by size (smallest first for quick testing)
+    printf '%s\n' "${models[@]}" | sort -t'(' -k2 -n
+}
+
 # Quick USB deployment (minimal interaction)
 quick_deploy_to_usb() {
     local device="$1"
@@ -508,6 +588,71 @@ get_usb_deployment_status() {
     else
         echo "Status: Not deployed"
     fi
+}
+
+# Interactive model selection with size recommendations
+select_model_interactive() {
+    local usb_size_mb="${1:-8192}"  # Default 8GB
+    local usb_size_gb=$((usb_size_mb / 1024))
+    
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
+    echo -e "${BOLD}               🤖 Select AI Model${COLOR_RESET}"
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
+    echo
+    echo -e "${YELLOW}USB Size: ${usb_size_gb}GB${COLOR_RESET}"
+    echo -e "${DIM}Recommended models based on available space:${COLOR_RESET}"
+    echo
+    
+    # Get recommended models
+    local models=()
+    readarray -t models < <(get_recommended_models "$usb_size_gb")
+    
+    if [[ ${#models[@]} -eq 0 ]]; then
+        echo -e "${RED}USB too small for any models!${COLOR_RESET}"
+        echo -e "${YELLOW}Minimum 2GB required.${COLOR_RESET}"
+        return 1
+    fi
+    
+    # Add option to skip
+    models+=("Skip (no model)")
+    
+    # Show menu
+    local selected=$(show_menu "Available Models" "${models[@]}")
+    
+    # Extract model name without size
+    if [[ "$selected" == "Skip (no model)" ]] || [[ -z "$selected" ]]; then
+        echo ""
+        return 1
+    else
+        # Remove size annotation
+        echo "${selected% (*}"
+    fi
+}
+
+# Get USB free space in MB
+get_usb_free_space_mb() {
+    local mount_point="$1"
+    df -BM "$mount_point" | awk 'NR==2 {print $4}' | sed 's/M$//'
+}
+
+# Get device size in MB
+get_device_size_mb() {
+    local device="$1"
+    # Try different methods to get device size
+    if command_exists lsblk; then
+        lsblk -ndo SIZE -b "$device" 2>/dev/null | awk '{print int($1/1024/1024)}'
+    elif command_exists blockdev; then
+        blockdev --getsize64 "$device" 2>/dev/null | awk '{print int($1/1024/1024)}'
+    else
+        # Fallback to 8GB
+        echo "8192"
+    fi
+}
+
+# Pause function
+pause() {
+    echo
+    read -p "Press Enter to continue..." -r
 }
 
 # Export deployment functions

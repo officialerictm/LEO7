@@ -16,6 +16,49 @@ show_banner() {
     echo ""
 }
 
+# Show banner
+show_banner() {
+    echo -e "${CYAN}╔═══════════════════════════════════════════════════════════════╗${COLOR_RESET}"
+    echo -e "${CYAN}║${COLOR_RESET}            ${BOLD}Leonardo AI Universal v$LEONARDO_VERSION${COLOR_RESET}              ${CYAN}║${COLOR_RESET}"
+    echo -e "${CYAN}║${COLOR_RESET}              ${DIM}Portable AI Assistant${COLOR_RESET}                         ${CYAN}║${COLOR_RESET}"
+    echo -e "${CYAN}╚═══════════════════════════════════════════════════════════════╝${COLOR_RESET}"
+}
+
+# Settings menu
+settings_menu() {
+    while true; do
+        local selection
+        selection=$(show_menu "Settings & Preferences" \
+            "Default Model Path" \
+            "Color Theme" \
+            "Auto-Update" \
+            "Network Proxy" \
+            "Back to Main Menu") || break
+        
+        case "$selection" in
+            "Default Model Path")
+                echo -e "${YELLOW}Current model path:${COLOR_RESET} $LEONARDO_MODEL_DIR"
+                pause
+                ;;
+            "Color Theme")
+                echo -e "${YELLOW}Color theme settings coming soon!${COLOR_RESET}"
+                pause
+                ;;
+            "Auto-Update")
+                echo -e "${YELLOW}Auto-update settings coming soon!${COLOR_RESET}"
+                pause
+                ;;
+            "Network Proxy")
+                echo -e "${YELLOW}Proxy settings coming soon!${COLOR_RESET}"
+                pause
+                ;;
+            "Back to Main Menu"|"")
+                break
+                ;;
+        esac
+    done
+}
+
 # Show help information
 show_help() {
     cat << EOF
@@ -102,45 +145,118 @@ main() {
     fi
     
     # Main interactive menu
-    while true; do
-        show_menu "Main Menu" \
-            "AI Model Management" \
-            "Create/Manage USB Drive" \
-            "System Dashboard" \
-            "Launch Web Interface" \
-            "Settings & Preferences" \
-            "Run System Tests" \
-            "About Leonardo" \
-            "Exit"
+    local keep_running=true
+    while [[ "$keep_running" == "true" ]]; do
+        clear
+        show_banner
         
-        case "$MENU_SELECTION" in
-            "AI Model Management")
-                model_management_menu
+        # Build menu options dynamically
+        local menu_options=()
+        
+        # Always show deployment option first for MVP
+        menu_options+=("🚀 Deploy to USB")
+        
+        # Show chat option if models are installed
+        if check_installed_models; then
+            menu_options+=("💬 Chat with AI")
+        fi
+        
+        # System management options
+        menu_options+=("📦 Model Manager")
+        menu_options+=("🔧 System Utilities")
+        menu_options+=("📊 System Dashboard")
+        menu_options+=("⚙️  Settings")
+        menu_options+=("📖 Help")
+        menu_options+=("🚪 Exit")
+        
+        local selection
+        selection=$(show_menu "Leonardo AI Universal - Main Menu" "${menu_options[@]}")
+        local menu_exit_code=$?
+        
+        # Debug: Show menu exit code and selection
+        echo -e "${YELLOW}DEBUG: Menu exit code: $menu_exit_code${COLOR_RESET}" >&2
+        echo -e "${YELLOW}DEBUG: Raw selection: '$selection'${COLOR_RESET}" >&2
+        sleep 2
+        
+        # If show_menu returned error (user pressed q), exit
+        if [[ $menu_exit_code -ne 0 ]]; then
+            keep_running=false
+            continue
+        fi
+        
+        # Debug: Show what was selected
+        if [[ "$LEONARDO_DEBUG" == "true" ]] || [[ -n "${DEBUG:-}" ]]; then
+            echo "DEBUG: Selected: '$selection'" >&2
+            sleep 1
+        fi
+        
+        # Extra debug: Show hex dump of selection to see any hidden characters
+        echo -e "${YELLOW}DEBUG: Hex dump of selection:${COLOR_RESET}" >&2
+        echo -n "$selection" | od -An -tx1 >&2
+        echo -e "${YELLOW}DEBUG: Length: ${#selection}${COLOR_RESET}" >&2
+        
+        # Test exact match
+        if [[ "$selection" == "🚀 Deploy to USB" ]]; then
+            echo -e "${GREEN}DEBUG: Exact match found!${COLOR_RESET}" >&2
+        else
+            echo -e "${RED}DEBUG: No exact match${COLOR_RESET}" >&2
+        fi
+        sleep 2
+        
+        case "$selection" in
+            "🚀 Deploy to USB")
+                if [[ "$LEONARDO_DEBUG" == "true" ]] || [[ -n "${DEBUG:-}" ]]; then
+                    echo "DEBUG: Calling deploy_to_usb" >&2
+                fi
+                deploy_to_usb
+                # Don't exit on failure, just return to menu
                 ;;
-            "Create/Manage USB Drive")
-                usb_management_menu
+            "💬 Chat with AI")
+                if [[ "$LEONARDO_DEBUG" == "true" ]] || [[ -n "${DEBUG:-}" ]]; then
+                    echo "DEBUG: Calling handle_chat_command" >&2
+                fi
+                handle_chat_command
                 ;;
-            "System Dashboard")
+            "📦 Model Manager")
+                if [[ "$LEONARDO_DEBUG" == "true" ]] || [[ -n "${DEBUG:-}" ]]; then
+                    echo "DEBUG: Calling handle_model_command menu" >&2
+                fi
+                handle_model_command "menu"
+                ;;
+            "🔧 System Utilities")
+                if [[ "$LEONARDO_DEBUG" == "true" ]] || [[ -n "${DEBUG:-}" ]]; then
+                    echo "DEBUG: Calling system_utilities_menu" >&2
+                fi
+                system_utilities_menu
+                ;;
+            "📊 System Dashboard")
+                if [[ "$LEONARDO_DEBUG" == "true" ]] || [[ -n "${DEBUG:-}" ]]; then
+                    echo "DEBUG: Calling show_dashboard" >&2
+                fi
                 show_dashboard
-                read -p "Press Enter to continue..."
+                pause
                 ;;
-            "Launch Web Interface")
-                launch_web_interface
-                ;;
-            "Settings & Preferences")
+            "⚙️  Settings")
+                if [[ "$LEONARDO_DEBUG" == "true" ]] || [[ -n "${DEBUG:-}" ]]; then
+                    echo "DEBUG: Calling settings_menu" >&2
+                fi
                 settings_menu
                 ;;
-            "Run System Tests")
-                run_system_tests
-                read -p "Press Enter to continue..."
+            "📖 Help")
+                if [[ "$LEONARDO_DEBUG" == "true" ]] || [[ -n "${DEBUG:-}" ]]; then
+                    echo "DEBUG: Calling show_help" >&2
+                fi
+                show_help
+                pause
                 ;;
-            "About Leonardo")
-                show_about
-                read -p "Press Enter to continue..."
-                ;;
-            "Exit"|"")
+            "🚪 Exit"|"")
                 handle_exit
-                break
+                keep_running=false
+                ;;
+            *)
+                if [[ "$LEONARDO_DEBUG" == "true" ]] || [[ -n "${DEBUG:-}" ]]; then
+                    echo "DEBUG: Unknown selection: '$selection'" >&2
+                fi
                 ;;
         esac
     done
@@ -773,4 +889,191 @@ handle_exit() {
     # TODO: Implement session persistence
     
     exit 0
+}
+
+# Check if any models are installed
+check_installed_models() {
+    # Check for models in default location
+    if [[ -d "$LEONARDO_MODEL_DIR" ]] && [[ -n "$(ls -A "$LEONARDO_MODEL_DIR" 2>/dev/null)" ]]; then
+        return 0
+    fi
+    
+    # Check for Ollama models
+    if command_exists ollama && ollama list 2>/dev/null | grep -q "^[a-zA-Z]"; then
+        return 0
+    fi
+    
+    return 1
+}
+
+# Get list of available models for chat
+get_chat_models() {
+    local models=()
+    
+    # Get Ollama models
+    if command_exists ollama; then
+        while IFS= read -r line; do
+            if [[ -n "$line" && ! "$line" =~ ^NAME ]]; then
+                local model_name=$(echo "$line" | awk '{print $1}')
+                models+=("$model_name")
+            fi
+        done < <(ollama list 2>/dev/null)
+    fi
+    
+    # Get local GGUF models
+    if [[ -d "$LEONARDO_MODEL_DIR" ]]; then
+        for model_file in "$LEONARDO_MODEL_DIR"/*.gguf; do
+            if [[ -f "$model_file" ]]; then
+                local model_name=$(basename "$model_file" .gguf)
+                models+=("$model_name")
+            fi
+        done
+    fi
+    
+    printf '%s\n' "${models[@]}"
+}
+
+# Handle chat command
+handle_chat_command() {
+    # Get available models  
+    local models=()
+    if command_exists ollama; then
+        mapfile -t models < <(ollama list 2>/dev/null | tail -n +2 | awk '{print $1}')
+    fi
+    
+    # Check for local models in LEONARDO_MODEL_DIR
+    if [[ -d "$LEONARDO_MODEL_DIR" ]]; then
+        while IFS= read -r -d '' model_file; do
+            models+=("local:$(basename "$model_file")")
+        done < <(find "$LEONARDO_MODEL_DIR" -name "*.gguf" -print0 2>/dev/null)
+    fi
+    
+    if [[ ${#models[@]} -eq 0 ]]; then
+        echo -e "${RED}No AI models installed!${COLOR_RESET}"
+        echo -e "${YELLOW}Install a model first using Model Manager.${COLOR_RESET}"
+        pause
+        return
+    fi
+    
+    # Select model if multiple available
+    local selected_model
+    if [[ ${#models[@]} -eq 1 ]]; then
+        selected_model="${models[0]}"
+    else
+        selected_model=$(show_menu "Select AI Model" "${models[@]}") || return
+    fi
+    
+    # Launch chat interface
+    start_chat_interface "$selected_model"
+}
+
+# Start chat interface with selected model
+start_chat_interface() {
+    local model="$1"
+    
+    clear
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
+    echo -e "${BOLD}               🤖 Leonardo AI Chat - $model${COLOR_RESET}"
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
+    echo
+    echo -e "${DIM}Type 'exit' or 'quit' to end the chat session${COLOR_RESET}"
+    echo -e "${DIM}Type 'clear' to clear the conversation${COLOR_RESET}"
+    echo
+    
+    if [[ "$model" == ollama:* ]] && command_exists ollama; then
+        # Use Ollama for chat
+        local model_name="${model#ollama:}"
+        ollama run "$model_name"
+    elif [[ "$model" == local:* ]]; then
+        # Use llama.cpp for local models
+        echo -e "${YELLOW}Local model chat coming soon!${COLOR_RESET}"
+        echo -e "${DIM}This will use llama.cpp for inference${COLOR_RESET}"
+        pause
+    else
+        # Fallback for other model types
+        echo -e "${YELLOW}Chat interface for $model coming soon!${COLOR_RESET}"
+        pause
+    fi
+}
+
+# Check if any models are installed
+check_installed_models() {
+    # Check Ollama models
+    if command_exists ollama; then
+        local ollama_models=$(ollama list 2>/dev/null | tail -n +2 | wc -l)
+        [[ $ollama_models -gt 0 ]] && return 0
+    fi
+    
+    # Check local models
+    if [[ -d "$LEONARDO_MODEL_DIR" ]]; then
+        local local_models=$(find "$LEONARDO_MODEL_DIR" -name "*.gguf" 2>/dev/null | wc -l)
+        [[ $local_models -gt 0 ]] && return 0
+    fi
+    
+    return 1
+}
+
+# System utilities menu
+system_utilities_menu() {
+    while true; do
+        local selection
+        selection=$(show_menu "System Utilities" \
+            "Run System Tests" \
+            "Clean Cache" \
+            "Update Leonardo" \
+            "View Logs" \
+            "Back to Main Menu") || break
+        
+        case "$selection" in
+            "Run System Tests")
+                run_system_tests
+                pause
+                ;;
+            "Clean Cache")
+                echo -e "${YELLOW}Cleaning cache...${COLOR_RESET}"
+                # TODO: Implement cache cleaning
+                pause
+                ;;
+            "Update Leonardo")
+                echo -e "${YELLOW}Checking for updates...${COLOR_RESET}"
+                # TODO: Implement update check
+                pause
+                ;;
+            "View Logs")
+                if [[ -f "$LEONARDO_LOG_FILE" ]]; then
+                    less "$LEONARDO_LOG_FILE"
+                else
+                    echo -e "${YELLOW}No logs found${COLOR_RESET}"
+                    pause
+                fi
+                ;;
+            "Back to Main Menu"|"")
+                break
+                ;;
+        esac
+    done
+}
+
+# Show about information
+show_about() {
+    clear
+    show_banner
+    echo
+    echo -e "${BOLD}About Leonardo AI Universal${COLOR_RESET}"
+    echo -e "${DIM}────────────────────────────────────────────────${COLOR_RESET}"
+    echo
+    echo "Leonardo is a portable AI assistant that can run from USB drives"
+    echo "and provides easy access to various AI models."
+    echo
+    echo -e "${CYAN}Version:${COLOR_RESET} $LEONARDO_VERSION ($LEONARDO_BUILD)"
+    echo -e "${CYAN}License:${COLOR_RESET} MIT"
+    echo -e "${CYAN}Website:${COLOR_RESET} https://github.com/leonardo-ai/leonardo"
+    echo
+    echo -e "${BOLD}Features:${COLOR_RESET}"
+    echo "  • Portable USB deployment"
+    echo "  • Multiple AI model support"
+    echo "  • Offline model management"
+    echo "  • Cross-platform compatibility"
+    echo "  • Web interface"
+    echo
 }
