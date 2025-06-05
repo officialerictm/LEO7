@@ -43,8 +43,16 @@ cd LEO7
 # Run the installer
 ./leonardo.sh
 
+
 # Follow the interactive setup!
 ```
+
+### Navigating the Menus
+
+The installer uses a colorful text menu. Use the **arrow keys** or press a
+**number** to choose an option. The recommended item is always listed first so
+you can simply press **Enter** to accept it. Set `LEONARDO_DEBUG=true` if you
+need verbose output for troubleshooting.
 
 ### Formatting a USB Drive
 
