@@ -6332,6 +6332,7 @@ deploy_to_usb() {
     if [[ -n "$selected_model" ]]; then
         echo
         echo -e "${CYAN}Installing $selected_model...${COLOR_RESET}"
+        echo -e "${DIM}DEBUG: selected_model='$selected_model'${COLOR_RESET}"
         if download_model_to_usb "$selected_model"; then
             echo -e "${GREEN}✓ Model installed successfully${COLOR_RESET}"
         else
@@ -6353,7 +6354,7 @@ deploy_to_usb() {
         echo -e "${BOLD}To use Leonardo on any computer:${COLOR_RESET}"
         echo -e "1. Insert the USB drive"
         echo -e "2. Navigate to the USB in terminal"
-        echo -e "3. Run: ${CYAN}./leonardo${COLOR_RESET} (Linux/Mac) or ${CYAN}leonardo.bat${COLOR_RESET} (Windows)"
+        echo -e "3. Run: ${CYAN}./leonardo-launch${COLOR_RESET} (Linux/Mac) or ${CYAN}leonardo.bat${COLOR_RESET} (Windows)"
         echo
         echo -e "${DIM}The USB is ready to use on any computer!${COLOR_RESET}"
     else
@@ -6391,7 +6392,6 @@ copy_leonardo_to_usb() {
     # Also copy to root for convenience
     cp "$leonardo_script" "$target_dir/leonardo.sh"
     chmod +x "$target_dir/leonardo.sh"
-    chmod +x "$target_dir/leonardo/leonardo.sh"
 }
 
 # Create platform-specific launchers
@@ -6413,13 +6413,13 @@ if errorlevel 1 (
 EOF
     
     # Create Mac/Linux launcher (executable)
-    cat > "$target_dir/leonardo" << 'EOF'
+    cat > "$target_dir/leonardo-launch" << 'EOF'
 #!/bin/bash
 # Leonardo AI Universal Launcher
 cd "$(dirname "$0")"
 ./leonardo.sh "$@"
 EOF
-    chmod +x "$target_dir/leonardo" 2>/dev/null || true
+    chmod +x "$target_dir/leonardo-launch" 2>/dev/null || true
     
     # Create desktop entry for Linux
     cat > "$target_dir/Leonardo.desktop" << EOF
@@ -6565,9 +6565,13 @@ download_model_to_usb() {
     local model_spec="$1"
     local target_dir="$LEONARDO_USB_MOUNT/leonardo/models"
     
+    echo -e "${DIM}DEBUG: download_model_to_usb called with model_spec='$model_spec'${COLOR_RESET}"
+    
     # Parse model spec (format: model_id:variant)
     local model_id="${model_spec%:*}"
     local variant="${model_spec#*:}"
+    
+    echo -e "${DIM}DEBUG: model_id='$model_id', variant='$variant'${COLOR_RESET}"
     
     # Ensure target directory exists
     ensure_directory "$target_dir"
@@ -6741,7 +6745,7 @@ verify_usb_deployment() {
     
     # Check 4: Platform launchers
     ((checks_total++))
-    if [[ -f "$LEONARDO_USB_MOUNT/leonardo.bat" ]] || [[ -f "$LEONARDO_USB_MOUNT/leonardo.command" ]]; then
+    if [[ -f "$LEONARDO_USB_MOUNT/leonardo.bat" ]] || [[ -f "$LEONARDO_USB_MOUNT/leonardo-launch" ]]; then
         echo "✓ Platform launchers created"
         ((checks_passed++))
     else
@@ -6847,10 +6851,44 @@ get_usb_deployment_status() {
     fi
 }
 
+# Pause function
+pause() {
+    echo
+    read -p "Press Enter to continue..." -r
+}
+
+# Export deployment functions
+export -f deploy_to_usb configure_usb_leonardo deploy_models_to_usb
+export -f download_model_to_usb create_usb_autorun verify_usb_deployment
+export -f quick_deploy_to_usb get_usb_deployment_status
+
+# Create Leonardo directory structure
+create_leonardo_structure() {
+    local target_dir="$1"
+    
+    # Create required directories
+    local required_dirs=("leonardo" "leonardo/models" "leonardo/config" "leonardo/logs")
+    
+    for dir in "${required_dirs[@]}"; do
+        if [[ ! -d "$target_dir/$dir" ]]; then
+            mkdir -p "$target_dir/$dir"
+        fi
+    done
+    
+    echo -e "${GREEN}✓ Leonardo directory structure created${COLOR_RESET}"
+}
+
 # Interactive model selection with size recommendations
 select_model_interactive() {
     local usb_size_mb="${1:-8192}"  # Default 8GB
     local usb_size_gb=$((usb_size_mb / 1024))
+    
+    # Check if we're in interactive mode
+    if ! [[ -t 0 ]] || ! [[ -t 1 ]]; then
+        # Non-interactive mode - skip model selection
+        echo -e "${YELLOW}Non-interactive mode: Skipping model selection${COLOR_RESET}" >&2
+        return 1
+    fi
     
     echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
     echo -e "${BOLD}               🤖 Select AI Model${COLOR_RESET}"
@@ -6904,33 +6942,6 @@ get_device_size_mb() {
         # Fallback to 8GB
         echo "8192"
     fi
-}
-
-# Pause function
-pause() {
-    echo
-    read -p "Press Enter to continue..." -r
-}
-
-# Export deployment functions
-export -f deploy_to_usb configure_usb_leonardo deploy_models_to_usb
-export -f download_model_to_usb create_usb_autorun verify_usb_deployment
-export -f quick_deploy_to_usb get_usb_deployment_status
-
-# Create Leonardo directory structure
-create_leonardo_structure() {
-    local target_dir="$1"
-    
-    # Create required directories
-    local required_dirs=("leonardo" "leonardo/models" "leonardo/config" "leonardo/logs")
-    
-    for dir in "${required_dirs[@]}"; do
-        if [[ ! -d "$target_dir/$dir" ]]; then
-            mkdir -p "$target_dir/$dir"
-        fi
-    done
-    
-    echo -e "${GREEN}✓ Leonardo directory structure created${COLOR_RESET}"
 }
 
 # ==== Component: src/deployment/cli.sh ====
