@@ -504,13 +504,15 @@ download_model_to_usb() {
     # Set download target
     export LEONARDO_MODEL_DIR="$target_dir"
     
-    echo -e "${CYAN}Downloading ${model_id}${COLOR_RESET}"
+    echo -e "${CYAN}Downloading ${model_id}:${variant}${COLOR_RESET}"
     
     # Check if we have Ollama provider
     if command_exists ollama; then
         # Use Ollama to pull the model
         echo "Using Ollama to download model..."
-        ollama pull "${model_id}:${variant}" 2>&1 | \
+        
+        # First pull the model
+        if ollama pull "${model_id}:${variant}" 2>&1 | \
         while IFS= read -r line; do
             # Parse Ollama progress output
             if [[ "$line" =~ pulling[[:space:]].*[[:space:]]([0-9]+)%[[:space:]]+\|.*\|[[:space:]]+([0-9.]+[[:space:]]?[KMGT]?B)/([0-9.]+[[:space:]]?[KMGT]?B)[[:space:]]+([0-9.]+[[:space:]]?[KMGT]?B/s) ]]; then
@@ -524,23 +526,80 @@ download_model_to_usb() {
                 printf " ${percent}%% | ${downloaded}/${total} | ${speed}  "
             elif [[ "$line" =~ "success" ]] || [[ "$line" =~ "already up to date" ]]; then
                 printf "\r%-80s\r" " "
-                echo -e "${GREEN}✓ Model downloaded successfully${COLOR_RESET}"
+                echo -e "${GREEN}✓ Model downloaded to Ollama${COLOR_RESET}"
                 return 0
             fi
-        done
-    else
-        # Direct download from registry
-        echo "Downloading from model registry..."
-        
-        # Get model URL from registry (mock for now)
-        local model_url="https://huggingface.co/TheBloke/${model_id}-GGUF/resolve/main/${model_id}.${variant}.gguf"
-        local output_file="$target_dir/${model_id}-${variant}.gguf"
-        
-        # Download with progress
-        download_with_progress "$model_url" "$output_file" "Downloading ${model_id} (${variant})"
+        done; then
+            # Now export the model to USB
+            echo -e "${CYAN}Exporting model to USB...${COLOR_RESET}"
+            local model_file="$target_dir/${model_id}-${variant}.gguf"
+            
+            # Try to export using ollama show
+            if ollama show "${model_id}:${variant}" --modelfile > "$target_dir/${model_id}-${variant}.modelfile" 2>/dev/null; then
+                echo -e "${GREEN}✓ Model exported to USB${COLOR_RESET}"
+                
+                # Create a simple info file
+                cat > "$target_dir/${model_id}-${variant}.info" <<EOF
+Model: ${model_id}:${variant}
+Downloaded: $(date)
+Type: Ollama Model
+Location: $target_dir
+Note: Use 'ollama run ${model_id}:${variant}' to run this model
+EOF
+                return 0
+            else
+                echo -e "${YELLOW}⚠ Could not export model file, using fallback download${COLOR_RESET}"
+            fi
+        fi
     fi
     
-    return $?
+    # Direct download from registry as fallback
+    echo "Downloading from model registry..."
+    
+    # Map common model names to HuggingFace URLs
+    local model_url=""
+    case "${model_id}:${variant}" in
+        "phi:2.7b")
+            model_url="https://huggingface.co/microsoft/phi-2/resolve/main/phi-2_Q4_K_M.gguf"
+            ;;
+        "llama2:7b")
+            model_url="https://huggingface.co/TheBloke/Llama-2-7B-GGUF/resolve/main/llama-2-7b.Q4_K_M.gguf"
+            ;;
+        "mistral:7b")
+            model_url="https://huggingface.co/TheBloke/Mistral-7B-v0.1-GGUF/resolve/main/mistral-7b-v0.1.Q4_K_M.gguf"
+            ;;
+        "llama3.2:1b")
+            model_url="https://huggingface.co/lmstudio-community/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf"
+            ;;
+        *)
+            echo -e "${RED}✗ Model ${model_id}:${variant} not found in registry${COLOR_RESET}"
+            echo -e "${YELLOW}Available models for direct download:${COLOR_RESET}"
+            echo "  - phi:2.7b"
+            echo "  - llama2:7b"
+            echo "  - mistral:7b"
+            echo "  - llama3.2:1b"
+            return 1
+            ;;
+    esac
+    
+    local output_file="$target_dir/${model_id}-${variant}.gguf"
+    
+    # Download with progress
+    if download_with_progress "$model_url" "$output_file" "Downloading ${model_id} (${variant})"; then
+        # Create info file
+        cat > "$target_dir/${model_id}-${variant}.info" <<EOF
+Model: ${model_id}:${variant}
+Downloaded: $(date)
+Type: GGUF Model
+Location: $output_file
+Size: $(du -h "$output_file" | cut -f1)
+EOF
+        echo -e "${GREEN}✓ Model downloaded successfully to USB${COLOR_RESET}"
+        return 0
+    else
+        echo -e "${RED}✗ Failed to download model${COLOR_RESET}"
+        return 1
+    fi
 }
 
 # Create autorun files
