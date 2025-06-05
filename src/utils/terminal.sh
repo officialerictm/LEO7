@@ -14,5 +14,10 @@ clear() {
     fi
 }
 
+# Check if a command exists in PATH
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
 # Export functions
-export -f clear
+export -f clear command_exists
