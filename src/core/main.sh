@@ -99,11 +99,18 @@ For more help on specific commands:
 EOF
 }
 
+# Error handler
+handle_error() {
+    local exit_code="$1"
+    local line_no="$2"
+    log_message "ERROR" "Command failed with exit code $exit_code at line $line_no"
+}
+
 # Main function - entry point for Leonardo
 main() {
-    # Set up error handling - temporarily disabled as handle_error doesn't exist
-    # set -euo pipefail
-    # trap 'handle_error $? $LINENO' ERR
+    # Set up error handling
+    set -euo pipefail
+    trap 'handle_error $? $LINENO' ERR
     
     # Parse command line arguments
     parse_arguments "$@"
