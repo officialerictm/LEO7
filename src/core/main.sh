@@ -81,6 +81,7 @@ ${COLOR_GREEN}Commands:${COLOR_RESET}
   dashboard         Show system dashboard
   web [port]        Start web UI
   test              Run system tests
+  chat              Chat with a model
 
 ${COLOR_GREEN}Interactive Mode:${COLOR_RESET}
   Run without commands to enter interactive mode
@@ -91,6 +92,7 @@ ${COLOR_GREEN}Examples:${COLOR_RESET}
   leonardo model download llama3-8b
   leonardo dashboard            # Show system status
   leonardo web                  # Start web interface
+  leonardo chat                 # Chat with a model
 
 For more help on specific commands:
   leonardo model help
@@ -335,6 +337,16 @@ parse_arguments() {
                 LEONARDO_ARGS=("$@")
                 break
                 ;;
+            chat)
+                LEONARDO_COMMAND="chat"
+                shift
+                LEONARDO_SUBCOMMAND="${1:-}"
+                if [[ "$LEONARDO_SUBCOMMAND" =~ ^(web|api|status|stop|help|--web|--help|-h)$ ]]; then
+                    shift || true
+                fi
+                LEONARDO_ARGS=("$@")
+                break
+                ;;
             test|check)
                 LEONARDO_COMMAND="test"
                 shift
@@ -368,6 +380,9 @@ handle_command() {
             ;;
         "test")
             run_system_tests
+            ;;
+        "chat")
+            handle_chat_command "${LEONARDO_SUBCOMMAND}" "${LEONARDO_ARGS[@]}"
             ;;
         *)
             echo "${COLOR_RED}Unknown command: $LEONARDO_COMMAND${COLOR_RESET}"
@@ -978,29 +993,8 @@ handle_chat_command() {
 start_chat_interface() {
     local model="$1"
     
-    clear
-    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
-    echo -e "${BOLD}               🤖 Leonardo AI Chat - $model${COLOR_RESET}"
-    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
-    echo
-    echo -e "${DIM}Type 'exit' or 'quit' to end the chat session${COLOR_RESET}"
-    echo -e "${DIM}Type 'clear' to clear the conversation${COLOR_RESET}"
-    echo
-    
-    if [[ "$model" == ollama:* ]] && command_exists ollama; then
-        # Use Ollama for chat
-        local model_name="${model#ollama:}"
-        ollama run "$model_name"
-    elif [[ "$model" == local:* ]]; then
-        # Use llama.cpp for local models
-        echo -e "${YELLOW}Local model chat coming soon!${COLOR_RESET}"
-        echo -e "${DIM}This will use llama.cpp for inference${COLOR_RESET}"
-        pause
-    else
-        # Fallback for other model types
-        echo -e "${YELLOW}Chat interface for $model coming soon!${COLOR_RESET}"
-        pause
-    fi
+    # Start chat
+    start_chat "$model"
 }
 
 # Check if any models are installed
@@ -1083,4 +1077,12 @@ show_about() {
     echo "  • Cross-platform compatibility"
     echo "  • Web interface"
     echo
+}
+
+# Chat with a model
+chat_with_model() {
+    local model="$1"
+    
+    # Start chat
+    start_chat "$model"
 }

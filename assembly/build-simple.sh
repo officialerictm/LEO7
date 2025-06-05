@@ -79,6 +79,11 @@ COMPONENTS=(
     "src/usb/health.sh"
     "src/usb/cli.sh"
     
+    # Chat functionality
+    "src/chat/cli.sh"
+    "src/chat/api.sh"
+    "src/chat/main.sh"
+    
     # Main entry point (must be last)
     "src/core/main.sh"
 )

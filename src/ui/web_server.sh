@@ -19,7 +19,16 @@ start_web_server() {
     local web_root="${LEONARDO_BASE_DIR}/web"
     mkdir -p "$web_root"
     
-    if [[ ! -f "$web_root/index.html" ]]; then
+    # Copy the chat interface
+    local chat_html="${LEONARDO_BASE_DIR}/src/ui/web_chat.html"
+    if [[ ! -f "$chat_html" ]]; then
+        # Try alternate location
+        chat_html="$(dirname "${BASH_SOURCE[0]}")/web_chat.html"
+    fi
+    
+    if [[ -f "$chat_html" ]]; then
+        cp "$chat_html" "$web_root/index.html"
+    elif [[ ! -f "$web_root/index.html" ]]; then
         cat > "$web_root/index.html" << 'EOF'
 <!DOCTYPE html>
 <html lang="en">
@@ -219,4 +228,38 @@ EOF
 stop_web_server() {
     echo -e "${CYAN}Stopping web server...${COLOR_RESET}"
     pkill -f "python3 -m http.server" 2>/dev/null || true
+}
+
+# Start both web and API servers
+start_servers() {
+    local web_port="${1:-8080}"
+    local api_port="${2:-8081}"
+    
+    # Source API module
+    source "${LEONARDO_BASE_DIR}/src/chat/api.sh" 2>/dev/null || source "$(dirname "${BASH_SOURCE[0]}")/../chat/api.sh"
+    
+    echo -e "${CYAN}Starting Leonardo Web Interface with Chat...${COLOR_RESET}"
+    echo
+    
+    # Start API server first
+    start_api_server "$api_port"
+    
+    # Then start web server
+    start_web_server "$web_port"
+    
+    echo
+    echo -e "${GREEN}✓ Leonardo Web Chat is ready!${COLOR_RESET}"
+    echo -e "  Web UI: ${CYAN}http://localhost:${web_port}${COLOR_RESET}"
+    echo -e "  API: ${CYAN}http://localhost:${api_port}/api${COLOR_RESET}"
+    echo
+    echo -e "${DIM}Press Ctrl+C to stop${COLOR_RESET}"
+}
+
+# Stop both servers
+stop_servers() {
+    # Source API module
+    source "${LEONARDO_BASE_DIR}/src/chat/api.sh" 2>/dev/null || source "$(dirname "${BASH_SOURCE[0]}")/../chat/api.sh"
+    
+    stop_web_server
+    stop_api_server
 }

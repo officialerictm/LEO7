@@ -1224,31 +1224,174 @@ format_usb_device() {
     
     log_message "INFO" "Formatting $device as $filesystem with label $label"
     
+    # Check if we need sudo (Linux only)
+    local need_sudo=""
+    if [[ "$OSTYPE" == "linux-gnu"* ]] && [[ $EUID -ne 0 ]]; then
+        need_sudo="sudo"
+        echo -e "${YELLOW}⚠ Formatting USB requires administrator privileges${COLOR_RESET}"
+        echo -e "${CYAN}You may be prompted for your password${COLOR_RESET}"
+        
+        # Prompt for sudo password early
+        if ! sudo -v; then
+            echo -e "${RED}Error: Unable to obtain administrator privileges${COLOR_RESET}"
+            return 1
+        fi
+    fi
+    
     # Unmount if mounted
     unmount_device "$device"
     
     # Platform-specific formatting
     if [[ "$OSTYPE" == "linux-gnu"* ]]; then
+        # Check if device is a whole disk or partition
+        local target_device="$device"
+        local is_partition=false
+        
+        # Check if this is a partition (ends with a number)
+        if [[ "$device" =~ [0-9]$ ]]; then
+            is_partition=true
+            echo -e "${DIM}Detected partition device: $device${COLOR_RESET}"
+        else
+            # Check if device has partitions
+            local partitions=$(lsblk -rno NAME,TYPE "$device" 2>/dev/null | grep -c "part" || echo "0")
+            if [[ $partitions -gt 0 ]]; then
+                # Device has partitions, we need to either use the first partition or recreate partition table
+                echo -e "${YELLOW}Device $device has existing partitions${COLOR_RESET}"
+                
+                # For whole device formatting, we need to wipe and recreate partition table
+                echo -e "${CYAN}Creating new partition table for cross-platform compatibility...${COLOR_RESET}"
+                
+                # Unmount all partitions
+                for part in $(lsblk -rno NAME "$device" | grep -v "^$(basename $device)$"); do
+                    local part_device="/dev/$part"
+                    echo -e "${DIM}Running: ${need_sudo} umount $part_device${COLOR_RESET}"
+                    $need_sudo umount "$part_device" 2>/dev/null || true
+                    # Force lazy unmount if regular unmount fails
+                    $need_sudo umount -l "$part_device" 2>/dev/null || true
+                done
+                
+                # Wait a moment for unmounts to complete
+                sleep 1
+                
+                # Clear partition signatures to avoid "in use" errors
+                echo -e "${DIM}Clearing partition signatures...${COLOR_RESET}"
+                $need_sudo wipefs -a "$device" 2>/dev/null || true
+                
+                # Force kernel to re-read partition table
+                $need_sudo partprobe "$device" 2>/dev/null || true
+                
+                # Create new partition table with single partition
+                echo -e "${DIM}Creating GPT partition table...${COLOR_RESET}"
+                if ! $need_sudo parted -s "$device" mklabel gpt 2>&1; then
+                    echo -e "${RED}Failed to create partition table${COLOR_RESET}"
+                    echo -e "${YELLOW}Tip: Try ejecting the USB from your desktop first${COLOR_RESET}"
+                    return 1
+                fi
+                
+                echo -e "${DIM}Creating partition...${COLOR_RESET}"
+                if ! $need_sudo parted -s "$device" mkpart primary 1MiB 100% 2>&1; then
+                    echo -e "${RED}Failed to create partition${COLOR_RESET}"
+                    return 1
+                fi
+                
+                # Wait for partition to appear
+                sleep 2
+                
+                # Find the new partition
+                if [[ -e "${device}1" ]]; then
+                    target_device="${device}1"
+                elif [[ -e "${device}p1" ]]; then
+                    target_device="${device}p1"
+                else
+                    echo -e "${RED}Error: Could not find created partition${COLOR_RESET}"
+                    return 1
+                fi
+                echo -e "${GREEN}✓ Created partition: $target_device${COLOR_RESET}"
+            fi
+        fi
+        
+        # Now format the target device (either original partition or newly created one)
         case "$filesystem" in
             exfat)
-                mkfs.exfat -n "$label" "$device" 2>&1 | while read -r line; do
-                    log_message "DEBUG" "mkfs.exfat: $line"
-                done
+                if ! command -v mkfs.exfat &> /dev/null; then
+                    echo -e "${RED}Error: mkfs.exfat not found${COLOR_RESET}"
+                    echo -e "${YELLOW}Install with: sudo apt install exfat-utils exfatprogs${COLOR_RESET}"
+                    echo -e "${YELLOW}Or on newer systems: sudo apt install exfatprogs${COLOR_RESET}"
+                    return 1
+                fi
+                echo -e "${DIM}Running: ${need_sudo} mkfs.exfat -n \"$label\" $target_device${COLOR_RESET}"
+                
+                # Capture both stdout and stderr
+                local format_output
+                format_output=$(${need_sudo} mkfs.exfat -n "$label" "$target_device" 2>&1)
+                local exit_code=$?
+                
+                if [[ $exit_code -ne 0 ]]; then
+                    echo -e "${RED}Failed to format USB drive as exFAT${COLOR_RESET}"
+                    echo -e "${DIM}Error details: $format_output${COLOR_RESET}"
+                    
+                    # Check for common issues
+                    if [[ "$format_output" == *"No such file or directory"* ]]; then
+                        echo -e "${YELLOW}Tip: Device issue detected. Try unplugging and reconnecting the USB${COLOR_RESET}"
+                    elif [[ "$format_output" == *"Device or resource busy"* ]]; then
+                        echo -e "${YELLOW}Tip: The device may be in use. Try ejecting it from your file manager first${COLOR_RESET}"
+                    elif [[ "$format_output" == *"Permission denied"* ]]; then
+                        echo -e "${YELLOW}Tip: Permission issue detected even with sudo${COLOR_RESET}"
+                    fi
+                    return 1
+                else
+                    echo -e "${GREEN}✓ Successfully formatted as exFAT (cross-platform compatible)${COLOR_RESET}"
+                fi
                 ;;
             fat32|vfat)
-                mkfs.vfat -F 32 -n "$label" "$device" 2>&1 | while read -r line; do
-                    log_message "DEBUG" "mkfs.vfat: $line"
-                done
+                echo -e "${DIM}Running: ${need_sudo} mkfs.vfat -F 32 -n \"$label\" $target_device${COLOR_RESET}"
+                
+                local format_output
+                format_output=$(${need_sudo} mkfs.vfat -F 32 -n "$label" "$target_device" 2>&1)
+                local exit_code=$?
+                
+                if [[ $exit_code -ne 0 ]]; then
+                    echo -e "${RED}Failed to format USB drive as FAT32${COLOR_RESET}"
+                    echo -e "${DIM}Error details: $format_output${COLOR_RESET}"
+                    return 1
+                else
+                    echo -e "${GREEN}✓ Successfully formatted as FAT32${COLOR_RESET}"
+                fi
                 ;;
             ntfs)
-                mkfs.ntfs -Q -L "$label" "$device" 2>&1 | while read -r line; do
-                    log_message "DEBUG" "mkfs.ntfs: $line"
-                done
+                if ! command -v mkfs.ntfs &> /dev/null; then
+                    echo -e "${RED}Error: mkfs.ntfs not found${COLOR_RESET}"
+                    echo -e "${YELLOW}Install with: sudo apt install ntfs-3g${COLOR_RESET}"
+                    return 1
+                fi
+                echo -e "${DIM}Running: ${need_sudo} mkfs.ntfs -Q -L \"$label\" $target_device${COLOR_RESET}"
+                
+                local format_output
+                format_output=$(${need_sudo} mkfs.ntfs -Q -L "$label" "$target_device" 2>&1)
+                local exit_code=$?
+                
+                if [[ $exit_code -ne 0 ]]; then
+                    echo -e "${RED}Failed to format USB drive as NTFS${COLOR_RESET}"
+                    echo -e "${DIM}Error details: $format_output${COLOR_RESET}"
+                    return 1
+                else
+                    echo -e "${GREEN}✓ Successfully formatted as NTFS${COLOR_RESET}"
+                fi
                 ;;
             ext4)
-                mkfs.ext4 -L "$label" "$device" 2>&1 | while read -r line; do
-                    log_message "DEBUG" "mkfs.ext4: $line"
-                done
+                echo -e "${DIM}Running: ${need_sudo} mkfs.ext4 -L \"$label\" $target_device${COLOR_RESET}"
+                
+                local format_output
+                format_output=$(${need_sudo} mkfs.ext4 -L "$label" "$target_device" 2>&1)
+                local exit_code=$?
+                
+                if [[ $exit_code -ne 0 ]]; then
+                    echo -e "${RED}Failed to format USB drive as ext4${COLOR_RESET}"
+                    echo -e "${DIM}Error details: $format_output${COLOR_RESET}"
+                    return 1
+                else
+                    echo -e "${GREEN}✓ Successfully formatted as ext4${COLOR_RESET}"
+                fi
                 ;;
             *)
                 log_message "ERROR" "Unsupported filesystem: $filesystem"
@@ -1281,25 +1424,82 @@ mount_device() {
     local device="$1"
     local mount_point="${2:-}"
     
-    # Auto-generate mount point if not provided
-    if [[ -z "$mount_point" ]]; then
-        mount_point="/tmp/leonardo-mount-$$"
-        mkdir -p "$mount_point"
+    # Platform-specific mounting
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        # macOS
+        diskutil mount "$device" 2>/dev/null
+        if [[ $? -eq 0 ]]; then
+            # Get the mount point from diskutil
+            local mounted_at=$(diskutil info "$device" 2>/dev/null | grep "Mount Point:" | cut -d: -f2- | xargs)
+            if [[ -n "$mounted_at" ]]; then
+                export LEONARDO_USB_MOUNT="$mounted_at"
+                echo -e "${GREEN}✓ Mounted at: $mounted_at${COLOR_RESET}"
+                return 0
+            fi
+        fi
+    elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
+        # Linux
+        # Create mount point if not specified
+        if [[ -z "$mount_point" ]]; then
+            mount_point="/media/$USER/leonardo_$$"
+            if ! mkdir -p "$mount_point" 2>/dev/null; then
+                mount_point="/mnt/leonardo_$$"
+            fi
+        fi
+        
+        # Try user-level mount first
+        if mount "$device" "$mount_point" 2>/dev/null; then
+            export LEONARDO_USB_MOUNT="$mount_point"
+            echo -e "${GREEN}✓ Mounted at: $mount_point${COLOR_RESET}"
+            return 0
+        fi
+        
+        # Try udisksctl for user mounting
+        if command -v udisksctl >/dev/null 2>&1; then
+            echo -e "${DIM}Trying udisksctl mount...${COLOR_RESET}"
+            local mount_output=$(udisksctl mount -b "$device" 2>&1)
+            if [[ $? -eq 0 ]]; then
+                # Extract mount point from output
+                local mounted_at=$(echo "$mount_output" | grep -oP "Mounted .* at \K.*" | sed 's/\.$//')
+                if [[ -n "$mounted_at" ]]; then
+                    export LEONARDO_USB_MOUNT="$mounted_at"
+                    echo -e "${GREEN}✓ Mounted at: $mounted_at${COLOR_RESET}"
+                    return 0
+                fi
+            fi
+        fi
+        
+        # Try with sudo
+        echo -e "${YELLOW}⚠ Mounting USB requires administrator privileges${COLOR_RESET}"
+        echo -e "${CYAN}You may be prompted for your password${COLOR_RESET}"
+        echo -e "${DIM}Running: sudo mount $device $mount_point${COLOR_RESET}"
+        
+        # Create mount point with sudo if needed
+        if [[ ! -d "$mount_point" ]]; then
+            sudo mkdir -p "$mount_point"
+        fi
+        
+        # Mount with sudo
+        if sudo mount "$device" "$mount_point" 2>&1; then
+            export LEONARDO_USB_MOUNT="$mount_point"
+            echo -e "${GREEN}✓ Mounted at: $mount_point${COLOR_RESET}"
+            
+            # Try to make it writable for the user
+            sudo chown -R "$USER:$USER" "$mount_point" 2>/dev/null || true
+            return 0
+        else
+            echo -e "${RED}Failed to mount device${COLOR_RESET}"
+            # Clean up mount point if we created it
+            rmdir "$mount_point" 2>/dev/null || true
+            return 1
+        fi
+    elif [[ "$OSTYPE" == "msys" ]] || [[ "$OSTYPE" == "cygwin" ]]; then
+        # Windows - usually auto-mounts
+        export LEONARDO_USB_MOUNT="$device"
+        return 0
     fi
     
-    log_message "INFO" "Mounting $device to $mount_point"
-    
-    if [[ "$OSTYPE" == "linux-gnu"* ]]; then
-        mount "$device" "$mount_point" 2>&1 | while read -r line; do
-            log_message "DEBUG" "mount: $line"
-        done
-    elif [[ "$OSTYPE" == "darwin"* ]]; then
-        diskutil mount -mountPoint "$mount_point" "$device" 2>&1 | while read -r line; do
-            log_message "DEBUG" "diskutil mount: $line"
-        done
-    fi
-    
-    echo "$mount_point"
+    return 1
 }
 
 # Unmount device
@@ -1310,10 +1510,25 @@ unmount_device() {
     
     if [[ "$OSTYPE" == "linux-gnu"* ]]; then
         # Find all mount points for the device
+        local need_sudo=""
+        if [[ $EUID -ne 0 ]]; then
+            need_sudo="sudo"
+        fi
+        
         while IFS= read -r mount_point; do
-            umount "$mount_point" 2>&1 | while read -r line; do
-                log_message "DEBUG" "umount: $line"
-            done
+            if [[ -n "$mount_point" ]]; then
+                # Try without sudo first
+                if ! umount "$mount_point" 2>/dev/null; then
+                    if [[ -n "$need_sudo" ]]; then
+                        echo -e "${DIM}Running: sudo umount $mount_point${COLOR_RESET}"
+                        $need_sudo umount "$mount_point" 2>&1 | while read -r line; do
+                            log_message "DEBUG" "umount: $line"
+                        done
+                    fi
+                else
+                    log_message "DEBUG" "Unmounted $mount_point"
+                fi
+            fi
         done < <(findmnt -rno TARGET "$device" 2>/dev/null)
         
     elif [[ "$OSTYPE" == "darwin"* ]]; then
@@ -4031,7 +4246,16 @@ start_web_server() {
     local web_root="${LEONARDO_BASE_DIR}/web"
     mkdir -p "$web_root"
     
-    if [[ ! -f "$web_root/index.html" ]]; then
+    # Copy the chat interface
+    local chat_html="${LEONARDO_BASE_DIR}/src/ui/web_chat.html"
+    if [[ ! -f "$chat_html" ]]; then
+        # Try alternate location
+        chat_html="$(dirname "${BASH_SOURCE[0]}")/web_chat.html"
+    fi
+    
+    if [[ -f "$chat_html" ]]; then
+        cp "$chat_html" "$web_root/index.html"
+    elif [[ ! -f "$web_root/index.html" ]]; then
         cat > "$web_root/index.html" << 'EOF'
 <!DOCTYPE html>
 <html lang="en">
@@ -4231,6 +4455,40 @@ EOF
 stop_web_server() {
     echo -e "${CYAN}Stopping web server...${COLOR_RESET}"
     pkill -f "python3 -m http.server" 2>/dev/null || true
+}
+
+# Start both web and API servers
+start_servers() {
+    local web_port="${1:-8080}"
+    local api_port="${2:-8081}"
+    
+    # Source API module
+    source "${LEONARDO_BASE_DIR}/src/chat/api.sh" 2>/dev/null || source "$(dirname "${BASH_SOURCE[0]}")/../chat/api.sh"
+    
+    echo -e "${CYAN}Starting Leonardo Web Interface with Chat...${COLOR_RESET}"
+    echo
+    
+    # Start API server first
+    start_api_server "$api_port"
+    
+    # Then start web server
+    start_web_server "$web_port"
+    
+    echo
+    echo -e "${GREEN}✓ Leonardo Web Chat is ready!${COLOR_RESET}"
+    echo -e "  Web UI: ${CYAN}http://localhost:${web_port}${COLOR_RESET}"
+    echo -e "  API: ${CYAN}http://localhost:${api_port}/api${COLOR_RESET}"
+    echo
+    echo -e "${DIM}Press Ctrl+C to stop${COLOR_RESET}"
+}
+
+# Stop both servers
+stop_servers() {
+    # Source API module
+    source "${LEONARDO_BASE_DIR}/src/chat/api.sh" 2>/dev/null || source "$(dirname "${BASH_SOURCE[0]}")/../chat/api.sh"
+    
+    stop_web_server
+    stop_api_server
 }
 
 # ==== Component: src/security/audit.sh (STUB) ====
@@ -6087,11 +6345,6 @@ deploy_to_usb() {
     local target_device="${1:-}"
     local options="${2:-}"
     
-    # Debug output to confirm function is called
-    echo -e "${YELLOW}DEBUG: deploy_to_usb function started${COLOR_RESET}" >&2
-    echo -e "${YELLOW}DEBUG: Terminal test: [[ -t 0 ]] = $([[ -t 0 ]] && echo true || echo false)${COLOR_RESET}" >&2
-    sleep 1  # Give time to see the message
-    
     echo
     echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
     echo -e "${BOLD}              🚀 Leonardo USB Deployment${COLOR_RESET}"
@@ -6192,7 +6445,8 @@ deploy_to_usb() {
                     # Skip formatting, just update
                     ;;
                 2)
-                    if confirm_menu "Format USB and install fresh? ${RED}WARNING: This will erase all data!${COLOR_RESET}"; then
+                    if confirm_action "Format USB and install fresh? ${YELLOW}WARNING: This will erase all data!${COLOR_RESET}"; then
+                        # Format the USB drive
                         echo -e "${CYAN}→ Formatting USB drive...${COLOR_RESET}"
                         if ! format_usb_device "$target_device"; then
                             echo -e "${RED}Failed to format USB drive${COLOR_RESET}"
@@ -6200,9 +6454,21 @@ deploy_to_usb() {
                             return 1
                         fi
                         
+                        # After formatting, determine the actual partition to mount
+                        local mount_device="$target_device"
+                        if [[ ! "$target_device" =~ [0-9]$ ]]; then
+                            # If we formatted a whole device, find the partition
+                            if [[ -b "${target_device}1" ]]; then
+                                mount_device="${target_device}1"
+                            elif [[ -b "${target_device}p1" ]]; then
+                                mount_device="${target_device}p1"
+                            fi
+                            echo -e "${DIM}Using partition: $mount_device${COLOR_RESET}"
+                        fi
+                        
                         # Mount the newly formatted device
                         echo -e "${CYAN}→ Mounting USB drive...${COLOR_RESET}"
-                        if ! mount_usb_drive "$target_device"; then
+                        if ! mount_usb_drive "$mount_device"; then
                             echo -e "${RED}Failed to mount USB drive${COLOR_RESET}"
                             pause
                             return 1
@@ -6224,7 +6490,8 @@ deploy_to_usb() {
     else
         # Ask about formatting only in interactive mode
         if [[ -t 0 ]]; then
-            if confirm_menu "Format USB drive? ${RED}WARNING: This will erase all data!${COLOR_RESET}"; then
+            if confirm_action "Format USB drive? ${YELLOW}WARNING: This will erase all data!${COLOR_RESET}"; then
+                # Format the USB drive
                 echo -e "${CYAN}→ Formatting USB drive...${COLOR_RESET}"
                 if ! format_usb_device "$target_device"; then
                     echo -e "${RED}Failed to format USB drive${COLOR_RESET}"
@@ -6232,9 +6499,21 @@ deploy_to_usb() {
                     return 1
                 fi
                 
+                # After formatting, determine the actual partition to mount
+                local mount_device="$target_device"
+                if [[ ! "$target_device" =~ [0-9]$ ]]; then
+                    # If we formatted a whole device, find the partition
+                    if [[ -b "${target_device}1" ]]; then
+                        mount_device="${target_device}1"
+                    elif [[ -b "${target_device}p1" ]]; then
+                        mount_device="${target_device}p1"
+                    fi
+                    echo -e "${DIM}Using partition: $mount_device${COLOR_RESET}"
+                fi
+                
                 # Mount the newly formatted device
                 echo -e "${CYAN}→ Mounting USB drive...${COLOR_RESET}"
-                if ! mount_usb_drive "$target_device"; then
+                if ! mount_usb_drive "$mount_device"; then
                     echo -e "${RED}Failed to mount USB drive${COLOR_RESET}"
                     pause
                     return 1
@@ -6282,9 +6561,6 @@ deploy_to_usb() {
         pause
         return 1
     fi
-    
-    # Debug mount point
-    echo -e "${DIM}DEBUG: USB mount point is: ${LEONARDO_USB_MOUNT:-'(not set)'}${COLOR_RESET}" >&2
     
     # Ensure mount point is set
     if [[ -z "$LEONARDO_USB_MOUNT" ]]; then
@@ -6413,13 +6689,13 @@ if errorlevel 1 (
 EOF
     
     # Create Mac/Linux launcher (executable)
-    cat > "$target_dir/leonardo" << 'EOF'
+    cat > "$target_dir/start-leonardo" << 'EOF'
 #!/bin/bash
 # Leonardo AI Universal Launcher
 cd "$(dirname "$0")"
 ./leonardo.sh "$@"
 EOF
-    chmod +x "$target_dir/leonardo" 2>/dev/null || true
+    chmod +x "$target_dir/start-leonardo" 2>/dev/null || true
     
     # Create desktop entry for Linux
     cat > "$target_dir/Leonardo.desktop" << EOF
@@ -6576,6 +6852,7 @@ download_model_to_usb() {
     export LEONARDO_MODEL_DIR="$target_dir"
     
     echo -e "${CYAN}Downloading ${model_id}:${variant}${COLOR_RESET}"
+    echo -e "${DIM}This may take a few minutes depending on model size and connection speed...${COLOR_RESET}"
     
     # Check if we have Ollama provider
     if command_exists ollama; then
@@ -6583,22 +6860,45 @@ download_model_to_usb() {
         echo "Using Ollama to download model..."
         
         # First pull the model
+        local download_started=false
+        local last_percent=0
+        local stuck_count=0
         if ollama pull "${model_id}:${variant}" 2>&1 | \
         while IFS= read -r line; do
-            # Parse Ollama progress output
-            if [[ "$line" =~ pulling[[:space:]].*[[:space:]]([0-9]+)%[[:space:]]+\|.*\|[[:space:]]+([0-9.]+[[:space:]]?[KMGT]?B)/([0-9.]+[[:space:]]?[KMGT]?B)[[:space:]]+([0-9.]+[[:space:]]?[KMGT]?B/s) ]]; then
+            # Parse Ollama progress output - multiple formats
+            if [[ "$line" =~ pulling|downloading ]] && [[ "$line" =~ ([0-9]+)% ]]; then
                 local percent="${BASH_REMATCH[1]}"
-                local downloaded="${BASH_REMATCH[2]}"
-                local total="${BASH_REMATCH[3]}"
-                local speed="${BASH_REMATCH[4]}"
+                download_started=true
+                
+                # Check if we're stuck at 100%
+                if [[ "$percent" == "100" ]]; then
+                    ((stuck_count++))
+                    if [[ $stuck_count -gt 3 ]]; then
+                        printf "\r%-80s\r" " "
+                        echo -e "${GREEN}✓ Model downloaded to Ollama${COLOR_RESET}"
+                        break
+                    fi
+                else
+                    stuck_count=0
+                fi
+                
+                # Try to extract size info
+                local size_info=""
+                if [[ "$line" =~ ([0-9.]+[[:space:]]?[KMGT]?B)/([0-9.]+[[:space:]]?[KMGT]?B) ]]; then
+                    size_info=" | ${BASH_REMATCH[1]}/${BASH_REMATCH[2]}"
+                fi
                 
                 printf "\r"
                 show_progress_bar "$percent" 100 40
-                printf " ${percent}%% | ${downloaded}/${total} | ${speed}  "
-            elif [[ "$line" =~ "success" ]] || [[ "$line" =~ "already up to date" ]]; then
+                printf " ${percent}%%${size_info}        "
+                last_percent=$percent
+            elif [[ "$line" =~ "success" ]] || [[ "$line" =~ "already up to date" ]] || [[ "$line" =~ "verifying" ]]; then
                 printf "\r%-80s\r" " "
                 echo -e "${GREEN}✓ Model downloaded to Ollama${COLOR_RESET}"
-                return 0
+                break
+            elif [[ "$download_started" == false ]] && [[ -n "$line" ]]; then
+                # Show non-progress output during initialization
+                echo "$line"
             fi
         done; then
             # Now export the model to USB
@@ -6629,7 +6929,10 @@ EOF
     
     # Map common model names to HuggingFace URLs
     local model_url=""
-    case "${model_id}:${variant}" in
+    local full_model="${model_id}:${variant}"
+    
+    # Check both formats: "model:variant" and separated values
+    case "${full_model}" in
         "phi:2.7b")
             model_url="https://huggingface.co/microsoft/phi-2/resolve/main/phi-2_Q4_K_M.gguf"
             ;;
@@ -6643,7 +6946,7 @@ EOF
             model_url="https://huggingface.co/lmstudio-community/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf"
             ;;
         *)
-            echo -e "${RED}✗ Model ${model_id}:${variant} not found in registry${COLOR_RESET}"
+            echo -e "${RED}✗ Model ${full_model} not found in registry${COLOR_RESET}"
             echo -e "${YELLOW}Available models for direct download:${COLOR_RESET}"
             echo "  - phi:2.7b"
             echo "  - llama2:7b"
@@ -6851,21 +7154,21 @@ select_model_interactive() {
     local usb_size_mb="${1:-8192}"  # Default 8GB
     local usb_size_gb=$((usb_size_mb / 1024))
     
-    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
-    echo -e "${BOLD}               🤖 Select AI Model${COLOR_RESET}"
-    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
-    echo
-    echo -e "${YELLOW}USB Size: ${usb_size_gb}GB${COLOR_RESET}"
-    echo -e "${DIM}Recommended models based on available space:${COLOR_RESET}"
-    echo
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}" >&2
+    echo -e "${BOLD}               🤖 Select AI Model${COLOR_RESET}" >&2
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}" >&2
+    echo >&2
+    echo -e "${YELLOW}USB Size: ${usb_size_gb}GB${COLOR_RESET}" >&2
+    echo -e "${DIM}Recommended models based on available space:${COLOR_RESET}" >&2
+    echo >&2
     
     # Get recommended models
     local models=()
     readarray -t models < <(get_recommended_models "$usb_size_gb")
     
     if [[ ${#models[@]} -eq 0 ]]; then
-        echo -e "${RED}USB too small for any models!${COLOR_RESET}"
-        echo -e "${YELLOW}Minimum 2GB required.${COLOR_RESET}"
+        echo -e "${RED}USB too small for any models!${COLOR_RESET}" >&2
+        echo -e "${YELLOW}Minimum 2GB required.${COLOR_RESET}" >&2
         return 1
     fi
     
@@ -6881,7 +7184,8 @@ select_model_interactive() {
         return 1
     else
         # Remove size annotation
-        echo "${selected% (*}"
+        local model_name="${selected%% (*}"
+        echo "$model_name"
     fi
 }
 
@@ -9499,6 +9803,566 @@ export -f usb_cli_format usb_cli_mount usb_cli_unmount
 export -f usb_cli_health usb_cli_monitor usb_cli_backup usb_cli_restore
 export -f usb_cli_clean usb_cli_test register_usb_commands
 
+# ==== Component: src/chat/cli.sh ====
+# ==============================================================================
+# Leonardo AI Universal - CLI Chat Interface
+# ==============================================================================
+# Description: Interactive CLI chat interface for AI models
+# Version: 7.0.0
+# ==============================================================================
+
+# Chat interface using Ollama
+chat_with_ollama() {
+    local model="$1"
+    local model_name="${model#ollama:}"
+    
+    # Check if model is installed
+    if ! ollama list 2>/dev/null | grep -q "^${model_name}"; then
+        echo -e "${RED}Error: Model '${model_name}' is not installed${COLOR_RESET}"
+        echo -e "${YELLOW}Install it with: leonardo model install ${model}${COLOR_RESET}"
+        return 1
+    fi
+    
+    # Clear screen and show header
+    clear
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
+    echo -e "               ${BOLD}🤖 Leonardo AI Chat - ${model_name}${COLOR_RESET}"
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
+    echo
+    echo -e "${DIM}Commands:${COLOR_RESET}"
+    echo -e "  ${GREEN}/exit${COLOR_RESET} or ${GREEN}/quit${COLOR_RESET} - End chat session"
+    echo -e "  ${GREEN}/clear${COLOR_RESET} - Clear conversation history"
+    echo -e "  ${GREEN}/save [filename]${COLOR_RESET} - Save conversation"
+    echo -e "  ${GREEN}/help${COLOR_RESET} - Show this help"
+    echo
+    echo -e "${CYAN}───────────────────────────────────────────────────────────────${COLOR_RESET}"
+    echo
+    
+    # Start Ollama chat
+    ollama run "$model_name"
+}
+
+# Chat interface for local models (llama.cpp)
+chat_with_local_model() {
+    local model_path="$1"
+    local model_name=$(basename "$model_path")
+    
+    # Check if model exists
+    if [[ ! -f "$model_path" ]]; then
+        echo -e "${RED}Error: Model file not found: $model_path${COLOR_RESET}"
+        return 1
+    fi
+    
+    # Check for llama.cpp
+    local llamacpp_path="${LEONARDO_BASE_DIR}/tools/llama.cpp/main"
+    if [[ ! -f "$llamacpp_path" ]]; then
+        echo -e "${YELLOW}llama.cpp not found. Installing...${COLOR_RESET}"
+        install_llamacpp || return 1
+    fi
+    
+    # Clear screen and show header
+    clear
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
+    echo -e "               ${BOLD}🤖 Leonardo AI Chat - ${model_name}${COLOR_RESET}"
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
+    echo
+    echo -e "${DIM}Using llama.cpp for inference${COLOR_RESET}"
+    echo -e "${DIM}Model: $model_path${COLOR_RESET}"
+    echo
+    echo -e "${CYAN}───────────────────────────────────────────────────────────────${COLOR_RESET}"
+    echo
+    
+    # Start llama.cpp interactive mode
+    "$llamacpp_path" \
+        -m "$model_path" \
+        -n -1 \
+        --interactive \
+        --interactive-first \
+        -r "User:" \
+        --in-prefix " " \
+        -i \
+        --color \
+        -c 2048
+}
+
+# Enhanced chat interface with conversation management
+chat_enhanced() {
+    local model="$1"
+    local conversation_file="${LEONARDO_BASE_DIR}/conversations/$(date +%Y%m%d_%H%M%S).txt"
+    local save_conversation=false
+    
+    # Create conversations directory
+    mkdir -p "${LEONARDO_BASE_DIR}/conversations"
+    
+    # Trap to save conversation on exit
+    trap 'save_conversation_on_exit' EXIT
+    
+    # Clear screen and show header
+    clear
+    show_chat_header "$model"
+    
+    # Start chat loop
+    local user_input=""
+    local conversation_history=""
+    
+    while true; do
+        # Prompt for user input
+        echo -ne "${GREEN}You:${COLOR_RESET} "
+        read -r user_input
+        
+        # Handle commands
+        case "$user_input" in
+            "/exit"|"/quit")
+                echo -e "${YELLOW}Ending chat session...${COLOR_RESET}"
+                break
+                ;;
+            "/clear")
+                clear
+                show_chat_header "$model"
+                conversation_history=""
+                echo -e "${YELLOW}Conversation cleared${COLOR_RESET}"
+                continue
+                ;;
+            "/save"*)
+                local filename="${user_input#/save }"
+                save_conversation "$conversation_history" "$filename"
+                continue
+                ;;
+            "/help")
+                show_chat_help
+                continue
+                ;;
+            "")
+                continue
+                ;;
+        esac
+        
+        # Add to conversation history
+        conversation_history+="User: $user_input\n"
+        
+        # Get AI response
+        echo -ne "${BLUE}AI:${COLOR_RESET} "
+        local response=$(get_ai_response "$model" "$user_input")
+        echo "$response"
+        
+        # Add to conversation history
+        conversation_history+="AI: $response\n\n"
+    done
+}
+
+# Show chat header
+show_chat_header() {
+    local model="$1"
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
+    echo -e "               ${BOLD}🤖 Leonardo AI Chat${COLOR_RESET}"
+    echo -e "               ${DIM}Model: $model${COLOR_RESET}"
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
+    echo
+}
+
+# Show chat help
+show_chat_help() {
+    echo
+    echo -e "${CYAN}Chat Commands:${COLOR_RESET}"
+    echo -e "  ${GREEN}/exit${COLOR_RESET} or ${GREEN}/quit${COLOR_RESET} - End chat session"
+    echo -e "  ${GREEN}/clear${COLOR_RESET} - Clear conversation history"
+    echo -e "  ${GREEN}/save [filename]${COLOR_RESET} - Save conversation"
+    echo -e "  ${GREEN}/help${COLOR_RESET} - Show this help"
+    echo
+}
+
+# Get AI response (stub - implement based on model type)
+get_ai_response() {
+    local model="$1"
+    local prompt="$2"
+    
+    # Check if Ollama is available
+    if command -v ollama &> /dev/null; then
+        # Use Ollama for inference
+        local response=$(ollama run "$model" <<< "$prompt" 2>&1)
+        
+        # Check if model needs to be pulled
+        if [[ "$response" =~ "pulling" ]] || [[ "$response" =~ "Error" ]]; then
+            echo -e "${DIM}Model not found locally. Pulling $model...${COLOR_RESET}" >&2
+            ollama pull "$model" >&2
+            response=$(ollama run "$model" <<< "$prompt" 2>&1)
+        fi
+        
+        echo "$response"
+    elif [[ -f "${LEONARDO_BASE_DIR}/tools/llama.cpp/main" ]]; then
+        # Use local llama.cpp
+        local model_path="${LEONARDO_BASE_DIR}/models/$model"
+        if [[ -f "$model_path" ]]; then
+            "${LEONARDO_BASE_DIR}/tools/llama.cpp/main" -m "$model_path" -p "$prompt" --temp 0.7 -n 512 2>/dev/null
+        else
+            echo "Model file not found: $model_path"
+        fi
+    else
+        echo "No inference backend available. Please install Ollama or llama.cpp."
+    fi
+}
+
+# Save conversation
+save_conversation() {
+    local content="$1"
+    local filename="${2:-conversation_$(date +%Y%m%d_%H%M%S).txt}"
+    
+    if [[ ! "$filename" =~ \.txt$ ]]; then
+        filename="${filename}.txt"
+    fi
+    
+    local filepath="${LEONARDO_BASE_DIR}/conversations/$filename"
+    echo -e "$content" > "$filepath"
+    echo -e "${GREEN}✓ Conversation saved to: $filepath${COLOR_RESET}"
+}
+
+# Install llama.cpp
+install_llamacpp() {
+    local tools_dir="${LEONARDO_BASE_DIR}/tools"
+    mkdir -p "$tools_dir"
+    
+    echo -e "${CYAN}Installing llama.cpp...${COLOR_RESET}"
+    
+    cd "$tools_dir" || return 1
+    
+    # Clone llama.cpp
+    if [[ -d "llama.cpp" ]]; then
+        cd llama.cpp
+        git pull
+    else
+        git clone https://github.com/ggerganov/llama.cpp.git
+        cd llama.cpp || return 1
+    fi
+    
+    # Build
+    make -j$(nproc) || {
+        echo -e "${RED}Failed to build llama.cpp${COLOR_RESET}"
+        return 1
+    }
+    
+    echo -e "${GREEN}✓ llama.cpp installed successfully${COLOR_RESET}"
+    return 0
+}
+
+# Main chat function
+start_chat() {
+    local model="${1:-}"
+    
+    # If no model specified, let user choose
+    if [[ -z "$model" ]]; then
+        model=$(select_installed_model)
+        [[ -z "$model" ]] && return 1
+    fi
+    
+    # Start appropriate chat interface
+    if [[ "$model" == ollama:* ]]; then
+        chat_with_ollama "$model"
+    elif [[ "$model" == local:* ]]; then
+        local model_path="${model#local:}"
+        chat_with_local_model "$model_path"
+    else
+        chat_enhanced "$model"
+    fi
+}
+
+# Export functions
+export -f start_chat
+export -f chat_with_ollama
+export -f chat_with_local_model
+export -f chat_enhanced
+
+# ==== Component: src/chat/api.sh ====
+# ==============================================================================
+# Leonardo AI Universal - Chat API Backend
+# ==============================================================================
+# Description: Simple HTTP API for AI chat functionality
+# Version: 7.0.0
+# ==============================================================================
+
+# API server configuration
+API_PORT="${LEONARDO_API_PORT:-8081}"
+API_HOST="${LEONARDO_API_HOST:-localhost}"
+API_PID_FILE="${LEONARDO_BASE_DIR}/api.pid"
+
+# Start API server
+start_api_server() {
+    local port="${1:-$API_PORT}"
+    local host="${2:-$API_HOST}"
+    
+    echo -e "${CYAN}Starting Leonardo API Server...${COLOR_RESET}"
+    echo -e "${DIM}API endpoint: http://${host}:${port}/api${COLOR_RESET}"
+    
+    # Check if already running
+    if [[ -f "$API_PID_FILE" ]]; then
+        local pid=$(cat "$API_PID_FILE")
+        if kill -0 "$pid" 2>/dev/null; then
+            echo -e "${YELLOW}API server already running (PID: $pid)${COLOR_RESET}"
+            return 0
+        fi
+    fi
+    
+    # Create Python API server script
+    local api_script="${LEONARDO_BASE_DIR}/api_server.py"
+    cat > "$api_script" << 'EOF'
+#!/usr/bin/env python3
+import json
+import subprocess
+import sys
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from urllib.parse import urlparse
+
+class APIHandler(BaseHTTPRequestHandler):
+    def do_OPTIONS(self):
+        self.send_response(200)
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+        self.end_headers()
+    
+    def do_GET(self):
+        parsed_path = urlparse(self.path)
+        
+        if parsed_path.path == '/api/health':
+            self.send_json({'status': 'ok', 'version': '7.0.0'})
+        elif parsed_path.path == '/api/models':
+            self.get_models()
+        else:
+            self.send_error(404, 'Not found')
+    
+    def do_POST(self):
+        parsed_path = urlparse(self.path)
+        content_length = int(self.headers.get('Content-Length', 0))
+        body = self.rfile.read(content_length).decode('utf-8')
+        
+        try:
+            data = json.loads(body) if body else {}
+        except json.JSONDecodeError:
+            self.send_error(400, 'Invalid JSON')
+            return
+        
+        if parsed_path.path == '/api/chat':
+            self.handle_chat(data)
+        else:
+            self.send_error(404, 'Not found')
+    
+    def send_json(self, data):
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.end_headers()
+        self.wfile.write(json.dumps(data).encode())
+    
+    def get_models(self):
+        models = []
+        try:
+            # Get Ollama models
+            result = subprocess.run(['ollama', 'list'], capture_output=True, text=True)
+            if result.returncode == 0:
+                lines = result.stdout.strip().split('\n')[1:]  # Skip header
+                for line in lines:
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        models.append({
+                            'name': parts[0],
+                            'provider': 'ollama',
+                            'size': parts[1]
+                        })
+        except Exception as e:
+            print(f"Error getting models: {e}")
+        
+        self.send_json({'models': models})
+    
+    def handle_chat(self, data):
+        model = data.get('model', '')
+        message = data.get('message', '')
+        
+        if not model or not message:
+            self.send_json({'error': 'Missing model or message'})
+            return
+        
+        try:
+            # Use Ollama for chat
+            result = subprocess.run(
+                ['ollama', 'run', model, '--nowordwrap'],
+                input=message,
+                capture_output=True,
+                text=True
+            )
+            
+            if result.returncode == 0:
+                response = result.stdout.strip()
+                self.send_json({'response': response})
+            else:
+                self.send_json({'error': f'Model error: {result.stderr}'})
+        except Exception as e:
+            self.send_json({'error': str(e)})
+    
+    def log_message(self, format, *args):
+        # Suppress default logging
+        pass
+
+if __name__ == '__main__':
+    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8081
+    server = HTTPServer(('localhost', port), APIHandler)
+    print(f"API server running on port {port}")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        server.shutdown()
+EOF
+
+    # Make executable
+    chmod +x "$api_script"
+    
+    # Start Python server in background
+    python3 "$api_script" "$port" > "${LEONARDO_BASE_DIR}/api.log" 2>&1 &
+    local server_pid=$!
+    echo "$server_pid" > "$API_PID_FILE"
+    
+    echo -e "${GREEN}✓ API server started (PID: $server_pid)${COLOR_RESET}"
+    
+    # Wait a moment to ensure server is up
+    sleep 2
+    
+    # Test the server
+    if curl -s "http://${host}:${port}/api/health" >/dev/null 2>&1; then
+        echo -e "${GREEN}✓ API server is responding${COLOR_RESET}"
+    else
+        echo -e "${YELLOW}⚠ API server may not be fully initialized${COLOR_RESET}"
+    fi
+}
+
+# Stop API server
+stop_api_server() {
+    if [[ -f "$API_PID_FILE" ]]; then
+        local pid=$(cat "$API_PID_FILE")
+        if kill -0 "$pid" 2>/dev/null; then
+            kill "$pid"
+            rm -f "$API_PID_FILE"
+            echo -e "${GREEN}✓ API server stopped${COLOR_RESET}"
+        else
+            echo -e "${YELLOW}API server not running${COLOR_RESET}"
+            rm -f "$API_PID_FILE"
+        fi
+    else
+        echo -e "${YELLOW}No API server PID file found${COLOR_RESET}"
+    fi
+}
+
+# API server status
+api_server_status() {
+    if [[ -f "$API_PID_FILE" ]]; then
+        local pid=$(cat "$API_PID_FILE")
+        if kill -0 "$pid" 2>/dev/null; then
+            echo -e "${GREEN}API server is running (PID: $pid)${COLOR_RESET}"
+            echo -e "Endpoint: http://${API_HOST}:${API_PORT}/api"
+            return 0
+        fi
+    fi
+    echo -e "${YELLOW}API server is not running${COLOR_RESET}"
+    return 1
+}
+
+# Export functions
+export -f start_api_server
+export -f stop_api_server
+export -f api_server_status
+
+# ==== Component: src/chat/main.sh ====
+# ==============================================================================
+# Leonardo AI Universal - Chat Module Main
+# ==============================================================================
+# Description: Main entry point for chat functionality
+# Version: 7.0.0
+# ==============================================================================
+
+# Handle chat commands
+handle_chat_command() {
+    local subcommand="${1:-}"
+    shift
+    
+    case "$subcommand" in
+        "")
+            # Start interactive chat
+            source "${LEONARDO_BASE_DIR}/src/chat/cli.sh" 2>/dev/null || source "$(dirname "${BASH_SOURCE[0]}")/cli.sh"
+            start_chat "$@"
+            ;;
+        
+        "web"|"--web")
+            # Start web interface
+            source "${LEONARDO_BASE_DIR}/src/ui/web_server.sh" 2>/dev/null || source "$(dirname "${BASH_SOURCE[0]}")/../ui/web_server.sh"
+            start_servers "$@"
+            ;;
+        
+        "api")
+            # Start API server only
+            source "${LEONARDO_BASE_DIR}/src/chat/api.sh" 2>/dev/null || source "$(dirname "${BASH_SOURCE[0]}")/api.sh"
+            start_api_server "$@"
+            ;;
+        
+        "status")
+            # Check server status
+            source "${LEONARDO_BASE_DIR}/src/chat/api.sh" 2>/dev/null || source "$(dirname "${BASH_SOURCE[0]}")/api.sh"
+            api_server_status
+            ;;
+        
+        "stop")
+            # Stop servers
+            source "${LEONARDO_BASE_DIR}/src/ui/web_server.sh" 2>/dev/null || source "$(dirname "${BASH_SOURCE[0]}")/../ui/web_server.sh"
+            stop_servers
+            ;;
+        
+        "help"|"--help"|"-h")
+            show_chat_help
+            ;;
+        
+        *)
+            echo -e "${RED}Unknown chat command: $subcommand${COLOR_RESET}"
+            show_chat_help
+            return 1
+            ;;
+    esac
+}
+
+# Show chat help
+show_chat_help() {
+    cat << EOF
+Leonardo AI Chat Commands
+
+Usage: leonardo chat [command] [options]
+
+Commands:
+  (no command)        Start interactive CLI chat
+  web, --web         Start web interface with chat
+  api                Start API server only
+  status             Check server status
+  stop               Stop all servers
+  help               Show this help
+
+Options for chat:
+  [model]            Specify model to use (e.g., llama3.2:1b)
+
+Options for web:
+  [web_port] [api_port]  Specify ports (default: 8080, 8081)
+
+Examples:
+  leonardo chat                    # Start interactive chat
+  leonardo chat llama3.2:1b       # Chat with specific model
+  leonardo chat --web             # Start web interface
+  leonardo chat web 3000 3001     # Custom ports
+  leonardo chat stop              # Stop servers
+
+Quick Start:
+  leonardo chat --web             # Full web experience
+  leonardo chat                   # CLI chat interface
+
+EOF
+}
+
+# Export functions
+export -f handle_chat_command
+export -f show_chat_help
+
 # ==== Component: src/core/main.sh ====
 # ==============================================================================
 # Leonardo AI Universal - Main Application Entry Point
@@ -9582,6 +10446,7 @@ ${COLOR_GREEN}Commands:${COLOR_RESET}
   dashboard         Show system dashboard
   web [port]        Start web UI
   test              Run system tests
+  chat              Chat with a model
 
 ${COLOR_GREEN}Interactive Mode:${COLOR_RESET}
   Run without commands to enter interactive mode
@@ -9592,6 +10457,7 @@ ${COLOR_GREEN}Examples:${COLOR_RESET}
   leonardo model download llama3-8b
   leonardo dashboard            # Show system status
   leonardo web                  # Start web interface
+  leonardo chat                 # Chat with a model
 
 For more help on specific commands:
   leonardo model help
@@ -9836,6 +10702,16 @@ parse_arguments() {
                 LEONARDO_ARGS=("$@")
                 break
                 ;;
+            chat)
+                LEONARDO_COMMAND="chat"
+                shift
+                LEONARDO_SUBCOMMAND="${1:-}"
+                if [[ "$LEONARDO_SUBCOMMAND" =~ ^(web|api|status|stop|help|--web|--help|-h)$ ]]; then
+                    shift || true
+                fi
+                LEONARDO_ARGS=("$@")
+                break
+                ;;
             test|check)
                 LEONARDO_COMMAND="test"
                 shift
@@ -9869,6 +10745,9 @@ handle_command() {
             ;;
         "test")
             run_system_tests
+            ;;
+        "chat")
+            handle_chat_command "${LEONARDO_SUBCOMMAND}" "${LEONARDO_ARGS[@]}"
             ;;
         *)
             echo "${COLOR_RED}Unknown command: $LEONARDO_COMMAND${COLOR_RESET}"
@@ -10479,29 +11358,8 @@ handle_chat_command() {
 start_chat_interface() {
     local model="$1"
     
-    clear
-    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
-    echo -e "${BOLD}               🤖 Leonardo AI Chat - $model${COLOR_RESET}"
-    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
-    echo
-    echo -e "${DIM}Type 'exit' or 'quit' to end the chat session${COLOR_RESET}"
-    echo -e "${DIM}Type 'clear' to clear the conversation${COLOR_RESET}"
-    echo
-    
-    if [[ "$model" == ollama:* ]] && command_exists ollama; then
-        # Use Ollama for chat
-        local model_name="${model#ollama:}"
-        ollama run "$model_name"
-    elif [[ "$model" == local:* ]]; then
-        # Use llama.cpp for local models
-        echo -e "${YELLOW}Local model chat coming soon!${COLOR_RESET}"
-        echo -e "${DIM}This will use llama.cpp for inference${COLOR_RESET}"
-        pause
-    else
-        # Fallback for other model types
-        echo -e "${YELLOW}Chat interface for $model coming soon!${COLOR_RESET}"
-        pause
-    fi
+    # Start chat
+    start_chat "$model"
 }
 
 # Check if any models are installed
@@ -10584,6 +11442,14 @@ show_about() {
     echo "  • Cross-platform compatibility"
     echo "  • Web interface"
     echo
+}
+
+# Chat with a model
+chat_with_model() {
+    local model="$1"
+    
+    # Start chat
+    start_chat "$model"
 }
 
 # Call main function with all arguments

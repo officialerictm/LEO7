@@ -103,49 +103,175 @@ format_usb_device() {
     local label="${3:-$LEONARDO_USB_LABEL}"
 
     log_message "INFO" "Formatting $device as $filesystem with label $label"
-
+    
+    # Check if we need sudo (Linux only)
+    local need_sudo=""
+    if [[ "$OSTYPE" == "linux-gnu"* ]] && [[ $EUID -ne 0 ]]; then
+        need_sudo="sudo"
+        echo -e "${YELLOW}⚠ Formatting USB requires administrator privileges${COLOR_RESET}"
+        echo -e "${CYAN}You may be prompted for your password${COLOR_RESET}"
+        
+        # Prompt for sudo password early
+        if ! sudo -v; then
+            echo -e "${RED}Error: Unable to obtain administrator privileges${COLOR_RESET}"
+            return 1
+        fi
+    fi
+    
     # Unmount if mounted
     unmount_device "$device"
 
     # Platform-specific formatting
     if [[ "$OSTYPE" == "linux-gnu"* ]]; then
-        local partition="$device"
-        if [[ "$device" =~ ^/dev/(sd[a-z]|nvme[0-9]+n[0-9]+)$ ]]; then
-            if command -v parted >/dev/null 2>&1; then
-                parted -s "$device" mklabel gpt >/dev/null 2>&1
-                parted -s "$device" mkpart primary 0% 100% >/dev/null 2>&1
-                parted -s "$device" set 1 msftdata on >/dev/null 2>&1
-                if command -v partprobe >/dev/null 2>&1; then
-                    partprobe "$device" >/dev/null 2>&1
+        # Check if device is a whole disk or partition
+        local target_device="$device"
+        local is_partition=false
+        
+        # Check if this is a partition (ends with a number)
+        if [[ "$device" =~ [0-9]$ ]]; then
+            is_partition=true
+            echo -e "${DIM}Detected partition device: $device${COLOR_RESET}"
+        else
+            # Check if device has partitions
+            local partitions=$(lsblk -rno NAME,TYPE "$device" 2>/dev/null | grep -c "part" || echo "0")
+            if [[ $partitions -gt 0 ]]; then
+                # Device has partitions, we need to either use the first partition or recreate partition table
+                echo -e "${YELLOW}Device $device has existing partitions${COLOR_RESET}"
+                
+                # For whole device formatting, we need to wipe and recreate partition table
+                echo -e "${CYAN}Creating new partition table for cross-platform compatibility...${COLOR_RESET}"
+                
+                # Unmount all partitions
+                for part in $(lsblk -rno NAME "$device" | grep -v "^$(basename $device)$"); do
+                    local part_device="/dev/$part"
+                    echo -e "${DIM}Running: ${need_sudo} umount $part_device${COLOR_RESET}"
+                    $need_sudo umount "$part_device" 2>/dev/null || true
+                    # Force lazy unmount if regular unmount fails
+                    $need_sudo umount -l "$part_device" 2>/dev/null || true
+                done
+                
+                # Wait a moment for unmounts to complete
+                sleep 1
+                
+                # Clear partition signatures to avoid "in use" errors
+                echo -e "${DIM}Clearing partition signatures...${COLOR_RESET}"
+                $need_sudo wipefs -a "$device" 2>/dev/null || true
+                
+                # Force kernel to re-read partition table
+                $need_sudo partprobe "$device" 2>/dev/null || true
+                
+                # Create new partition table with single partition
+                echo -e "${DIM}Creating GPT partition table...${COLOR_RESET}"
+                if ! $need_sudo parted -s "$device" mklabel gpt 2>&1; then
+                    echo -e "${RED}Failed to create partition table${COLOR_RESET}"
+                    echo -e "${YELLOW}Tip: Try ejecting the USB from your desktop first${COLOR_RESET}"
+                    return 1
                 fi
-            else
-                log_message "ERROR" "parted is required to format USB drives"
-                return 1
+                
+                echo -e "${DIM}Creating partition...${COLOR_RESET}"
+                if ! $need_sudo parted -s "$device" mkpart primary 1MiB 100% 2>&1; then
+                    echo -e "${RED}Failed to create partition${COLOR_RESET}"
+                    return 1
+                fi
+                
+                # Wait for partition to appear
+                sleep 2
+                
+                # Find the new partition
+                if [[ -e "${device}1" ]]; then
+                    target_device="${device}1"
+                elif [[ -e "${device}p1" ]]; then
+                    target_device="${device}p1"
+                else
+                    echo -e "${RED}Error: Could not find created partition${COLOR_RESET}"
+                    return 1
+                fi
+                echo -e "${GREEN}✓ Created partition: $target_device${COLOR_RESET}"
             fi
-            partition="${device}1"
-            [[ -b "${device}p1" ]] && partition="${device}p1"
         fi
-
+        
+        # Now format the target device (either original partition or newly created one)
         case "$filesystem" in
             exfat)
-                mkfs.exfat -n "$label" "$partition" 2>&1 | while read -r line; do
-                    log_message "DEBUG" "mkfs.exfat: $line"
-                done
+                if ! command -v mkfs.exfat &> /dev/null; then
+                    echo -e "${RED}Error: mkfs.exfat not found${COLOR_RESET}"
+                    echo -e "${YELLOW}Install with: sudo apt install exfat-utils exfatprogs${COLOR_RESET}"
+                    echo -e "${YELLOW}Or on newer systems: sudo apt install exfatprogs${COLOR_RESET}"
+                    return 1
+                fi
+                echo -e "${DIM}Running: ${need_sudo} mkfs.exfat -n \"$label\" $target_device${COLOR_RESET}"
+                
+                # Capture both stdout and stderr
+                local format_output
+                format_output=$(${need_sudo} mkfs.exfat -n "$label" "$target_device" 2>&1)
+                local exit_code=$?
+                
+                if [[ $exit_code -ne 0 ]]; then
+                    echo -e "${RED}Failed to format USB drive as exFAT${COLOR_RESET}"
+                    echo -e "${DIM}Error details: $format_output${COLOR_RESET}"
+                    
+                    # Check for common issues
+                    if [[ "$format_output" == *"No such file or directory"* ]]; then
+                        echo -e "${YELLOW}Tip: Device issue detected. Try unplugging and reconnecting the USB${COLOR_RESET}"
+                    elif [[ "$format_output" == *"Device or resource busy"* ]]; then
+                        echo -e "${YELLOW}Tip: The device may be in use. Try ejecting it from your file manager first${COLOR_RESET}"
+                    elif [[ "$format_output" == *"Permission denied"* ]]; then
+                        echo -e "${YELLOW}Tip: Permission issue detected even with sudo${COLOR_RESET}"
+                    fi
+                    return 1
+                else
+                    echo -e "${GREEN}✓ Successfully formatted as exFAT (cross-platform compatible)${COLOR_RESET}"
+                fi
                 ;;
             fat32|vfat)
-                mkfs.vfat -F 32 -n "$label" "$partition" 2>&1 | while read -r line; do
-                    log_message "DEBUG" "mkfs.vfat: $line"
-                done
+                echo -e "${DIM}Running: ${need_sudo} mkfs.vfat -F 32 -n \"$label\" $target_device${COLOR_RESET}"
+                
+                local format_output
+                format_output=$(${need_sudo} mkfs.vfat -F 32 -n "$label" "$target_device" 2>&1)
+                local exit_code=$?
+                
+                if [[ $exit_code -ne 0 ]]; then
+                    echo -e "${RED}Failed to format USB drive as FAT32${COLOR_RESET}"
+                    echo -e "${DIM}Error details: $format_output${COLOR_RESET}"
+                    return 1
+                else
+                    echo -e "${GREEN}✓ Successfully formatted as FAT32${COLOR_RESET}"
+                fi
                 ;;
             ntfs)
-                mkfs.ntfs -Q -L "$label" "$partition" 2>&1 | while read -r line; do
-                    log_message "DEBUG" "mkfs.ntfs: $line"
-                done
+                if ! command -v mkfs.ntfs &> /dev/null; then
+                    echo -e "${RED}Error: mkfs.ntfs not found${COLOR_RESET}"
+                    echo -e "${YELLOW}Install with: sudo apt install ntfs-3g${COLOR_RESET}"
+                    return 1
+                fi
+                echo -e "${DIM}Running: ${need_sudo} mkfs.ntfs -Q -L \"$label\" $target_device${COLOR_RESET}"
+                
+                local format_output
+                format_output=$(${need_sudo} mkfs.ntfs -Q -L "$label" "$target_device" 2>&1)
+                local exit_code=$?
+                
+                if [[ $exit_code -ne 0 ]]; then
+                    echo -e "${RED}Failed to format USB drive as NTFS${COLOR_RESET}"
+                    echo -e "${DIM}Error details: $format_output${COLOR_RESET}"
+                    return 1
+                else
+                    echo -e "${GREEN}✓ Successfully formatted as NTFS${COLOR_RESET}"
+                fi
                 ;;
             ext4)
-                mkfs.ext4 -L "$label" "$partition" 2>&1 | while read -r line; do
-                    log_message "DEBUG" "mkfs.ext4: $line"
-                done
+                echo -e "${DIM}Running: ${need_sudo} mkfs.ext4 -L \"$label\" $target_device${COLOR_RESET}"
+                
+                local format_output
+                format_output=$(${need_sudo} mkfs.ext4 -L "$label" "$target_device" 2>&1)
+                local exit_code=$?
+                
+                if [[ $exit_code -ne 0 ]]; then
+                    echo -e "${RED}Failed to format USB drive as ext4${COLOR_RESET}"
+                    echo -e "${DIM}Error details: $format_output${COLOR_RESET}"
+                    return 1
+                else
+                    echo -e "${GREEN}✓ Successfully formatted as ext4${COLOR_RESET}"
+                fi
                 ;;
             *)
                 log_message "ERROR" "Unsupported filesystem: $filesystem"
@@ -178,25 +304,82 @@ mount_device() {
     local device="$1"
     local mount_point="${2:-}"
     
-    # Auto-generate mount point if not provided
-    if [[ -z "$mount_point" ]]; then
-        mount_point="/tmp/leonardo-mount-$$"
-        mkdir -p "$mount_point"
+    # Platform-specific mounting
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        # macOS
+        diskutil mount "$device" 2>/dev/null
+        if [[ $? -eq 0 ]]; then
+            # Get the mount point from diskutil
+            local mounted_at=$(diskutil info "$device" 2>/dev/null | grep "Mount Point:" | cut -d: -f2- | xargs)
+            if [[ -n "$mounted_at" ]]; then
+                export LEONARDO_USB_MOUNT="$mounted_at"
+                echo -e "${GREEN}✓ Mounted at: $mounted_at${COLOR_RESET}"
+                return 0
+            fi
+        fi
+    elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
+        # Linux
+        # Create mount point if not specified
+        if [[ -z "$mount_point" ]]; then
+            mount_point="/media/$USER/leonardo_$$"
+            if ! mkdir -p "$mount_point" 2>/dev/null; then
+                mount_point="/mnt/leonardo_$$"
+            fi
+        fi
+        
+        # Try user-level mount first
+        if mount "$device" "$mount_point" 2>/dev/null; then
+            export LEONARDO_USB_MOUNT="$mount_point"
+            echo -e "${GREEN}✓ Mounted at: $mount_point${COLOR_RESET}"
+            return 0
+        fi
+        
+        # Try udisksctl for user mounting
+        if command -v udisksctl >/dev/null 2>&1; then
+            echo -e "${DIM}Trying udisksctl mount...${COLOR_RESET}"
+            local mount_output=$(udisksctl mount -b "$device" 2>&1)
+            if [[ $? -eq 0 ]]; then
+                # Extract mount point from output
+                local mounted_at=$(echo "$mount_output" | grep -oP "Mounted .* at \K.*" | sed 's/\.$//')
+                if [[ -n "$mounted_at" ]]; then
+                    export LEONARDO_USB_MOUNT="$mounted_at"
+                    echo -e "${GREEN}✓ Mounted at: $mounted_at${COLOR_RESET}"
+                    return 0
+                fi
+            fi
+        fi
+        
+        # Try with sudo
+        echo -e "${YELLOW}⚠ Mounting USB requires administrator privileges${COLOR_RESET}"
+        echo -e "${CYAN}You may be prompted for your password${COLOR_RESET}"
+        echo -e "${DIM}Running: sudo mount $device $mount_point${COLOR_RESET}"
+        
+        # Create mount point with sudo if needed
+        if [[ ! -d "$mount_point" ]]; then
+            sudo mkdir -p "$mount_point"
+        fi
+        
+        # Mount with sudo
+        if sudo mount "$device" "$mount_point" 2>&1; then
+            export LEONARDO_USB_MOUNT="$mount_point"
+            echo -e "${GREEN}✓ Mounted at: $mount_point${COLOR_RESET}"
+            
+            # Try to make it writable for the user
+            sudo chown -R "$USER:$USER" "$mount_point" 2>/dev/null || true
+            return 0
+        else
+            echo -e "${RED}Failed to mount device${COLOR_RESET}"
+            # Clean up mount point if we created it
+            rmdir "$mount_point" 2>/dev/null || true
+            return 1
+        fi
+    elif [[ "$OSTYPE" == "msys" ]] || [[ "$OSTYPE" == "cygwin" ]]; then
+        # Windows - usually auto-mounts
+        export LEONARDO_USB_MOUNT="$device"
+        return 0
     fi
     
-    log_message "INFO" "Mounting $device to $mount_point"
-    
-    if [[ "$OSTYPE" == "linux-gnu"* ]]; then
-        mount "$device" "$mount_point" 2>&1 | while read -r line; do
-            log_message "DEBUG" "mount: $line"
-        done
-    elif [[ "$OSTYPE" == "darwin"* ]]; then
-        diskutil mount -mountPoint "$mount_point" "$device" 2>&1 | while read -r line; do
-            log_message "DEBUG" "diskutil mount: $line"
-        done
-    fi
-    
-    echo "$mount_point"
+    return 1
 }
 
 # Unmount device
@@ -207,10 +390,25 @@ unmount_device() {
     
     if [[ "$OSTYPE" == "linux-gnu"* ]]; then
         # Find all mount points for the device
+        local need_sudo=""
+        if [[ $EUID -ne 0 ]]; then
+            need_sudo="sudo"
+        fi
+        
         while IFS= read -r mount_point; do
-            umount "$mount_point" 2>&1 | while read -r line; do
-                log_message "DEBUG" "umount: $line"
-            done
+            if [[ -n "$mount_point" ]]; then
+                # Try without sudo first
+                if ! umount "$mount_point" 2>/dev/null; then
+                    if [[ -n "$need_sudo" ]]; then
+                        echo -e "${DIM}Running: sudo umount $mount_point${COLOR_RESET}"
+                        $need_sudo umount "$mount_point" 2>&1 | while read -r line; do
+                            log_message "DEBUG" "umount: $line"
+                        done
+                    fi
+                else
+                    log_message "DEBUG" "Unmounted $mount_point"
+                fi
+            fi
         done < <(findmnt -rno TARGET "$device" 2>/dev/null)
         
     elif [[ "$OSTYPE" == "darwin"* ]]; then
