@@ -264,16 +264,16 @@ create_macos_app() {
     local app_path="$HOME/Applications/Leonardo.app"
     
     # Create app structure
-    ensure_directory "$app_path/Contents/MacOS"
+    ensure_directory "$app_path/Contents/macOS"
     ensure_directory "$app_path/Contents/Resources"
-    
+
     # Create launcher
-    cat > "$app_path/Contents/MacOS/Leonardo" << EOF
+    cat > "$app_path/Contents/macOS/Leonardo" << EOF
 #!/bin/bash
 cd "$install_path"
 open -a Terminal "$install_path/leonardo.sh"
 EOF
-    chmod +x "$app_path/Contents/MacOS/Leonardo"
+    chmod +x "$app_path/Contents/macOS/Leonardo"
     
     # Create Info.plist
     cat > "$app_path/Contents/Info.plist" << EOF
