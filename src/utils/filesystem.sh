@@ -101,32 +101,49 @@ format_usb_device() {
     local device="$1"
     local filesystem="${2:-$LEONARDO_DEFAULT_FS}"
     local label="${3:-$LEONARDO_USB_LABEL}"
-    
+
     log_message "INFO" "Formatting $device as $filesystem with label $label"
-    
+
     # Unmount if mounted
     unmount_device "$device"
-    
+
     # Platform-specific formatting
     if [[ "$OSTYPE" == "linux-gnu"* ]]; then
+        local partition="$device"
+        if [[ "$device" =~ ^/dev/(sd[a-z]|nvme[0-9]+n[0-9]+)$ ]]; then
+            if command -v parted >/dev/null 2>&1; then
+                parted -s "$device" mklabel gpt >/dev/null 2>&1
+                parted -s "$device" mkpart primary 0% 100% >/dev/null 2>&1
+                parted -s "$device" set 1 msftdata on >/dev/null 2>&1
+                if command -v partprobe >/dev/null 2>&1; then
+                    partprobe "$device" >/dev/null 2>&1
+                fi
+            else
+                log_message "ERROR" "parted is required to format USB drives"
+                return 1
+            fi
+            partition="${device}1"
+            [[ -b "${device}p1" ]] && partition="${device}p1"
+        fi
+
         case "$filesystem" in
             exfat)
-                mkfs.exfat -n "$label" "$device" 2>&1 | while read -r line; do
+                mkfs.exfat -n "$label" "$partition" 2>&1 | while read -r line; do
                     log_message "DEBUG" "mkfs.exfat: $line"
                 done
                 ;;
             fat32|vfat)
-                mkfs.vfat -F 32 -n "$label" "$device" 2>&1 | while read -r line; do
+                mkfs.vfat -F 32 -n "$label" "$partition" 2>&1 | while read -r line; do
                     log_message "DEBUG" "mkfs.vfat: $line"
                 done
                 ;;
             ntfs)
-                mkfs.ntfs -Q -L "$label" "$device" 2>&1 | while read -r line; do
+                mkfs.ntfs -Q -L "$label" "$partition" 2>&1 | while read -r line; do
                     log_message "DEBUG" "mkfs.ntfs: $line"
                 done
                 ;;
             ext4)
-                mkfs.ext4 -L "$label" "$device" 2>&1 | while read -r line; do
+                mkfs.ext4 -L "$label" "$partition" 2>&1 | while read -r line; do
                     log_message "DEBUG" "mkfs.ext4: $line"
                 done
                 ;;
@@ -135,7 +152,7 @@ format_usb_device() {
                 return 1
                 ;;
         esac
-        
+
     elif [[ "$OSTYPE" == "darwin"* ]]; then
         case "$filesystem" in
             exfat)

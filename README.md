@@ -46,6 +46,24 @@ cd LEO7
 # Follow the interactive setup!
 ```
 
+### Formatting a USB Drive
+
+Before installing Leonardo on a USB drive you can format it on **any** platform:
+
+```bash
+# Linux
+./leonardo.sh usb format /dev/sdX --format exfat --label LEONARDO
+
+# macOS
+diskutil eraseDisk ExFAT LEONARDO /dev/diskN
+
+# Windows (run in PowerShell)
+leonardo usb format 1 --format exfat --label LEONARDO
+```
+
+The Linux formatter now marks the partition as `msftdata`, ensuring the drive
+mounts correctly on macOS and Windows.
+
 ## 📋 Requirements
 
 ### Minimum System Requirements
