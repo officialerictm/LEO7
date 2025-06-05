@@ -1153,6 +1153,11 @@ create_directory() {
     fi
 }
 
+# Create a directory (alias for compatibility)
+ensure_directory() {
+    create_directory "$@"
+}
+
 # Detect available USB devices
 detect_usb_devices() {
     local devices=()
@@ -1511,7 +1516,7 @@ cleanup_temp_files() {
 export -f detect_usb_devices format_usb_device mount_device unmount_device
 export -f check_available_space create_leonardo_structure copy_with_progress
 export -f safe_delete get_file_checksum create_temp_dir
-export -f create_directory
+export -f create_directory ensure_directory
 
 # ==== Component: src/utils/network.sh ====
 # ==============================================================================
@@ -1925,8 +1930,13 @@ clear() {
     fi
 }
 
+# Check if a command exists in PATH
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
 # Export functions
-export -f clear
+export -f clear command_exists
 
 # ==== Component: src/ui/menu.sh ====
 # ==============================================================================
@@ -6094,8 +6104,8 @@ deploy_to_usb() {
         local usb_drives=()
         echo -e "${DIM}Detecting USB drives...${COLOR_RESET}"
         
-        # Get raw output for debugging
-        local raw_output=$(detect_usb_drives 2>&1)
+        # Get USB drives - let debug output go to stderr
+        local raw_output=$(detect_usb_drives)
         if [[ -n "$raw_output" ]]; then
             # Extract just the device paths (first field before |)
             readarray -t usb_drives < <(echo "$raw_output" | cut -d'|' -f1 | grep -E '^/dev/')
@@ -6154,22 +6164,140 @@ deploy_to_usb() {
     echo -e "${YELLOW}Step 1/4: Preparing USB Drive${COLOR_RESET}"
     
     # Check if already initialized
-    if ! is_leonardo_usb "$target_device"; then
-        # Ask about formatting
-        if confirm_menu "Format USB drive? ${RED}WARNING: This will erase all data!${COLOR_RESET}"; then
-            echo -e "${CYAN}→ Formatting USB drive...${COLOR_RESET}"
-            if ! format_usb_device "$target_device"; then
-                echo -e "${RED}Failed to format USB drive${COLOR_RESET}"
-                pause
-                return 1
+    if is_leonardo_usb "$target_device"; then
+        echo -e "${YELLOW}⚠ Leonardo installation detected on USB${COLOR_RESET}"
+        echo
+        
+        # Show current installation info
+        if [[ -f "$LEONARDO_USB_MOUNT/leonardo/VERSION" ]]; then
+            local current_version=$(cat "$LEONARDO_USB_MOUNT/leonardo/VERSION" 2>/dev/null || echo "Unknown")
+            echo -e "Current version: ${CYAN}$current_version${COLOR_RESET}"
+        fi
+        
+        # Show options in interactive mode
+        if [[ -t 0 ]]; then
+            echo
+            echo -e "${BOLD}What would you like to do?${COLOR_RESET}"
+            echo -e "1) ${GREEN}Update/Fix${COLOR_RESET} - Keep data and update Leonardo"
+            echo -e "2) ${RED}Format & Reinstall${COLOR_RESET} - Fresh installation (erases all data)"
+            echo -e "3) ${DIM}Cancel${COLOR_RESET} - Exit without changes"
+            echo
+            
+            local choice
+            read -p "Enter choice (1-3): " choice
+            
+            case "$choice" in
+                1)
+                    echo -e "${CYAN}→ Updating Leonardo installation...${COLOR_RESET}"
+                    # Skip formatting, just update
+                    ;;
+                2)
+                    if confirm_menu "Format USB and install fresh? ${RED}WARNING: This will erase all data!${COLOR_RESET}"; then
+                        echo -e "${CYAN}→ Formatting USB drive...${COLOR_RESET}"
+                        if ! format_usb_device "$target_device"; then
+                            echo -e "${RED}Failed to format USB drive${COLOR_RESET}"
+                            pause
+                            return 1
+                        fi
+                        
+                        # Mount the newly formatted device
+                        echo -e "${CYAN}→ Mounting USB drive...${COLOR_RESET}"
+                        if ! mount_usb_drive "$target_device"; then
+                            echo -e "${RED}Failed to mount USB drive${COLOR_RESET}"
+                            pause
+                            return 1
+                        fi
+                    else
+                        echo -e "${DIM}Cancelled${COLOR_RESET}"
+                        return 0
+                    fi
+                    ;;
+                3|*)
+                    echo -e "${DIM}Cancelled${COLOR_RESET}"
+                    return 0
+                    ;;
+            esac
+        else
+            echo -e "${YELLOW}Non-interactive mode: Updating existing installation${COLOR_RESET}"
+            # In non-interactive mode, default to update
+        fi
+    else
+        # Ask about formatting only in interactive mode
+        if [[ -t 0 ]]; then
+            if confirm_menu "Format USB drive? ${RED}WARNING: This will erase all data!${COLOR_RESET}"; then
+                echo -e "${CYAN}→ Formatting USB drive...${COLOR_RESET}"
+                if ! format_usb_device "$target_device"; then
+                    echo -e "${RED}Failed to format USB drive${COLOR_RESET}"
+                    pause
+                    return 1
+                fi
+                
+                # Mount the newly formatted device
+                echo -e "${CYAN}→ Mounting USB drive...${COLOR_RESET}"
+                if ! mount_usb_drive "$target_device"; then
+                    echo -e "${RED}Failed to mount USB drive${COLOR_RESET}"
+                    pause
+                    return 1
+                fi
+            fi
+        else
+            echo -e "${YELLOW}Non-interactive mode: Skipping format prompt${COLOR_RESET}"
+            # Try to mount if not already mounted
+            echo -e "${CYAN}→ Checking USB mount status...${COLOR_RESET}"
+            
+            # Check if we need to try partition instead
+            local mount_device="$target_device"
+            if [[ "$target_device" =~ ^/dev/sd[a-z]$ ]]; then
+                # Check if partition exists
+                if [[ -b "${target_device}1" ]]; then
+                    mount_device="${target_device}1"
+                    echo -e "${DIM}Using partition: $mount_device${COLOR_RESET}"
+                fi
+            fi
+            
+            # Try to mount if not already mounted
+            local existing_mount=$(lsblk -no MOUNTPOINT "$mount_device" 2>/dev/null | grep -v "^$" | head -1)
+            if [[ -z "$existing_mount" ]]; then
+                echo -e "${CYAN}→ Mounting USB drive...${COLOR_RESET}"
+                if ! mount_usb_drive "$mount_device"; then
+                    echo -e "${RED}Failed to mount USB drive${COLOR_RESET}"
+                    echo -e "${YELLOW}Try one of these options:${COLOR_RESET}"
+                    echo -e "  1. Run with sudo: ${CYAN}sudo ./leonardo.sh deploy usb $target_device${COLOR_RESET}"
+                    echo -e "  2. Mount manually first: ${CYAN}sudo mount $mount_device /mnt/usb${COLOR_RESET}"
+                    echo -e "  3. Use your desktop file manager to mount the USB"
+                    return 1
+                fi
+            else
+                echo -e "${GREEN}✓ USB already mounted at: $existing_mount${COLOR_RESET}"
+                # Update target device to use the partition
+                target_device="$mount_device"
             fi
         fi
     fi
     
     # Initialize USB
+    echo -e "${CYAN}→ Initializing USB device...${COLOR_RESET}"
     if ! init_usb_device "$target_device"; then
+        echo -e "${RED}Failed to initialize USB device${COLOR_RESET}"
         pause
         return 1
+    fi
+    
+    # Debug mount point
+    echo -e "${DIM}DEBUG: USB mount point is: ${LEONARDO_USB_MOUNT:-'(not set)'}${COLOR_RESET}" >&2
+    
+    # Ensure mount point is set
+    if [[ -z "$LEONARDO_USB_MOUNT" ]]; then
+        echo -e "${RED}Error: USB mount point not detected${COLOR_RESET}"
+        echo -e "${YELLOW}Please ensure the USB drive is properly mounted${COLOR_RESET}"
+        pause
+        return 1
+    fi
+    
+    # Create Leonardo directory structure if it doesn't exist
+    if [[ ! -d "$LEONARDO_USB_MOUNT/leonardo" ]]; then
+        echo -e "${CYAN}→ Creating Leonardo directory structure...${COLOR_RESET}"
+        create_leonardo_structure "$LEONARDO_USB_MOUNT"
     fi
     
     # Get Leonardo script location
@@ -6246,16 +6374,24 @@ copy_leonardo_to_usb() {
     # Copy Leonardo script
     echo -e "${CYAN}→ Copying Leonardo executable...${COLOR_RESET}"
     
+    # Create leonardo directory if needed
+    mkdir -p "$target_dir/leonardo"
+    
     # Use copy with progress if file is large enough
     local leonardo_size=$(stat -f%z "$leonardo_script" 2>/dev/null || stat -c%s "$leonardo_script" 2>/dev/null || echo "0")
     
     if [[ $leonardo_size -gt 1048576 ]]; then  # > 1MB
-        copy_with_progress "$leonardo_script" "$target_dir/leonardo.sh" "Installing Leonardo"
+        copy_with_progress "$leonardo_script" "$target_dir/leonardo/leonardo.sh" "Installing Leonardo"
     else
         # Small file, just copy normally
-        cp "$leonardo_script" "$target_dir/leonardo.sh"
+        cp "$leonardo_script" "$target_dir/leonardo/leonardo.sh"
         echo -e "${GREEN}✓ Leonardo installed${COLOR_RESET}"
     fi
+    
+    # Also copy to root for convenience
+    cp "$leonardo_script" "$target_dir/leonardo.sh"
+    chmod +x "$target_dir/leonardo.sh"
+    chmod +x "$target_dir/leonardo/leonardo.sh"
 }
 
 # Create platform-specific launchers
@@ -6721,6 +6857,22 @@ export -f deploy_to_usb configure_usb_leonardo deploy_models_to_usb
 export -f download_model_to_usb create_usb_autorun verify_usb_deployment
 export -f quick_deploy_to_usb get_usb_deployment_status
 
+# Create Leonardo directory structure
+create_leonardo_structure() {
+    local target_dir="$1"
+    
+    # Create required directories
+    local required_dirs=("leonardo" "leonardo/models" "leonardo/config" "leonardo/logs")
+    
+    for dir in "${required_dirs[@]}"; do
+        if [[ ! -d "$target_dir/$dir" ]]; then
+            mkdir -p "$target_dir/$dir"
+        fi
+    done
+    
+    echo -e "${GREEN}✓ Leonardo directory structure created${COLOR_RESET}"
+}
+
 # ==== Component: src/deployment/cli.sh ====
 # ==============================================================================
 # Leonardo AI Universal - Deployment CLI Module
@@ -7097,7 +7249,7 @@ detect_usb_drives_linux() {
     # Debug: Show what lsblk sees
     if [[ "${LEONARDO_DEBUG:-}" == "true" ]] || [[ -n "${DEBUG:-}" ]]; then
         echo -e "${YELLOW}DEBUG: lsblk output for sd devices:${COLOR_RESET}" >&2
-        lsblk -nlo NAME,SIZE,MOUNTPOINT,LABEL | grep -E "^sd[a-z]$" >&2 || echo "No sd devices found" >&2
+        lsblk -nlo NAME,SIZE,MOUNTPOINT,LABEL | grep -E "^sd[a-z]\s" >&2 || echo "No sd devices found" >&2
     fi
     
     # Use lsblk to find USB devices - only base devices, not partitions
@@ -7118,7 +7270,7 @@ detect_usb_drives_linux() {
                 echo -e "${GREEN}DEBUG: Found USB device: /dev/$device${COLOR_RESET}" >&2
             fi
         fi
-    done < <(lsblk -nlo NAME,SIZE,MOUNTPOINT,LABEL | grep -E "^sd[a-z]$")
+    done < <(lsblk -nlo NAME,SIZE,MOUNTPOINT,LABEL | grep -E "^sd[a-z]\s")
     
     # Output drives
     for drive in "${drives[@]}"; do
@@ -7445,9 +7597,51 @@ test_usb_write_speed() {
     fi
 }
 
+# Check if device is a Leonardo USB
+is_leonardo_usb() {
+    local device="${1:-}"
+    
+    if [[ -z "$device" ]]; then
+        return 1
+    fi
+    
+    # Get mount point
+    local mount_point=""
+    local platform=$(detect_platform)
+    
+    case "$platform" in
+        "macos")
+            mount_point=$(diskutil info "$device" 2>/dev/null | grep "Mount Point:" | cut -d: -f2- | xargs)
+            ;;
+        "linux")
+            mount_point=$(lsblk -no MOUNTPOINT "$device" 2>/dev/null | grep -v "^$" | head -1)
+            # Try first partition if device is like /dev/sdX
+            if [[ -z "$mount_point" ]] && [[ "$device" =~ ^/dev/sd[a-z]$ ]]; then
+                mount_point=$(lsblk -no MOUNTPOINT "${device}1" 2>/dev/null | grep -v "^$" | head -1)
+            fi
+            ;;
+        "windows")
+            mount_point="$device\\"
+            ;;
+    esac
+    
+    # Check for Leonardo marker files
+    if [[ -n "$mount_point" ]]; then
+        if [[ -f "$mount_point/leonardo.sh" ]] || \
+           [[ -f "$mount_point/leonardo.bat" ]] || \
+           [[ -f "$mount_point/leonardo/config/leonardo.conf" ]] || \
+           [[ -d "$mount_point/leonardo" ]]; then
+            return 0
+        fi
+    fi
+    
+    return 1
+}
+
 # Export USB detection functions
 export -f detect_platform detect_usb_drives get_usb_drive_info
 export -f is_usb_device get_usb_speed monitor_usb_changes
+export -f is_leonardo_usb
 export -f list_usb_drives test_usb_write_speed
 
 # ==== Component: src/usb/manager.sh ====
@@ -7492,7 +7686,7 @@ init_usb_device() {
     fi
     
     # Set global variables
-    LEONARDO_USB_DEVICE="$device"
+    export LEONARDO_USB_DEVICE="$device"
     
     # Get mount point
     local platform=$(detect_platform)
@@ -7512,6 +7706,9 @@ init_usb_device() {
             LEONARDO_USB_MOUNT="$device\\"
             ;;
     esac
+    
+    # Export the mount point so it's available to subshells
+    export LEONARDO_USB_MOUNT
     
     log_message "INFO" "Initialized USB device: $LEONARDO_USB_DEVICE"
     [[ -n "$LEONARDO_USB_MOUNT" ]] && log_message "INFO" "Mount point: $LEONARDO_USB_MOUNT"
@@ -7627,18 +7824,43 @@ mount_usb_drive() {
             
             # Get actual mount point
             LEONARDO_USB_MOUNT=$(diskutil info "$device" 2>/dev/null | grep "Mount Point:" | cut -d: -f2- | xargs)
+            export LEONARDO_USB_MOUNT
             ;;
         "linux")
             # Create mount point if not specified
             if [[ -z "$mount_point" ]]; then
-                mount_point="/mnt/leonardo_$$"
-                mkdir -p "$mount_point"
+                # Try user-writable locations first
+                if [[ -w "$HOME" ]]; then
+                    mount_point="$HOME/leonardo_usb_$$"
+                    mkdir -p "$mount_point"
+                else
+                    mount_point="/mnt/leonardo_$$"
+                    mkdir -p "$mount_point" 2>/dev/null || {
+                        log_message "ERROR" "Cannot create mount point - need sudo permissions"
+                        return 1
+                    }
+                fi
             fi
             
+            # Try different mount methods
             if mount "$device" "$mount_point" 2>/dev/null; then
                 LEONARDO_USB_MOUNT="$mount_point"
+                export LEONARDO_USB_MOUNT
+            elif command -v udisksctl >/dev/null 2>&1; then
+                # Try udisksctl for user mounting
+                log_message "INFO" "Trying udisksctl mount..."
+                local mount_output=$(udisksctl mount -b "$device" 2>&1)
+                if [[ $? -eq 0 ]]; then
+                    LEONARDO_USB_MOUNT=$(echo "$mount_output" | grep -oP "Mounted .* at \K.*" | sed 's/\.$//')
+                    export LEONARDO_USB_MOUNT
+                    log_message "INFO" "Mounted via udisksctl at: $LEONARDO_USB_MOUNT"
+                else
+                    log_message "ERROR" "Failed to mount device - $mount_output"
+                    rmdir "$mount_point" 2>/dev/null
+                    return 1
+                fi
             else
-                log_message "ERROR" "Failed to mount device"
+                log_message "ERROR" "Failed to mount device - need sudo or udisksctl"
                 rmdir "$mount_point" 2>/dev/null
                 return 1
             fi
@@ -7646,6 +7868,7 @@ mount_usb_drive() {
         "windows")
             # Windows auto-mounts with drive letters
             LEONARDO_USB_MOUNT="$device\\"
+            export LEONARDO_USB_MOUNT
             ;;
     esac
     

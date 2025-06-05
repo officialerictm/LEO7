@@ -33,6 +33,11 @@ create_directory() {
     fi
 }
 
+# Create a directory (alias for compatibility)
+ensure_directory() {
+    create_directory "$@"
+}
+
 # Detect available USB devices
 detect_usb_devices() {
     local devices=()
@@ -391,4 +396,4 @@ cleanup_temp_files() {
 export -f detect_usb_devices format_usb_device mount_device unmount_device
 export -f check_available_space create_leonardo_structure copy_with_progress
 export -f safe_delete get_file_checksum create_temp_dir
-export -f create_directory
+export -f create_directory ensure_directory

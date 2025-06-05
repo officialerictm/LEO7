@@ -115,7 +115,7 @@ detect_usb_drives_linux() {
     # Debug: Show what lsblk sees
     if [[ "${LEONARDO_DEBUG:-}" == "true" ]] || [[ -n "${DEBUG:-}" ]]; then
         echo -e "${YELLOW}DEBUG: lsblk output for sd devices:${COLOR_RESET}" >&2
-        lsblk -nlo NAME,SIZE,MOUNTPOINT,LABEL | grep -E "^sd[a-z]$" >&2 || echo "No sd devices found" >&2
+        lsblk -nlo NAME,SIZE,MOUNTPOINT,LABEL | grep -E "^sd[a-z]\s" >&2 || echo "No sd devices found" >&2
     fi
     
     # Use lsblk to find USB devices - only base devices, not partitions
@@ -136,7 +136,7 @@ detect_usb_drives_linux() {
                 echo -e "${GREEN}DEBUG: Found USB device: /dev/$device${COLOR_RESET}" >&2
             fi
         fi
-    done < <(lsblk -nlo NAME,SIZE,MOUNTPOINT,LABEL | grep -E "^sd[a-z]$")
+    done < <(lsblk -nlo NAME,SIZE,MOUNTPOINT,LABEL | grep -E "^sd[a-z]\s")
     
     # Output drives
     for drive in "${drives[@]}"; do
@@ -463,7 +463,49 @@ test_usb_write_speed() {
     fi
 }
 
+# Check if device is a Leonardo USB
+is_leonardo_usb() {
+    local device="${1:-}"
+    
+    if [[ -z "$device" ]]; then
+        return 1
+    fi
+    
+    # Get mount point
+    local mount_point=""
+    local platform=$(detect_platform)
+    
+    case "$platform" in
+        "macos")
+            mount_point=$(diskutil info "$device" 2>/dev/null | grep "Mount Point:" | cut -d: -f2- | xargs)
+            ;;
+        "linux")
+            mount_point=$(lsblk -no MOUNTPOINT "$device" 2>/dev/null | grep -v "^$" | head -1)
+            # Try first partition if device is like /dev/sdX
+            if [[ -z "$mount_point" ]] && [[ "$device" =~ ^/dev/sd[a-z]$ ]]; then
+                mount_point=$(lsblk -no MOUNTPOINT "${device}1" 2>/dev/null | grep -v "^$" | head -1)
+            fi
+            ;;
+        "windows")
+            mount_point="$device\\"
+            ;;
+    esac
+    
+    # Check for Leonardo marker files
+    if [[ -n "$mount_point" ]]; then
+        if [[ -f "$mount_point/leonardo.sh" ]] || \
+           [[ -f "$mount_point/leonardo.bat" ]] || \
+           [[ -f "$mount_point/leonardo/config/leonardo.conf" ]] || \
+           [[ -d "$mount_point/leonardo" ]]; then
+            return 0
+        fi
+    fi
+    
+    return 1
+}
+
 # Export USB detection functions
 export -f detect_platform detect_usb_drives get_usb_drive_info
 export -f is_usb_device get_usb_speed monitor_usb_changes
+export -f is_leonardo_usb
 export -f list_usb_drives test_usb_write_speed

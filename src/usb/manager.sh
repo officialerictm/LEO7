@@ -40,7 +40,7 @@ init_usb_device() {
     fi
     
     # Set global variables
-    LEONARDO_USB_DEVICE="$device"
+    export LEONARDO_USB_DEVICE="$device"
     
     # Get mount point
     local platform=$(detect_platform)
@@ -60,6 +60,9 @@ init_usb_device() {
             LEONARDO_USB_MOUNT="$device\\"
             ;;
     esac
+    
+    # Export the mount point so it's available to subshells
+    export LEONARDO_USB_MOUNT
     
     log_message "INFO" "Initialized USB device: $LEONARDO_USB_DEVICE"
     [[ -n "$LEONARDO_USB_MOUNT" ]] && log_message "INFO" "Mount point: $LEONARDO_USB_MOUNT"
@@ -175,18 +178,43 @@ mount_usb_drive() {
             
             # Get actual mount point
             LEONARDO_USB_MOUNT=$(diskutil info "$device" 2>/dev/null | grep "Mount Point:" | cut -d: -f2- | xargs)
+            export LEONARDO_USB_MOUNT
             ;;
         "linux")
             # Create mount point if not specified
             if [[ -z "$mount_point" ]]; then
-                mount_point="/mnt/leonardo_$$"
-                mkdir -p "$mount_point"
+                # Try user-writable locations first
+                if [[ -w "$HOME" ]]; then
+                    mount_point="$HOME/leonardo_usb_$$"
+                    mkdir -p "$mount_point"
+                else
+                    mount_point="/mnt/leonardo_$$"
+                    mkdir -p "$mount_point" 2>/dev/null || {
+                        log_message "ERROR" "Cannot create mount point - need sudo permissions"
+                        return 1
+                    }
+                fi
             fi
             
+            # Try different mount methods
             if mount "$device" "$mount_point" 2>/dev/null; then
                 LEONARDO_USB_MOUNT="$mount_point"
+                export LEONARDO_USB_MOUNT
+            elif command -v udisksctl >/dev/null 2>&1; then
+                # Try udisksctl for user mounting
+                log_message "INFO" "Trying udisksctl mount..."
+                local mount_output=$(udisksctl mount -b "$device" 2>&1)
+                if [[ $? -eq 0 ]]; then
+                    LEONARDO_USB_MOUNT=$(echo "$mount_output" | grep -oP "Mounted .* at \K.*" | sed 's/\.$//')
+                    export LEONARDO_USB_MOUNT
+                    log_message "INFO" "Mounted via udisksctl at: $LEONARDO_USB_MOUNT"
+                else
+                    log_message "ERROR" "Failed to mount device - $mount_output"
+                    rmdir "$mount_point" 2>/dev/null
+                    return 1
+                fi
             else
-                log_message "ERROR" "Failed to mount device"
+                log_message "ERROR" "Failed to mount device - need sudo or udisksctl"
                 rmdir "$mount_point" 2>/dev/null
                 return 1
             fi
@@ -194,6 +222,7 @@ mount_usb_drive() {
         "windows")
             # Windows auto-mounts with drive letters
             LEONARDO_USB_MOUNT="$device\\"
+            export LEONARDO_USB_MOUNT
             ;;
     esac
     
