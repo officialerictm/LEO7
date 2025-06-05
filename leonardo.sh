@@ -6581,37 +6581,97 @@ download_model_to_usb() {
     if command_exists ollama; then
         # Use Ollama to pull the model
         echo "Using Ollama to download model..."
-        ollama pull "${model_id}:${variant}" 2>&1 | \
-        while IFS= read -r line; do
-            # Parse Ollama progress output
-            if [[ "$line" =~ pulling[[:space:]].*[[:space:]]([0-9]+)%[[:space:]]+\|.*\|[[:space:]]+([0-9.]+[[:space:]]?[KMGT]?B)/([0-9.]+[[:space:]]?[KMGT]?B)[[:space:]]+([0-9.]+[[:space:]]?[KMGT]?B/s) ]]; then
-                local percent="${BASH_REMATCH[1]}"
-                local downloaded="${BASH_REMATCH[2]}"
-                local total="${BASH_REMATCH[3]}"
-                local speed="${BASH_REMATCH[4]}"
-                
-                printf "\r"
-                show_progress_bar "$percent" 100 40
-                printf " ${percent}%% | ${downloaded}/${total} | ${speed}  "
-            elif [[ "$line" =~ "success" ]] || [[ "$line" =~ "already up to date" ]]; then
-                printf "\r%-80s\r" " "
-                echo -e "${GREEN}✓ Model downloaded successfully${COLOR_RESET}"
-                return 0
+        
+        # Ensure Ollama is running
+        if ! pgrep -x "ollama" > /dev/null; then
+            echo -e "${YELLOW}Starting Ollama service...${COLOR_RESET}"
+            ollama serve > /dev/null 2>&1 &
+            sleep 2
+        fi
+        
+        # Try to pull the model with a temporary file to capture status
+        local temp_output=$(mktemp)
+        local download_status=0
+        
+        # Run ollama pull and capture output
+        ollama pull "${model_id}:${variant}" > "$temp_output" 2>&1 &
+        local pid=$!
+        
+        # Monitor the download
+        while kill -0 $pid 2>/dev/null; do
+            if [[ -f "$temp_output" ]]; then
+                # Show last line of output
+                local last_line=$(tail -n1 "$temp_output" 2>/dev/null || true)
+                if [[ -n "$last_line" ]]; then
+                    printf "\r%-80s" "$last_line"
+                fi
             fi
+            sleep 0.5
         done
-    else
-        # Direct download from registry
-        echo "Downloading from model registry..."
         
-        # Get model URL from registry (mock for now)
-        local model_url="https://huggingface.co/TheBloke/${model_id}-GGUF/resolve/main/${model_id}.${variant}.gguf"
-        local output_file="$target_dir/${model_id}-${variant}.gguf"
+        # Check exit status
+        wait $pid
+        download_status=$?
         
-        # Download with progress
-        download_with_progress "$model_url" "$output_file" "Downloading ${model_id} (${variant})"
+        # Clean up display
+        printf "\r%-80s\r" " "
+        
+        # Check result
+        if [[ $download_status -eq 0 ]]; then
+            echo -e "${GREEN}✓ Model downloaded successfully${COLOR_RESET}"
+            rm -f "$temp_output"
+            return 0
+        else
+            echo -e "${RED}✗ Ollama download failed${COLOR_RESET}"
+            cat "$temp_output" 2>/dev/null || true
+            rm -f "$temp_output"
+            # Fall through to alternative download
+        fi
     fi
     
-    return $?
+    # Alternative: Direct download from registry
+    echo -e "${YELLOW}Ollama not available. Using direct download...${COLOR_RESET}"
+    
+    # Map model names to download URLs
+    local model_url=""
+    case "${model_id}:${variant}" in
+        "phi:2.7b")
+            model_url="https://huggingface.co/microsoft/phi-2/resolve/main/model.safetensors"
+            ;;
+        "llama2:7b")
+            model_url="https://huggingface.co/TheBloke/Llama-2-7B-GGUF/resolve/main/llama-2-7b.Q4_K_M.gguf"
+            ;;
+        "mistral:7b")
+            model_url="https://huggingface.co/TheBloke/Mistral-7B-v0.1-GGUF/resolve/main/mistral-7b-v0.1.Q4_K_M.gguf"
+            ;;
+        *)
+            echo -e "${RED}Model ${model_id}:${variant} not found in registry${COLOR_RESET}"
+            echo -e "${YELLOW}Please install Ollama for full model support${COLOR_RESET}"
+            return 1
+            ;;
+    esac
+    
+    local output_file="$target_dir/${model_id}-${variant}.gguf"
+    
+    # Download with curl/wget
+    if command_exists curl; then
+        echo -e "${CYAN}Downloading with curl...${COLOR_RESET}"
+        curl -L --progress-bar -o "$output_file" "$model_url"
+    elif command_exists wget; then
+        echo -e "${CYAN}Downloading with wget...${COLOR_RESET}"
+        wget --show-progress -O "$output_file" "$model_url"
+    else
+        echo -e "${RED}Neither curl nor wget available for download${COLOR_RESET}"
+        return 1
+    fi
+    
+    if [[ -f "$output_file" ]]; then
+        echo -e "${GREEN}✓ Model downloaded successfully${COLOR_RESET}"
+        return 0
+    else
+        echo -e "${RED}✗ Download failed${COLOR_RESET}"
+        return 1
+    fi
 }
 
 # Create autorun files
