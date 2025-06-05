@@ -15,135 +15,140 @@ declare -g MENU_MAX_ITEMS=0
 # Compatibility
 BRIGHT="${BOLD}"
 
-# Display menu with arrow key navigation
+# Show interactive menu
 show_menu() {
     local title="$1"
     shift
     local options=("$@")
-    
-    # Initialize menu position
-    MENU_POSITION=1
-    MENU_SELECTION=""
+    local selected=0
     local num_options=${#options[@]}
     
-    # Hide cursor if possible (only if tput is available)
-    if command -v tput >/dev/null 2>&1 && [ -n "$TERM" ]; then
-        tput civis 2>/dev/null || true
-        # Trap for cleanup
-        trap 'tput cnorm 2>/dev/null || true; echo' INT TERM
+    # Debug terminal detection
+    echo -e "${YELLOW}DEBUG: Terminal detection:${COLOR_RESET}" >&2
+    echo -e "${YELLOW}  - tty 0: $([[ -t 0 ]] && echo yes || echo no)${COLOR_RESET}" >&2
+    echo -e "${YELLOW}  - tty 1: $([[ -t 1 ]] && echo yes || echo no)${COLOR_RESET}" >&2
+    echo -e "${YELLOW}  - tty 2: $([[ -t 2 ]] && echo yes || echo no)${COLOR_RESET}" >&2
+    echo -e "${YELLOW}  - PS1: '${PS1:-}'${COLOR_RESET}" >&2
+    echo -e "${YELLOW}  - TERM: '${TERM:-}'${COLOR_RESET}" >&2
+    echo -e "${YELLOW}  - LEONARDO_FORCE_INTERACTIVE: '${LEONARDO_FORCE_INTERACTIVE:-}'${COLOR_RESET}" >&2
+    
+    # Check for interactive terminal - more robust check
+    local is_interactive=false
+    if [[ -t 0 ]] && [[ -t 1 ]] && [[ -t 2 ]]; then
+        is_interactive=true
+    elif [[ -n "${PS1:-}" ]] && [[ -z "${DEBIAN_FRONTEND:-}" ]]; then
+        is_interactive=true
+    elif [[ "${LEONARDO_FORCE_INTERACTIVE:-}" == "true" ]]; then
+        is_interactive=true
     fi
     
-    local first_display=true
+    # For now, let's bypass the check if TERM is set
+    if [[ -n "${TERM:-}" ]] && [[ "${TERM:-}" != "dumb" ]]; then
+        is_interactive=true
+    fi
+    
+    if [[ "$is_interactive" != "true" ]]; then
+        echo -e "${RED}Error: No interactive terminal available${COLOR_RESET}" >&2
+        echo -e "${DIM}Hint: Run Leonardo directly in a terminal, not through pipes or scripts${COLOR_RESET}" >&2
+        return 1
+    fi
+    
+    # Hide cursor
+    tput civis 2>/dev/null >/dev/tty || true
+    
+    # Ensure cursor is restored on exit
+    trap 'tput cnorm 2>/dev/null >/dev/tty || true' RETURN INT TERM
+    
+    # Clear pending input
+    while read -t 0; do :; done
     
     while true; do
-        # Clear screen and display menu
-        if [[ "$first_display" == "true" ]]; then
-            first_display=false
-        else
-            # Clear screen using /dev/tty
-            echo -e "\033[H\033[2J" >/dev/tty
-        fi
+        # Clear screen completely
+        printf '\033[2J\033[H' >/dev/tty
         
-        display_menu_frame "$title" "${options[@]}"
+        # Draw the menu
+        draw_menu "$title" "$selected" "${options[@]}"
         
-        # Read user input - check if stdin is available
-        if [[ ! -t 0 ]]; then
-            echo "ERROR: No terminal input available" >&2
-            return 1
-        fi
-        
-        # Read a single character
+        # Read single character
+        local key
         IFS= read -rsn1 key
         
-        # Handle arrow keys (multi-byte sequences)
+        # Handle escape sequences for arrow keys
         if [[ $key == $'\x1b' ]]; then
-            # Read the rest of the escape sequence
-            read -rsn2 -t 0.1 key2
-            case "$key2" in
-                '[A') # Up arrow
-                    ((MENU_POSITION--))
-                    [[ $MENU_POSITION -lt 1 ]] && MENU_POSITION=$num_options
-                    ;;
-                '[B') # Down arrow
-                    ((MENU_POSITION++))
-                    [[ $MENU_POSITION -gt $num_options ]] && MENU_POSITION=1
-                    ;;
-                '[C'|'[D') # Right/Left arrows - ignore
-                    ;;
-                '') # Just escape key pressed
-                    MENU_SELECTION=""
-                    break
-                    ;;
+            read -rsn2 -t 0.1 key
+            case "$key" in
+                '[A') key='UP' ;;     # Up arrow
+                '[B') key='DOWN' ;;   # Down arrow
+                '[D') key='LEFT' ;;   # Left arrow
+                '[C') key='RIGHT' ;;  # Right arrow
+                *) continue ;;
             esac
-            continue
         fi
         
+        # Process input
         case "$key" in
-            # Enter key
-            '')
-                MENU_SELECTION="${options[$((MENU_POSITION-1))]}"
-                break
+            'UP'|'k')
+                ((selected = selected > 0 ? selected - 1 : num_options - 1))
                 ;;
-            # Number keys for quick selection
+            'DOWN'|'j')
+                ((selected = (selected + 1) % num_options))
+                ;;
             [1-9])
-                if [[ $key -le $num_options ]]; then
-                    MENU_POSITION=$key
-                    MENU_SELECTION="${options[$((key-1))]}"
-                    break
+                local idx=$((key - 1))
+                if [[ $idx -lt $num_options ]]; then
+                    selected=$idx
+                    # Restore cursor before returning
+                    tput cnorm 2>/dev/null >/dev/tty || true
+                    # Return clean option text only
+                    echo -n "${options[$selected]}"
+                    return 0
                 fi
                 ;;
-            # Vim-style navigation
-            j) # Down
-                ((MENU_POSITION++))
-                [[ $MENU_POSITION -gt $num_options ]] && MENU_POSITION=1
+            ''|$'\n') # Enter
+                # Restore cursor before returning
+                tput cnorm 2>/dev/null >/dev/tty || true
+                # Return clean option text only
+                echo -n "${options[$selected]}"
+                return 0
                 ;;
-            k) # Up
-                ((MENU_POSITION--))
-                [[ $MENU_POSITION -lt 1 ]] && MENU_POSITION=$num_options
-                ;;
-            # q to quit
-            q|Q)
-                MENU_SELECTION=""
-                break
+            'q'|'Q')
+                tput cnorm 2>/dev/null >/dev/tty || true
+                return 1
                 ;;
         esac
     done
-    
-    # Restore cursor
-    if command -v tput >/dev/null 2>&1 && [ -n "$TERM" ]; then
-        tput cnorm 2>/dev/null || true
-    fi
-    
-    # Return selection
-    echo "$MENU_SELECTION"
 }
 
 # Display menu frame with highlighting
-display_menu_frame() {
+draw_menu() {
     local title="$1"
-    shift
+    local selected="$2"
+    shift 2
     local options=("$@")
     
-    # Draw title box - force output to terminal
-    echo -e "${GREEN}╔════════════════════════════════════════════╗${COLOR_RESET}" >/dev/tty
-    printf "${GREEN}║${COLOR_RESET} %-42s ${GREEN}║${COLOR_RESET}\n" "$title" >/dev/tty
-    echo -e "${GREEN}╚════════════════════════════════════════════╝${COLOR_RESET}" >/dev/tty
-    echo >/dev/tty
-    
-    # Display options
-    local i=1
-    for option in "${options[@]}"; do
-        if [[ $i -eq $MENU_POSITION ]]; then
-            # Highlighted option
-            echo -e "${CYAN}▶ ${BRIGHT}${option}${COLOR_RESET}" >/dev/tty
-        else
-            echo -e "  ${DIM}${option}${COLOR_RESET}" >/dev/tty
-        fi
-        ((i++))
-    done
-    
-    echo >/dev/tty
-    echo -e "${DIM}Use ↑/↓ arrows or numbers to select, Enter to confirm, q to quit${COLOR_RESET}" >/dev/tty
+    # All display output goes to stderr or /dev/tty to keep stdout clean
+    {
+        # Draw title box - force output to terminal
+        echo -e "${GREEN}╔════════════════════════════════════════════╗${COLOR_RESET}" >/dev/tty
+        printf "${GREEN}║${COLOR_RESET} %-42s ${GREEN}║${COLOR_RESET}\n" "$title" >/dev/tty
+        echo -e "${GREEN}╚════════════════════════════════════════════╝${COLOR_RESET}" >/dev/tty
+        echo >/dev/tty
+        
+        # Display options
+        local i=1
+        for option in "${options[@]}"; do
+            if [[ $i -eq $((selected + 1)) ]]; then
+                # Highlighted option
+                echo -e "${CYAN}▶ ${BRIGHT}${option}${COLOR_RESET}" >/dev/tty
+            else
+                echo -e "  ${DIM}${option}${COLOR_RESET}" >/dev/tty
+            fi
+            ((i++))
+        done
+        
+        echo >/dev/tty
+        echo -e "${DIM}Use ↑/↓ arrows or numbers to select, Enter to confirm, q to quit${COLOR_RESET}" >/dev/tty
+    } >&2
 }
 
 # Simple yes/no menu
@@ -184,8 +189,8 @@ show_checklist() {
     
     # Hide cursor if possible (only if tput is available)
     if command -v tput >/dev/null 2>&1 && [ -n "$TERM" ]; then
-        tput civis 2>/dev/null || true
-        trap 'tput cnorm 2>/dev/null || true; echo' INT TERM
+        tput civis 2>/dev/null >/dev/tty || true
+        trap 'tput cnorm 2>/dev/null >/dev/tty || true; echo' INT TERM
     fi
     
     while true; do
@@ -225,7 +230,7 @@ show_checklist() {
     
     # Show cursor again (only if tput is available)
     if command -v tput >/dev/null 2>&1 && [ -n "$TERM" ]; then
-        tput cnorm 2>/dev/null || true
+        tput cnorm 2>/dev/null >/dev/tty || true
         trap - INT TERM
     fi
     
@@ -248,28 +253,31 @@ display_checklist_frame() {
     local -a options=("${@:1:$num_options}")
     local -a selected=("${@:$((num_options+1))}")
     
-    # Draw title box
-    echo -e "${GREEN}╔════════════════════════════════════════════╗${COLOR_RESET}"
-    printf "${GREEN}║${COLOR_RESET} %-42s ${GREEN}║${COLOR_RESET}\n" "$title"
-    echo -e "${GREEN}╚════════════════════════════════════════════╝${COLOR_RESET}"
-    echo
-    
-    # Display options with checkboxes
-    local i=1
-    for ((idx=0; idx<num_options; idx++)); do
-        local checkbox="[ ]"
-        [[ ${selected[idx]} -eq 1 ]] && checkbox="[✓]"
+    # All display output goes to stderr or /dev/tty to keep stdout clean
+    {
+        # Draw title box
+        echo -e "${GREEN}╔════════════════════════════════════════════╗${COLOR_RESET}" >&2
+        printf "${GREEN}║${COLOR_RESET} %-42s ${GREEN}║${COLOR_RESET}\n" "$title" >&2
+        echo -e "${GREEN}╚════════════════════════════════════════════╝${COLOR_RESET}" >&2
+        echo >&2
         
-        if [[ $i -eq $MENU_POSITION ]]; then
-            echo -e "${CYAN}▶ ${checkbox} ${BRIGHT}${options[idx]}${COLOR_RESET}"
-        else
-            echo -e "  ${checkbox} ${DIM}${options[idx]}${COLOR_RESET}"
-        fi
-        ((i++))
-    done
-    
-    echo
-    echo -e "${DIM}Use ↑/↓ to navigate, Space to select, Enter to confirm${COLOR_RESET}"
+        # Display options with checkboxes
+        local i=1
+        for ((idx=0; idx<num_options; idx++)); do
+            local checkbox="[ ]"
+            [[ ${selected[idx]} -eq 1 ]] && checkbox="[✓]"
+            
+            if [[ $i -eq $MENU_POSITION ]]; then
+                echo -e "${CYAN}▶ ${checkbox} ${BRIGHT}${options[idx]}${COLOR_RESET}" >&2
+            else
+                echo -e "  ${checkbox} ${DIM}${options[idx]}${COLOR_RESET}" >&2
+            fi
+            ((i++))
+        done
+        
+        echo >&2
+        echo -e "${DIM}Use ↑/↓ to navigate, Space to select, Enter to confirm${COLOR_RESET}" >&2
+    }
 }
 
 # Radio button menu (single selection)

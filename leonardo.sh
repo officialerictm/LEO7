@@ -711,6 +711,11 @@ export COLOR_RESET COLOR_BLACK COLOR_RED COLOR_GREEN COLOR_YELLOW COLOR_BLUE COL
 # Dependencies: logging.sh, colors.sh
 # ==============================================================================
 
+# Check if a command exists
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
 # Validation error handling
 validation_error() {
     local field="$1"
@@ -1111,6 +1116,7 @@ export -f format_bytes
 export -f sanitize_string
 export -f confirm
 export -f check_system_requirements
+export -f command_exists
 
 # ==== Component: src/utils/filesystem.sh ====
 # ==============================================================================
@@ -1145,6 +1151,11 @@ create_directory() {
         log_error "Failed to create directory: $dir"
         return 1
     fi
+}
+
+# Create a directory (alias for compatibility)
+ensure_directory() {
+    create_directory "$@"
 }
 
 # Detect available USB devices
@@ -1505,7 +1516,7 @@ cleanup_temp_files() {
 export -f detect_usb_devices format_usb_device mount_device unmount_device
 export -f check_available_space create_leonardo_structure copy_with_progress
 export -f safe_delete get_file_checksum create_temp_dir
-export -f create_directory
+export -f create_directory ensure_directory
 
 # ==== Component: src/utils/network.sh ====
 # ==============================================================================
@@ -1919,8 +1930,13 @@ clear() {
     fi
 }
 
+# Check if a command exists in PATH
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
 # Export functions
-export -f clear
+export -f clear command_exists
 
 # ==== Component: src/ui/menu.sh ====
 # ==============================================================================
@@ -1939,135 +1955,140 @@ declare -g MENU_MAX_ITEMS=0
 # Compatibility
 BRIGHT="${BOLD}"
 
-# Display menu with arrow key navigation
+# Show interactive menu
 show_menu() {
     local title="$1"
     shift
     local options=("$@")
-    
-    # Initialize menu position
-    MENU_POSITION=1
-    MENU_SELECTION=""
+    local selected=0
     local num_options=${#options[@]}
     
-    # Hide cursor if possible (only if tput is available)
-    if command -v tput >/dev/null 2>&1 && [ -n "$TERM" ]; then
-        tput civis 2>/dev/null || true
-        # Trap for cleanup
-        trap 'tput cnorm 2>/dev/null || true; echo' INT TERM
+    # Debug terminal detection
+    echo -e "${YELLOW}DEBUG: Terminal detection:${COLOR_RESET}" >&2
+    echo -e "${YELLOW}  - tty 0: $([[ -t 0 ]] && echo yes || echo no)${COLOR_RESET}" >&2
+    echo -e "${YELLOW}  - tty 1: $([[ -t 1 ]] && echo yes || echo no)${COLOR_RESET}" >&2
+    echo -e "${YELLOW}  - tty 2: $([[ -t 2 ]] && echo yes || echo no)${COLOR_RESET}" >&2
+    echo -e "${YELLOW}  - PS1: '${PS1:-}'${COLOR_RESET}" >&2
+    echo -e "${YELLOW}  - TERM: '${TERM:-}'${COLOR_RESET}" >&2
+    echo -e "${YELLOW}  - LEONARDO_FORCE_INTERACTIVE: '${LEONARDO_FORCE_INTERACTIVE:-}'${COLOR_RESET}" >&2
+    
+    # Check for interactive terminal - more robust check
+    local is_interactive=false
+    if [[ -t 0 ]] && [[ -t 1 ]] && [[ -t 2 ]]; then
+        is_interactive=true
+    elif [[ -n "${PS1:-}" ]] && [[ -z "${DEBIAN_FRONTEND:-}" ]]; then
+        is_interactive=true
+    elif [[ "${LEONARDO_FORCE_INTERACTIVE:-}" == "true" ]]; then
+        is_interactive=true
     fi
     
-    local first_display=true
+    # For now, let's bypass the check if TERM is set
+    if [[ -n "${TERM:-}" ]] && [[ "${TERM:-}" != "dumb" ]]; then
+        is_interactive=true
+    fi
+    
+    if [[ "$is_interactive" != "true" ]]; then
+        echo -e "${RED}Error: No interactive terminal available${COLOR_RESET}" >&2
+        echo -e "${DIM}Hint: Run Leonardo directly in a terminal, not through pipes or scripts${COLOR_RESET}" >&2
+        return 1
+    fi
+    
+    # Hide cursor
+    tput civis 2>/dev/null >/dev/tty || true
+    
+    # Ensure cursor is restored on exit
+    trap 'tput cnorm 2>/dev/null >/dev/tty || true' RETURN INT TERM
+    
+    # Clear pending input
+    while read -t 0; do :; done
     
     while true; do
-        # Clear screen and display menu
-        if [[ "$first_display" == "true" ]]; then
-            first_display=false
-        else
-            # Clear screen using /dev/tty
-            echo -e "\033[H\033[2J" >/dev/tty
-        fi
+        # Clear screen completely
+        printf '\033[2J\033[H' >/dev/tty
         
-        display_menu_frame "$title" "${options[@]}"
+        # Draw the menu
+        draw_menu "$title" "$selected" "${options[@]}"
         
-        # Read user input - check if stdin is available
-        if [[ ! -t 0 ]]; then
-            echo "ERROR: No terminal input available" >&2
-            return 1
-        fi
-        
-        # Read a single character
+        # Read single character
+        local key
         IFS= read -rsn1 key
         
-        # Handle arrow keys (multi-byte sequences)
+        # Handle escape sequences for arrow keys
         if [[ $key == $'\x1b' ]]; then
-            # Read the rest of the escape sequence
-            read -rsn2 -t 0.1 key2
-            case "$key2" in
-                '[A') # Up arrow
-                    ((MENU_POSITION--))
-                    [[ $MENU_POSITION -lt 1 ]] && MENU_POSITION=$num_options
-                    ;;
-                '[B') # Down arrow
-                    ((MENU_POSITION++))
-                    [[ $MENU_POSITION -gt $num_options ]] && MENU_POSITION=1
-                    ;;
-                '[C'|'[D') # Right/Left arrows - ignore
-                    ;;
-                '') # Just escape key pressed
-                    MENU_SELECTION=""
-                    break
-                    ;;
+            read -rsn2 -t 0.1 key
+            case "$key" in
+                '[A') key='UP' ;;     # Up arrow
+                '[B') key='DOWN' ;;   # Down arrow
+                '[D') key='LEFT' ;;   # Left arrow
+                '[C') key='RIGHT' ;;  # Right arrow
+                *) continue ;;
             esac
-            continue
         fi
         
+        # Process input
         case "$key" in
-            # Enter key
-            '')
-                MENU_SELECTION="${options[$((MENU_POSITION-1))]}"
-                break
+            'UP'|'k')
+                ((selected = selected > 0 ? selected - 1 : num_options - 1))
                 ;;
-            # Number keys for quick selection
+            'DOWN'|'j')
+                ((selected = (selected + 1) % num_options))
+                ;;
             [1-9])
-                if [[ $key -le $num_options ]]; then
-                    MENU_POSITION=$key
-                    MENU_SELECTION="${options[$((key-1))]}"
-                    break
+                local idx=$((key - 1))
+                if [[ $idx -lt $num_options ]]; then
+                    selected=$idx
+                    # Restore cursor before returning
+                    tput cnorm 2>/dev/null >/dev/tty || true
+                    # Return clean option text only
+                    echo -n "${options[$selected]}"
+                    return 0
                 fi
                 ;;
-            # Vim-style navigation
-            j) # Down
-                ((MENU_POSITION++))
-                [[ $MENU_POSITION -gt $num_options ]] && MENU_POSITION=1
+            ''|$'\n') # Enter
+                # Restore cursor before returning
+                tput cnorm 2>/dev/null >/dev/tty || true
+                # Return clean option text only
+                echo -n "${options[$selected]}"
+                return 0
                 ;;
-            k) # Up
-                ((MENU_POSITION--))
-                [[ $MENU_POSITION -lt 1 ]] && MENU_POSITION=$num_options
-                ;;
-            # q to quit
-            q|Q)
-                MENU_SELECTION=""
-                break
+            'q'|'Q')
+                tput cnorm 2>/dev/null >/dev/tty || true
+                return 1
                 ;;
         esac
     done
-    
-    # Restore cursor
-    if command -v tput >/dev/null 2>&1 && [ -n "$TERM" ]; then
-        tput cnorm 2>/dev/null || true
-    fi
-    
-    # Return selection
-    echo "$MENU_SELECTION"
 }
 
 # Display menu frame with highlighting
-display_menu_frame() {
+draw_menu() {
     local title="$1"
-    shift
+    local selected="$2"
+    shift 2
     local options=("$@")
     
-    # Draw title box - force output to terminal
-    echo -e "${GREEN}╔════════════════════════════════════════════╗${COLOR_RESET}" >/dev/tty
-    printf "${GREEN}║${COLOR_RESET} %-42s ${GREEN}║${COLOR_RESET}\n" "$title" >/dev/tty
-    echo -e "${GREEN}╚════════════════════════════════════════════╝${COLOR_RESET}" >/dev/tty
-    echo >/dev/tty
-    
-    # Display options
-    local i=1
-    for option in "${options[@]}"; do
-        if [[ $i -eq $MENU_POSITION ]]; then
-            # Highlighted option
-            echo -e "${CYAN}▶ ${BRIGHT}${option}${COLOR_RESET}" >/dev/tty
-        else
-            echo -e "  ${DIM}${option}${COLOR_RESET}" >/dev/tty
-        fi
-        ((i++))
-    done
-    
-    echo >/dev/tty
-    echo -e "${DIM}Use ↑/↓ arrows or numbers to select, Enter to confirm, q to quit${COLOR_RESET}" >/dev/tty
+    # All display output goes to stderr or /dev/tty to keep stdout clean
+    {
+        # Draw title box - force output to terminal
+        echo -e "${GREEN}╔════════════════════════════════════════════╗${COLOR_RESET}" >/dev/tty
+        printf "${GREEN}║${COLOR_RESET} %-42s ${GREEN}║${COLOR_RESET}\n" "$title" >/dev/tty
+        echo -e "${GREEN}╚════════════════════════════════════════════╝${COLOR_RESET}" >/dev/tty
+        echo >/dev/tty
+        
+        # Display options
+        local i=1
+        for option in "${options[@]}"; do
+            if [[ $i -eq $((selected + 1)) ]]; then
+                # Highlighted option
+                echo -e "${CYAN}▶ ${BRIGHT}${option}${COLOR_RESET}" >/dev/tty
+            else
+                echo -e "  ${DIM}${option}${COLOR_RESET}" >/dev/tty
+            fi
+            ((i++))
+        done
+        
+        echo >/dev/tty
+        echo -e "${DIM}Use ↑/↓ arrows or numbers to select, Enter to confirm, q to quit${COLOR_RESET}" >/dev/tty
+    } >&2
 }
 
 # Simple yes/no menu
@@ -2108,8 +2129,8 @@ show_checklist() {
     
     # Hide cursor if possible (only if tput is available)
     if command -v tput >/dev/null 2>&1 && [ -n "$TERM" ]; then
-        tput civis 2>/dev/null || true
-        trap 'tput cnorm 2>/dev/null || true; echo' INT TERM
+        tput civis 2>/dev/null >/dev/tty || true
+        trap 'tput cnorm 2>/dev/null >/dev/tty || true; echo' INT TERM
     fi
     
     while true; do
@@ -2149,7 +2170,7 @@ show_checklist() {
     
     # Show cursor again (only if tput is available)
     if command -v tput >/dev/null 2>&1 && [ -n "$TERM" ]; then
-        tput cnorm 2>/dev/null || true
+        tput cnorm 2>/dev/null >/dev/tty || true
         trap - INT TERM
     fi
     
@@ -2172,28 +2193,31 @@ display_checklist_frame() {
     local -a options=("${@:1:$num_options}")
     local -a selected=("${@:$((num_options+1))}")
     
-    # Draw title box
-    echo -e "${GREEN}╔════════════════════════════════════════════╗${COLOR_RESET}"
-    printf "${GREEN}║${COLOR_RESET} %-42s ${GREEN}║${COLOR_RESET}\n" "$title"
-    echo -e "${GREEN}╚════════════════════════════════════════════╝${COLOR_RESET}"
-    echo
-    
-    # Display options with checkboxes
-    local i=1
-    for ((idx=0; idx<num_options; idx++)); do
-        local checkbox="[ ]"
-        [[ ${selected[idx]} -eq 1 ]] && checkbox="[✓]"
+    # All display output goes to stderr or /dev/tty to keep stdout clean
+    {
+        # Draw title box
+        echo -e "${GREEN}╔════════════════════════════════════════════╗${COLOR_RESET}" >&2
+        printf "${GREEN}║${COLOR_RESET} %-42s ${GREEN}║${COLOR_RESET}\n" "$title" >&2
+        echo -e "${GREEN}╚════════════════════════════════════════════╝${COLOR_RESET}" >&2
+        echo >&2
         
-        if [[ $i -eq $MENU_POSITION ]]; then
-            echo -e "${CYAN}▶ ${checkbox} ${BRIGHT}${options[idx]}${COLOR_RESET}"
-        else
-            echo -e "  ${checkbox} ${DIM}${options[idx]}${COLOR_RESET}"
-        fi
-        ((i++))
-    done
-    
-    echo
-    echo -e "${DIM}Use ↑/↓ to navigate, Space to select, Enter to confirm${COLOR_RESET}"
+        # Display options with checkboxes
+        local i=1
+        for ((idx=0; idx<num_options; idx++)); do
+            local checkbox="[ ]"
+            [[ ${selected[idx]} -eq 1 ]] && checkbox="[✓]"
+            
+            if [[ $i -eq $MENU_POSITION ]]; then
+                echo -e "${CYAN}▶ ${checkbox} ${BRIGHT}${options[idx]}${COLOR_RESET}" >&2
+            else
+                echo -e "  ${checkbox} ${DIM}${options[idx]}${COLOR_RESET}" >&2
+            fi
+            ((i++))
+        done
+        
+        echo >&2
+        echo -e "${DIM}Use ↑/↓ to navigate, Space to select, Enter to confirm${COLOR_RESET}" >&2
+    }
 }
 
 # Radio button menu (single selection)
@@ -6063,161 +6087,282 @@ deploy_to_usb() {
     local target_device="${1:-}"
     local options="${2:-}"
     
-    echo -e "${CYAN}Leonardo USB Deployment${COLOR_RESET}"
-    echo "========================"
-    echo ""
+    # Debug output to confirm function is called
+    echo -e "${YELLOW}DEBUG: deploy_to_usb function started${COLOR_RESET}" >&2
+    echo -e "${YELLOW}DEBUG: Terminal test: [[ -t 0 ]] = $([[ -t 0 ]] && echo true || echo false)${COLOR_RESET}" >&2
+    sleep 1  # Give time to see the message
     
-    # Step 1: Detect or select USB device
+    echo
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
+    echo -e "${BOLD}              🚀 Leonardo USB Deployment${COLOR_RESET}"
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
+    echo
+    
+    # Step 1: Detect or use provided USB device
     if [[ -z "$target_device" ]]; then
-        echo "Detecting USB drives..."
-        local devices=$(detect_usb_drives)
+        # Auto-detect USB drives
+        local usb_drives=()
+        echo -e "${DIM}Detecting USB drives...${COLOR_RESET}"
         
-        if [[ -z "$devices" ]]; then
-            log_message "ERROR" "No USB drives detected"
-            echo ""
-            echo "Please insert a USB drive and try again."
+        # Get USB drives - let debug output go to stderr
+        local raw_output=$(detect_usb_drives)
+        if [[ -n "$raw_output" ]]; then
+            # Extract just the device paths (first field before |)
+            readarray -t usb_drives < <(echo "$raw_output" | cut -d'|' -f1 | grep -E '^/dev/')
+        fi
+        
+        if [[ ${#usb_drives[@]} -eq 0 ]]; then
+            echo -e "${RED}No USB drives detected!${COLOR_RESET}"
+            echo -e "${YELLOW}Please insert a USB drive and try again.${COLOR_RESET}"
+            echo
+            echo -e "${DIM}Tip: Make sure your USB drive is properly connected and recognized by the system.${COLOR_RESET}"
+            echo -e "${DIM}On Linux, you might need to run with sudo for device detection.${COLOR_RESET}"
+            pause
             return 1
-        fi
-        
-        # Show available devices
-        list_usb_drives
-        echo ""
-        
-        # Let user select
-        read -p "Enter device path (e.g., /dev/sdb): " target_device
-        
-        if [[ -z "$target_device" ]]; then
-            log_message "ERROR" "No device selected"
-            return 1
-        fi
-    fi
-    
-    # Validate device
-    if ! is_usb_device "$target_device"; then
-        log_message "ERROR" "Not a valid USB device: $target_device"
-        return 1
-    fi
-    
-    # Step 2: Check USB health
-    echo ""
-    echo -e "${YELLOW}Checking USB health...${COLOR_RESET}"
-    init_usb_device "$target_device" >/dev/null 2>&1
-    
-    local health_status
-    if command -v smartctl >/dev/null 2>&1; then
-        health_status=$(check_usb_smart_health "$target_device" 2>/dev/null | grep "SMART overall-health" || echo "Health check unavailable")
-        echo "Health: $health_status"
-    fi
-    
-    # Check write cycles if available
-    local write_cycles=$(estimate_write_cycles 2>/dev/null || echo "unknown")
-    if [[ "$write_cycles" != "unknown" ]]; then
-        echo "Estimated write cycles: $write_cycles"
-        if [[ $write_cycles -gt 5000 ]]; then
-            echo "${COLOR_YELLOW}Warning: This USB has high write cycles${COLOR_RESET}"
-        fi
-    fi
-    
-    # Step 3: Initialize USB
-    echo ""
-    
-    # Ask about formatting
-    if [[ "$options" != *"format"* ]]; then
-        echo -e "${YELLOW}Format USB drive?${COLOR_RESET}"
-        echo -e "${DIM}This will erase all data on the drive${COLOR_RESET}"
-        if confirm_action "Format USB drive"; then
-            options="${options} format"
-        fi
-        echo ""
-    fi
-    
-    if ! confirm_action "Initialize USB for Leonardo"; then
-        return 1
-    fi
-    
-    echo ""
-    echo -e "${CYAN}Initializing USB...${COLOR_RESET}"
-    
-    # Format if requested
-    if [[ "$options" == *"format"* ]]; then
-        local filesystem="${USB_FORMAT_TYPE:-exfat}"
-        if ! format_usb_drive "$target_device" "$filesystem" "LEONARDO"; then
-            return 1
-        fi
-    fi
-    
-    # Initialize and mount
-    if ! init_usb_device "$target_device"; then
-        return 1
-    fi
-    
-    # Check space
-    if ! check_usb_free_space "$LEONARDO_USB_MOUNT" $((USB_DEPLOY_MIN_SPACE_GB * 1024)); then
-        log_message "ERROR" "Insufficient space. Need at least ${USB_DEPLOY_MIN_SPACE_GB}GB"
-        return 1
-    fi
-    
-    echo "Available space: ${LEONARDO_USB_FREE}"
-    
-    # Step 4: Create Leonardo structure
-    echo ""
-    echo -e "${CYAN}Creating Leonardo structure...${COLOR_RESET}"
-    if ! create_leonardo_structure; then
-        return 1
-    fi
-    
-    # Step 5: Install Leonardo
-    echo ""
-    echo -e "${CYAN}Installing Leonardo...${COLOR_RESET}"
-    
-    local leonardo_script="./leonardo.sh"
-    if [[ ! -f "$leonardo_script" ]]; then
-        # Try to build it
-        if [[ -f "assembly/build-simple.sh" ]]; then
-            echo "Building Leonardo..."
-            (cd assembly && ./build-simple.sh) || return 1
+        elif [[ ${#usb_drives[@]} -eq 1 ]]; then
+            target_device="${usb_drives[0]}"
+            echo -e "${GREEN}Found USB drive: $target_device${COLOR_RESET}"
         else
-            log_message "ERROR" "Leonardo script not found"
-            return 1
+            # Multiple drives - let user select with better formatting
+            echo -e "${YELLOW}Multiple USB drives detected:${COLOR_RESET}"
+            echo
+            
+            # Create formatted menu options
+            local menu_options=()
+            local drive_info
+            while IFS='|' read -r device label size mount; do
+                # Format: /dev/sdc1 - CHATUSB (114.6G)
+                if [[ -n "$label" && "$label" != "Unknown" ]]; then
+                    drive_info="$device - $label ($size)"
+                else
+                    drive_info="$device ($size)"
+                fi
+                menu_options+=("$drive_info")
+            done < <(echo "$raw_output")
+            
+            # Show menu and extract just the device path from selection
+            local selected
+            selected=$(show_menu "Select USB Drive" "${menu_options[@]}")
+            if [[ -z "$selected" ]]; then
+                return 1
+            fi
+            
+            # Extract device path from selection
+            target_device=$(echo "$selected" | awk '{print $1}')
         fi
     fi
     
+    # Get device info
+    local device_size_mb=$(get_device_size_mb "$target_device")
+    local device_size_gb=$((device_size_mb / 1024))
+    
+    echo
+    echo -e "${BOLD}Target USB:${COLOR_RESET} $target_device (${device_size_gb}GB)"
+    echo
+    
+    # Step 2: Initialize USB (includes format option)
+    echo -e "${YELLOW}Step 1/4: Preparing USB Drive${COLOR_RESET}"
+    
+    # Check if already initialized
+    if is_leonardo_usb "$target_device"; then
+        echo -e "${YELLOW}⚠ Leonardo installation detected on USB${COLOR_RESET}"
+        echo
+        
+        # Show current installation info
+        if [[ -f "$LEONARDO_USB_MOUNT/leonardo/VERSION" ]]; then
+            local current_version=$(cat "$LEONARDO_USB_MOUNT/leonardo/VERSION" 2>/dev/null || echo "Unknown")
+            echo -e "Current version: ${CYAN}$current_version${COLOR_RESET}"
+        fi
+        
+        # Show options in interactive mode
+        if [[ -t 0 ]]; then
+            echo
+            echo -e "${BOLD}What would you like to do?${COLOR_RESET}"
+            echo -e "1) ${GREEN}Update/Fix${COLOR_RESET} - Keep data and update Leonardo"
+            echo -e "2) ${RED}Format & Reinstall${COLOR_RESET} - Fresh installation (erases all data)"
+            echo -e "3) ${DIM}Cancel${COLOR_RESET} - Exit without changes"
+            echo
+            
+            local choice
+            read -p "Enter choice (1-3): " choice
+            
+            case "$choice" in
+                1)
+                    echo -e "${CYAN}→ Updating Leonardo installation...${COLOR_RESET}"
+                    # Skip formatting, just update
+                    ;;
+                2)
+                    if confirm_menu "Format USB and install fresh? ${RED}WARNING: This will erase all data!${COLOR_RESET}"; then
+                        echo -e "${CYAN}→ Formatting USB drive...${COLOR_RESET}"
+                        if ! format_usb_device "$target_device"; then
+                            echo -e "${RED}Failed to format USB drive${COLOR_RESET}"
+                            pause
+                            return 1
+                        fi
+                        
+                        # Mount the newly formatted device
+                        echo -e "${CYAN}→ Mounting USB drive...${COLOR_RESET}"
+                        if ! mount_usb_drive "$target_device"; then
+                            echo -e "${RED}Failed to mount USB drive${COLOR_RESET}"
+                            pause
+                            return 1
+                        fi
+                    else
+                        echo -e "${DIM}Cancelled${COLOR_RESET}"
+                        return 0
+                    fi
+                    ;;
+                3|*)
+                    echo -e "${DIM}Cancelled${COLOR_RESET}"
+                    return 0
+                    ;;
+            esac
+        else
+            echo -e "${YELLOW}Non-interactive mode: Updating existing installation${COLOR_RESET}"
+            # In non-interactive mode, default to update
+        fi
+    else
+        # Ask about formatting only in interactive mode
+        if [[ -t 0 ]]; then
+            if confirm_menu "Format USB drive? ${RED}WARNING: This will erase all data!${COLOR_RESET}"; then
+                echo -e "${CYAN}→ Formatting USB drive...${COLOR_RESET}"
+                if ! format_usb_device "$target_device"; then
+                    echo -e "${RED}Failed to format USB drive${COLOR_RESET}"
+                    pause
+                    return 1
+                fi
+                
+                # Mount the newly formatted device
+                echo -e "${CYAN}→ Mounting USB drive...${COLOR_RESET}"
+                if ! mount_usb_drive "$target_device"; then
+                    echo -e "${RED}Failed to mount USB drive${COLOR_RESET}"
+                    pause
+                    return 1
+                fi
+            fi
+        else
+            echo -e "${YELLOW}Non-interactive mode: Skipping format prompt${COLOR_RESET}"
+            # Try to mount if not already mounted
+            echo -e "${CYAN}→ Checking USB mount status...${COLOR_RESET}"
+            
+            # Check if we need to try partition instead
+            local mount_device="$target_device"
+            if [[ "$target_device" =~ ^/dev/sd[a-z]$ ]]; then
+                # Check if partition exists
+                if [[ -b "${target_device}1" ]]; then
+                    mount_device="${target_device}1"
+                    echo -e "${DIM}Using partition: $mount_device${COLOR_RESET}"
+                fi
+            fi
+            
+            # Try to mount if not already mounted
+            local existing_mount=$(lsblk -no MOUNTPOINT "$mount_device" 2>/dev/null | grep -v "^$" | head -1)
+            if [[ -z "$existing_mount" ]]; then
+                echo -e "${CYAN}→ Mounting USB drive...${COLOR_RESET}"
+                if ! mount_usb_drive "$mount_device"; then
+                    echo -e "${RED}Failed to mount USB drive${COLOR_RESET}"
+                    echo -e "${YELLOW}Try one of these options:${COLOR_RESET}"
+                    echo -e "  1. Run with sudo: ${CYAN}sudo ./leonardo.sh deploy usb $target_device${COLOR_RESET}"
+                    echo -e "  2. Mount manually first: ${CYAN}sudo mount $mount_device /mnt/usb${COLOR_RESET}"
+                    echo -e "  3. Use your desktop file manager to mount the USB"
+                    return 1
+                fi
+            else
+                echo -e "${GREEN}✓ USB already mounted at: $existing_mount${COLOR_RESET}"
+                # Update target device to use the partition
+                target_device="$mount_device"
+            fi
+        fi
+    fi
+    
+    # Initialize USB
+    echo -e "${CYAN}→ Initializing USB device...${COLOR_RESET}"
+    if ! init_usb_device "$target_device"; then
+        echo -e "${RED}Failed to initialize USB device${COLOR_RESET}"
+        pause
+        return 1
+    fi
+    
+    # Debug mount point
+    echo -e "${DIM}DEBUG: USB mount point is: ${LEONARDO_USB_MOUNT:-'(not set)'}${COLOR_RESET}" >&2
+    
+    # Ensure mount point is set
+    if [[ -z "$LEONARDO_USB_MOUNT" ]]; then
+        echo -e "${RED}Error: USB mount point not detected${COLOR_RESET}"
+        echo -e "${YELLOW}Please ensure the USB drive is properly mounted${COLOR_RESET}"
+        pause
+        return 1
+    fi
+    
+    # Create Leonardo directory structure if it doesn't exist
+    if [[ ! -d "$LEONARDO_USB_MOUNT/leonardo" ]]; then
+        echo -e "${CYAN}→ Creating Leonardo directory structure...${COLOR_RESET}"
+        create_leonardo_structure "$LEONARDO_USB_MOUNT"
+    fi
+    
+    # Get Leonardo script location
+    local leonardo_script="${LEONARDO_SCRIPT:-$0}"
+    if [[ ! -f "$leonardo_script" ]]; then
+        leonardo_script="./leonardo.sh"
+    fi
+    
+    # Step 3: Install Leonardo
+    echo
+    echo -e "${YELLOW}Step 2/4: Installing Leonardo AI${COLOR_RESET}"
     copy_leonardo_to_usb "$leonardo_script" "$LEONARDO_USB_MOUNT"
     
-    # Step 6: Configure for first run
-    echo ""
-    echo -e "${CYAN}Configuring Leonardo...${COLOR_RESET}"
+    # Create platform launchers
+    create_platform_launchers "$LEONARDO_USB_MOUNT"
+    
+    # Step 4: Configure
+    echo
+    echo -e "${YELLOW}Step 3/4: Configuring Leonardo${COLOR_RESET}"
     configure_usb_leonardo
     
-    # Step 7: Optionally install models
-    if [[ "$options" != *"no-models"* ]]; then
-        echo ""
-        if confirm_action "Install AI models now"; then
-            deploy_models_to_usb
+    # Step 5: Model deployment
+    echo
+    echo -e "${YELLOW}Step 4/4: AI Model Setup${COLOR_RESET}"
+    
+    # Get USB free space for model recommendations
+    local usb_free_mb=$(get_usb_free_space_mb "$LEONARDO_USB_MOUNT")
+    
+    # Select and install model
+    local selected_model=$(select_model_interactive "$usb_free_mb")
+    
+    if [[ -n "$selected_model" ]]; then
+        echo
+        echo -e "${CYAN}Installing $selected_model...${COLOR_RESET}"
+        if download_model_to_usb "$selected_model"; then
+            echo -e "${GREEN}✓ Model installed successfully${COLOR_RESET}"
+        else
+            echo -e "${YELLOW}⚠ Model installation failed${COLOR_RESET}"
         fi
+    else
+        echo -e "${DIM}Skipping model installation${COLOR_RESET}"
     fi
     
-    # Step 8: Create autorun (if supported)
-    if [[ "$options" == *"autorun"* ]]; then
-        create_usb_autorun
-    fi
-    
-    # Step 9: Final verification
-    echo ""
+    # Final verification
+    echo
     echo -e "${CYAN}Verifying deployment...${COLOR_RESET}"
-    verify_usb_deployment
+    if verify_usb_deployment; then
+        echo
+        echo -e "${GREEN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
+        echo -e "${GREEN}✨ USB deployment successful!${COLOR_RESET}"
+        echo -e "${GREEN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
+        echo
+        echo -e "${BOLD}To use Leonardo on any computer:${COLOR_RESET}"
+        echo -e "1. Insert the USB drive"
+        echo -e "2. Navigate to the USB in terminal"
+        echo -e "3. Run: ${CYAN}./leonardo${COLOR_RESET} (Linux/Mac) or ${CYAN}leonardo.bat${COLOR_RESET} (Windows)"
+        echo
+        echo -e "${DIM}The USB is ready to use on any computer!${COLOR_RESET}"
+    else
+        echo -e "${RED}⚠ Deployment verification failed${COLOR_RESET}"
+        echo -e "${YELLOW}The USB may still work but some features might be missing.${COLOR_RESET}"
+    fi
     
-    # Success!
-    echo ""
-    echo -e "${GREEN}✓ Leonardo successfully deployed to USB!${COLOR_RESET}"
-    echo ""
-    echo "To use Leonardo:"
-    echo "1. Safely eject this USB drive"
-    echo "2. Insert into any computer"
-    echo "3. Run leonardo.sh (Linux/Mac) or leonardo.bat (Windows)"
-    echo ""
-    echo "USB Mount: $LEONARDO_USB_MOUNT"
-    
+    echo
+    pause
     return 0
 }
 
@@ -6229,16 +6374,66 @@ copy_leonardo_to_usb() {
     # Copy Leonardo script
     echo -e "${CYAN}→ Copying Leonardo executable...${COLOR_RESET}"
     
+    # Create leonardo directory if needed
+    mkdir -p "$target_dir/leonardo"
+    
     # Use copy with progress if file is large enough
     local leonardo_size=$(stat -f%z "$leonardo_script" 2>/dev/null || stat -c%s "$leonardo_script" 2>/dev/null || echo "0")
     
     if [[ $leonardo_size -gt 1048576 ]]; then  # > 1MB
-        copy_with_progress "$leonardo_script" "$target_dir/leonardo.sh" "Installing Leonardo"
+        copy_with_progress "$leonardo_script" "$target_dir/leonardo/leonardo.sh" "Installing Leonardo"
     else
         # Small file, just copy normally
-        cp "$leonardo_script" "$target_dir/leonardo.sh"
+        cp "$leonardo_script" "$target_dir/leonardo/leonardo.sh"
         echo -e "${GREEN}✓ Leonardo installed${COLOR_RESET}"
     fi
+    
+    # Also copy to root for convenience
+    cp "$leonardo_script" "$target_dir/leonardo.sh"
+    chmod +x "$target_dir/leonardo.sh"
+    chmod +x "$target_dir/leonardo/leonardo.sh"
+}
+
+# Create platform-specific launchers
+create_platform_launchers() {
+    local target_dir="$1"
+    
+    # Create Windows batch launcher
+    cat > "$target_dir/leonardo.bat" << 'EOF'
+@echo off
+title Leonardo AI Universal
+echo Starting Leonardo AI...
+bash leonardo.sh %*
+if errorlevel 1 (
+    echo.
+    echo Leonardo requires Git Bash or WSL on Windows.
+    echo Please install Git for Windows from https://git-scm.com/
+    pause
+)
+EOF
+    
+    # Create Mac/Linux launcher (executable)
+    cat > "$target_dir/leonardo" << 'EOF'
+#!/bin/bash
+# Leonardo AI Universal Launcher
+cd "$(dirname "$0")"
+./leonardo.sh "$@"
+EOF
+    chmod +x "$target_dir/leonardo" 2>/dev/null || true
+    
+    # Create desktop entry for Linux
+    cat > "$target_dir/Leonardo.desktop" << EOF
+[Desktop Entry]
+Name=Leonardo AI
+Comment=Portable AI Assistant
+Exec=bash %f/leonardo.sh
+Icon=%f/leonardo/assets/icon.png
+Terminal=true
+Type=Application
+Categories=Utility;Development;
+EOF
+    
+    echo -e "${GREEN}✓ Platform launchers created${COLOR_RESET}"
 }
 
 # Configure Leonardo for USB deployment
@@ -6509,6 +6704,41 @@ verify_usb_deployment() {
     return $((checks_total - checks_passed))
 }
 
+# Get recommended models based on USB size
+get_recommended_models() {
+    local usb_size_gb="$1"
+    local models=()
+    
+    # Define model sizes (approximate compressed sizes in GB)
+    local -A model_sizes=(
+        ["phi:2.7b"]="2"
+        ["llama3.2:1b"]="1"
+        ["llama3.2:3b"]="2"
+        ["mistral:7b"]="4"
+        ["llama2:7b"]="4"
+        ["llama2:13b"]="8"
+        ["codellama:7b"]="4"
+        ["mixtral:8x7b"]="26"
+        ["llama3.1:8b"]="5"
+        ["gemma2:2b"]="2"
+        ["qwen2.5:3b"]="2"
+    )
+    
+    # Calculate available space (leave 20% free)
+    local available_gb=$((usb_size_gb * 80 / 100))
+    
+    # Add models that fit
+    for model in "${!model_sizes[@]}"; do
+        local size="${model_sizes[$model]}"
+        if [[ $size -le $available_gb ]]; then
+            models+=("$model (${size}GB)")
+        fi
+    done
+    
+    # Sort by size (smallest first for quick testing)
+    printf '%s\n' "${models[@]}" | sort -t'(' -k2 -n
+}
+
 # Quick USB deployment (minimal interaction)
 quick_deploy_to_usb() {
     local device="$1"
@@ -6557,10 +6787,91 @@ get_usb_deployment_status() {
     fi
 }
 
+# Interactive model selection with size recommendations
+select_model_interactive() {
+    local usb_size_mb="${1:-8192}"  # Default 8GB
+    local usb_size_gb=$((usb_size_mb / 1024))
+    
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
+    echo -e "${BOLD}               🤖 Select AI Model${COLOR_RESET}"
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
+    echo
+    echo -e "${YELLOW}USB Size: ${usb_size_gb}GB${COLOR_RESET}"
+    echo -e "${DIM}Recommended models based on available space:${COLOR_RESET}"
+    echo
+    
+    # Get recommended models
+    local models=()
+    readarray -t models < <(get_recommended_models "$usb_size_gb")
+    
+    if [[ ${#models[@]} -eq 0 ]]; then
+        echo -e "${RED}USB too small for any models!${COLOR_RESET}"
+        echo -e "${YELLOW}Minimum 2GB required.${COLOR_RESET}"
+        return 1
+    fi
+    
+    # Add option to skip
+    models+=("Skip (no model)")
+    
+    # Show menu
+    local selected=$(show_menu "Available Models" "${models[@]}")
+    
+    # Extract model name without size
+    if [[ "$selected" == "Skip (no model)" ]] || [[ -z "$selected" ]]; then
+        echo ""
+        return 1
+    else
+        # Remove size annotation
+        echo "${selected% (*}"
+    fi
+}
+
+# Get USB free space in MB
+get_usb_free_space_mb() {
+    local mount_point="$1"
+    df -BM "$mount_point" | awk 'NR==2 {print $4}' | sed 's/M$//'
+}
+
+# Get device size in MB
+get_device_size_mb() {
+    local device="$1"
+    # Try different methods to get device size
+    if command_exists lsblk; then
+        lsblk -ndo SIZE -b "$device" 2>/dev/null | awk '{print int($1/1024/1024)}'
+    elif command_exists blockdev; then
+        blockdev --getsize64 "$device" 2>/dev/null | awk '{print int($1/1024/1024)}'
+    else
+        # Fallback to 8GB
+        echo "8192"
+    fi
+}
+
+# Pause function
+pause() {
+    echo
+    read -p "Press Enter to continue..." -r
+}
+
 # Export deployment functions
 export -f deploy_to_usb configure_usb_leonardo deploy_models_to_usb
 export -f download_model_to_usb create_usb_autorun verify_usb_deployment
 export -f quick_deploy_to_usb get_usb_deployment_status
+
+# Create Leonardo directory structure
+create_leonardo_structure() {
+    local target_dir="$1"
+    
+    # Create required directories
+    local required_dirs=("leonardo" "leonardo/models" "leonardo/config" "leonardo/logs")
+    
+    for dir in "${required_dirs[@]}"; do
+        if [[ ! -d "$target_dir/$dir" ]]; then
+            mkdir -p "$target_dir/$dir"
+        fi
+    done
+    
+    echo -e "${GREEN}✓ Leonardo directory structure created${COLOR_RESET}"
+}
 
 # ==== Component: src/deployment/cli.sh ====
 # ==============================================================================
@@ -6893,19 +7204,73 @@ detect_usb_drives_macos() {
 # Detect USB drives on Linux
 detect_usb_drives_linux() {
     local -a drives=()
+    local needs_sudo=false
     
-    # Use lsblk to find USB devices
+    # Debug output
+    if [[ "${LEONARDO_DEBUG:-}" == "true" ]] || [[ -n "${DEBUG:-}" ]]; then
+        echo -e "${YELLOW}DEBUG: Checking USB detection permissions...${COLOR_RESET}" >&2
+    fi
+    
+    # Check if we need sudo by testing udevadm access on any device
+    # Try to access /dev/sda first, if that fails try other common devices
+    local test_devices=("/dev/sda" "/dev/sdb" "/dev/nvme0n1")
+    for test_dev in "${test_devices[@]}"; do
+        if [[ -e "$test_dev" ]]; then
+            if ! udevadm info --query=all --name="$test_dev" &>/dev/null; then
+                needs_sudo=true
+                if [[ "${LEONARDO_DEBUG:-}" == "true" ]] || [[ -n "${DEBUG:-}" ]]; then
+                    echo -e "${YELLOW}DEBUG: Need sudo for udevadm (tested on $test_dev)${COLOR_RESET}" >&2
+                fi
+                break
+            fi
+        fi
+    done
+    
+    # Function to run command with or without sudo
+    run_cmd() {
+        if [[ "$needs_sudo" == "true" ]]; then
+            sudo "$@"
+        else
+            "$@"
+        fi
+    }
+    
+    # If we need sudo, prompt once for password
+    if [[ "$needs_sudo" == "true" ]]; then
+        echo -e "${YELLOW}USB detection requires administrator privileges.${COLOR_RESET}" >&2
+        echo -e "${DIM}Please enter your password to continue...${COLOR_RESET}" >&2
+        # Test sudo access with a simple command
+        if ! sudo -v; then
+            echo -e "${RED}Error: Failed to obtain administrator privileges${COLOR_RESET}" >&2
+            return 1
+        fi
+    fi
+    
+    # Debug: Show what lsblk sees
+    if [[ "${LEONARDO_DEBUG:-}" == "true" ]] || [[ -n "${DEBUG:-}" ]]; then
+        echo -e "${YELLOW}DEBUG: lsblk output for sd devices:${COLOR_RESET}" >&2
+        lsblk -nlo NAME,SIZE,MOUNTPOINT,LABEL | grep -E "^sd[a-z]\s" >&2 || echo "No sd devices found" >&2
+    fi
+    
+    # Use lsblk to find USB devices - only base devices, not partitions
     while IFS= read -r line; do
         local device=$(echo "$line" | awk '{print $1}')
         local size=$(echo "$line" | awk '{print $2}')
         local mount=$(echo "$line" | awk '{print $3}')
         local label=$(echo "$line" | awk '{print $4}')
         
-        # Check if it's a USB device
-        if [[ -n "$device" ]] && udevadm info --query=all --name="$device" 2>/dev/null | grep -q "ID_BUS=usb"; then
-            drives+=("/dev/$device|$label|$size|$mount")
+        if [[ "${LEONARDO_DEBUG:-}" == "true" ]] || [[ -n "${DEBUG:-}" ]]; then
+            echo -e "${YELLOW}DEBUG: Checking device: /dev/$device${COLOR_RESET}" >&2
         fi
-    done < <(lsblk -nlo NAME,SIZE,MOUNTPOINT,LABEL | grep -E "^sd[a-z][0-9]?")
+        
+        # Check if it's a USB device
+        if [[ -n "$device" ]] && run_cmd udevadm info --query=all --name="/dev/$device" 2>/dev/null | grep -q "ID_BUS=usb"; then
+            drives+=("/dev/$device|$label|$size|$mount")
+            if [[ "${LEONARDO_DEBUG:-}" == "true" ]] || [[ -n "${DEBUG:-}" ]]; then
+                echo -e "${GREEN}DEBUG: Found USB device: /dev/$device${COLOR_RESET}" >&2
+            fi
+        fi
+    done < <(lsblk -nlo NAME,SIZE,MOUNTPOINT,LABEL | grep -E "^sd[a-z]\s")
     
     # Output drives
     for drive in "${drives[@]}"; do
@@ -7232,9 +7597,51 @@ test_usb_write_speed() {
     fi
 }
 
+# Check if device is a Leonardo USB
+is_leonardo_usb() {
+    local device="${1:-}"
+    
+    if [[ -z "$device" ]]; then
+        return 1
+    fi
+    
+    # Get mount point
+    local mount_point=""
+    local platform=$(detect_platform)
+    
+    case "$platform" in
+        "macos")
+            mount_point=$(diskutil info "$device" 2>/dev/null | grep "Mount Point:" | cut -d: -f2- | xargs)
+            ;;
+        "linux")
+            mount_point=$(lsblk -no MOUNTPOINT "$device" 2>/dev/null | grep -v "^$" | head -1)
+            # Try first partition if device is like /dev/sdX
+            if [[ -z "$mount_point" ]] && [[ "$device" =~ ^/dev/sd[a-z]$ ]]; then
+                mount_point=$(lsblk -no MOUNTPOINT "${device}1" 2>/dev/null | grep -v "^$" | head -1)
+            fi
+            ;;
+        "windows")
+            mount_point="$device\\"
+            ;;
+    esac
+    
+    # Check for Leonardo marker files
+    if [[ -n "$mount_point" ]]; then
+        if [[ -f "$mount_point/leonardo.sh" ]] || \
+           [[ -f "$mount_point/leonardo.bat" ]] || \
+           [[ -f "$mount_point/leonardo/config/leonardo.conf" ]] || \
+           [[ -d "$mount_point/leonardo" ]]; then
+            return 0
+        fi
+    fi
+    
+    return 1
+}
+
 # Export USB detection functions
 export -f detect_platform detect_usb_drives get_usb_drive_info
 export -f is_usb_device get_usb_speed monitor_usb_changes
+export -f is_leonardo_usb
 export -f list_usb_drives test_usb_write_speed
 
 # ==== Component: src/usb/manager.sh ====
@@ -7279,7 +7686,7 @@ init_usb_device() {
     fi
     
     # Set global variables
-    LEONARDO_USB_DEVICE="$device"
+    export LEONARDO_USB_DEVICE="$device"
     
     # Get mount point
     local platform=$(detect_platform)
@@ -7299,6 +7706,9 @@ init_usb_device() {
             LEONARDO_USB_MOUNT="$device\\"
             ;;
     esac
+    
+    # Export the mount point so it's available to subshells
+    export LEONARDO_USB_MOUNT
     
     log_message "INFO" "Initialized USB device: $LEONARDO_USB_DEVICE"
     [[ -n "$LEONARDO_USB_MOUNT" ]] && log_message "INFO" "Mount point: $LEONARDO_USB_MOUNT"
@@ -7414,18 +7824,43 @@ mount_usb_drive() {
             
             # Get actual mount point
             LEONARDO_USB_MOUNT=$(diskutil info "$device" 2>/dev/null | grep "Mount Point:" | cut -d: -f2- | xargs)
+            export LEONARDO_USB_MOUNT
             ;;
         "linux")
             # Create mount point if not specified
             if [[ -z "$mount_point" ]]; then
-                mount_point="/mnt/leonardo_$$"
-                mkdir -p "$mount_point"
+                # Try user-writable locations first
+                if [[ -w "$HOME" ]]; then
+                    mount_point="$HOME/leonardo_usb_$$"
+                    mkdir -p "$mount_point"
+                else
+                    mount_point="/mnt/leonardo_$$"
+                    mkdir -p "$mount_point" 2>/dev/null || {
+                        log_message "ERROR" "Cannot create mount point - need sudo permissions"
+                        return 1
+                    }
+                fi
             fi
             
+            # Try different mount methods
             if mount "$device" "$mount_point" 2>/dev/null; then
                 LEONARDO_USB_MOUNT="$mount_point"
+                export LEONARDO_USB_MOUNT
+            elif command -v udisksctl >/dev/null 2>&1; then
+                # Try udisksctl for user mounting
+                log_message "INFO" "Trying udisksctl mount..."
+                local mount_output=$(udisksctl mount -b "$device" 2>&1)
+                if [[ $? -eq 0 ]]; then
+                    LEONARDO_USB_MOUNT=$(echo "$mount_output" | grep -oP "Mounted .* at \K.*" | sed 's/\.$//')
+                    export LEONARDO_USB_MOUNT
+                    log_message "INFO" "Mounted via udisksctl at: $LEONARDO_USB_MOUNT"
+                else
+                    log_message "ERROR" "Failed to mount device - $mount_output"
+                    rmdir "$mount_point" 2>/dev/null
+                    return 1
+                fi
             else
-                log_message "ERROR" "Failed to mount device"
+                log_message "ERROR" "Failed to mount device - need sudo or udisksctl"
                 rmdir "$mount_point" 2>/dev/null
                 return 1
             fi
@@ -7433,6 +7868,7 @@ mount_usb_drive() {
         "windows")
             # Windows auto-mounts with drive letters
             LEONARDO_USB_MOUNT="$device\\"
+            export LEONARDO_USB_MOUNT
             ;;
     esac
     
@@ -9015,6 +9451,49 @@ show_banner() {
     echo ""
 }
 
+# Show banner
+show_banner() {
+    echo -e "${CYAN}╔═══════════════════════════════════════════════════════════════╗${COLOR_RESET}"
+    echo -e "${CYAN}║${COLOR_RESET}            ${BOLD}Leonardo AI Universal v$LEONARDO_VERSION${COLOR_RESET}              ${CYAN}║${COLOR_RESET}"
+    echo -e "${CYAN}║${COLOR_RESET}              ${DIM}Portable AI Assistant${COLOR_RESET}                         ${CYAN}║${COLOR_RESET}"
+    echo -e "${CYAN}╚═══════════════════════════════════════════════════════════════╝${COLOR_RESET}"
+}
+
+# Settings menu
+settings_menu() {
+    while true; do
+        local selection
+        selection=$(show_menu "Settings & Preferences" \
+            "Default Model Path" \
+            "Color Theme" \
+            "Auto-Update" \
+            "Network Proxy" \
+            "Back to Main Menu") || break
+        
+        case "$selection" in
+            "Default Model Path")
+                echo -e "${YELLOW}Current model path:${COLOR_RESET} $LEONARDO_MODEL_DIR"
+                pause
+                ;;
+            "Color Theme")
+                echo -e "${YELLOW}Color theme settings coming soon!${COLOR_RESET}"
+                pause
+                ;;
+            "Auto-Update")
+                echo -e "${YELLOW}Auto-update settings coming soon!${COLOR_RESET}"
+                pause
+                ;;
+            "Network Proxy")
+                echo -e "${YELLOW}Proxy settings coming soon!${COLOR_RESET}"
+                pause
+                ;;
+            "Back to Main Menu"|"")
+                break
+                ;;
+        esac
+    done
+}
+
 # Show help information
 show_help() {
     cat << EOF
@@ -9101,45 +9580,118 @@ main() {
     fi
     
     # Main interactive menu
-    while true; do
-        show_menu "Main Menu" \
-            "AI Model Management" \
-            "Create/Manage USB Drive" \
-            "System Dashboard" \
-            "Launch Web Interface" \
-            "Settings & Preferences" \
-            "Run System Tests" \
-            "About Leonardo" \
-            "Exit"
+    local keep_running=true
+    while [[ "$keep_running" == "true" ]]; do
+        clear
+        show_banner
         
-        case "$MENU_SELECTION" in
-            "AI Model Management")
-                model_management_menu
+        # Build menu options dynamically
+        local menu_options=()
+        
+        # Always show deployment option first for MVP
+        menu_options+=("🚀 Deploy to USB")
+        
+        # Show chat option if models are installed
+        if check_installed_models; then
+            menu_options+=("💬 Chat with AI")
+        fi
+        
+        # System management options
+        menu_options+=("📦 Model Manager")
+        menu_options+=("🔧 System Utilities")
+        menu_options+=("📊 System Dashboard")
+        menu_options+=("⚙️  Settings")
+        menu_options+=("📖 Help")
+        menu_options+=("🚪 Exit")
+        
+        local selection
+        selection=$(show_menu "Leonardo AI Universal - Main Menu" "${menu_options[@]}")
+        local menu_exit_code=$?
+        
+        # Debug: Show menu exit code and selection
+        echo -e "${YELLOW}DEBUG: Menu exit code: $menu_exit_code${COLOR_RESET}" >&2
+        echo -e "${YELLOW}DEBUG: Raw selection: '$selection'${COLOR_RESET}" >&2
+        sleep 2
+        
+        # If show_menu returned error (user pressed q), exit
+        if [[ $menu_exit_code -ne 0 ]]; then
+            keep_running=false
+            continue
+        fi
+        
+        # Debug: Show what was selected
+        if [[ "$LEONARDO_DEBUG" == "true" ]] || [[ -n "${DEBUG:-}" ]]; then
+            echo "DEBUG: Selected: '$selection'" >&2
+            sleep 1
+        fi
+        
+        # Extra debug: Show hex dump of selection to see any hidden characters
+        echo -e "${YELLOW}DEBUG: Hex dump of selection:${COLOR_RESET}" >&2
+        echo -n "$selection" | od -An -tx1 >&2
+        echo -e "${YELLOW}DEBUG: Length: ${#selection}${COLOR_RESET}" >&2
+        
+        # Test exact match
+        if [[ "$selection" == "🚀 Deploy to USB" ]]; then
+            echo -e "${GREEN}DEBUG: Exact match found!${COLOR_RESET}" >&2
+        else
+            echo -e "${RED}DEBUG: No exact match${COLOR_RESET}" >&2
+        fi
+        sleep 2
+        
+        case "$selection" in
+            "🚀 Deploy to USB")
+                if [[ "$LEONARDO_DEBUG" == "true" ]] || [[ -n "${DEBUG:-}" ]]; then
+                    echo "DEBUG: Calling deploy_to_usb" >&2
+                fi
+                deploy_to_usb
+                # Don't exit on failure, just return to menu
                 ;;
-            "Create/Manage USB Drive")
-                usb_management_menu
+            "💬 Chat with AI")
+                if [[ "$LEONARDO_DEBUG" == "true" ]] || [[ -n "${DEBUG:-}" ]]; then
+                    echo "DEBUG: Calling handle_chat_command" >&2
+                fi
+                handle_chat_command
                 ;;
-            "System Dashboard")
+            "📦 Model Manager")
+                if [[ "$LEONARDO_DEBUG" == "true" ]] || [[ -n "${DEBUG:-}" ]]; then
+                    echo "DEBUG: Calling handle_model_command menu" >&2
+                fi
+                handle_model_command "menu"
+                ;;
+            "🔧 System Utilities")
+                if [[ "$LEONARDO_DEBUG" == "true" ]] || [[ -n "${DEBUG:-}" ]]; then
+                    echo "DEBUG: Calling system_utilities_menu" >&2
+                fi
+                system_utilities_menu
+                ;;
+            "📊 System Dashboard")
+                if [[ "$LEONARDO_DEBUG" == "true" ]] || [[ -n "${DEBUG:-}" ]]; then
+                    echo "DEBUG: Calling show_dashboard" >&2
+                fi
                 show_dashboard
-                read -p "Press Enter to continue..."
+                pause
                 ;;
-            "Launch Web Interface")
-                launch_web_interface
-                ;;
-            "Settings & Preferences")
+            "⚙️  Settings")
+                if [[ "$LEONARDO_DEBUG" == "true" ]] || [[ -n "${DEBUG:-}" ]]; then
+                    echo "DEBUG: Calling settings_menu" >&2
+                fi
                 settings_menu
                 ;;
-            "Run System Tests")
-                run_system_tests
-                read -p "Press Enter to continue..."
+            "📖 Help")
+                if [[ "$LEONARDO_DEBUG" == "true" ]] || [[ -n "${DEBUG:-}" ]]; then
+                    echo "DEBUG: Calling show_help" >&2
+                fi
+                show_help
+                pause
                 ;;
-            "About Leonardo")
-                show_about
-                read -p "Press Enter to continue..."
-                ;;
-            "Exit"|"")
+            "🚪 Exit"|"")
                 handle_exit
-                break
+                keep_running=false
+                ;;
+            *)
+                if [[ "$LEONARDO_DEBUG" == "true" ]] || [[ -n "${DEBUG:-}" ]]; then
+                    echo "DEBUG: Unknown selection: '$selection'" >&2
+                fi
                 ;;
         esac
     done
@@ -9772,6 +10324,193 @@ handle_exit() {
     # TODO: Implement session persistence
     
     exit 0
+}
+
+# Check if any models are installed
+check_installed_models() {
+    # Check for models in default location
+    if [[ -d "$LEONARDO_MODEL_DIR" ]] && [[ -n "$(ls -A "$LEONARDO_MODEL_DIR" 2>/dev/null)" ]]; then
+        return 0
+    fi
+    
+    # Check for Ollama models
+    if command_exists ollama && ollama list 2>/dev/null | grep -q "^[a-zA-Z]"; then
+        return 0
+    fi
+    
+    return 1
+}
+
+# Get list of available models for chat
+get_chat_models() {
+    local models=()
+    
+    # Get Ollama models
+    if command_exists ollama; then
+        while IFS= read -r line; do
+            if [[ -n "$line" && ! "$line" =~ ^NAME ]]; then
+                local model_name=$(echo "$line" | awk '{print $1}')
+                models+=("$model_name")
+            fi
+        done < <(ollama list 2>/dev/null)
+    fi
+    
+    # Get local GGUF models
+    if [[ -d "$LEONARDO_MODEL_DIR" ]]; then
+        for model_file in "$LEONARDO_MODEL_DIR"/*.gguf; do
+            if [[ -f "$model_file" ]]; then
+                local model_name=$(basename "$model_file" .gguf)
+                models+=("$model_name")
+            fi
+        done
+    fi
+    
+    printf '%s\n' "${models[@]}"
+}
+
+# Handle chat command
+handle_chat_command() {
+    # Get available models  
+    local models=()
+    if command_exists ollama; then
+        mapfile -t models < <(ollama list 2>/dev/null | tail -n +2 | awk '{print $1}')
+    fi
+    
+    # Check for local models in LEONARDO_MODEL_DIR
+    if [[ -d "$LEONARDO_MODEL_DIR" ]]; then
+        while IFS= read -r -d '' model_file; do
+            models+=("local:$(basename "$model_file")")
+        done < <(find "$LEONARDO_MODEL_DIR" -name "*.gguf" -print0 2>/dev/null)
+    fi
+    
+    if [[ ${#models[@]} -eq 0 ]]; then
+        echo -e "${RED}No AI models installed!${COLOR_RESET}"
+        echo -e "${YELLOW}Install a model first using Model Manager.${COLOR_RESET}"
+        pause
+        return
+    fi
+    
+    # Select model if multiple available
+    local selected_model
+    if [[ ${#models[@]} -eq 1 ]]; then
+        selected_model="${models[0]}"
+    else
+        selected_model=$(show_menu "Select AI Model" "${models[@]}") || return
+    fi
+    
+    # Launch chat interface
+    start_chat_interface "$selected_model"
+}
+
+# Start chat interface with selected model
+start_chat_interface() {
+    local model="$1"
+    
+    clear
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
+    echo -e "${BOLD}               🤖 Leonardo AI Chat - $model${COLOR_RESET}"
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
+    echo
+    echo -e "${DIM}Type 'exit' or 'quit' to end the chat session${COLOR_RESET}"
+    echo -e "${DIM}Type 'clear' to clear the conversation${COLOR_RESET}"
+    echo
+    
+    if [[ "$model" == ollama:* ]] && command_exists ollama; then
+        # Use Ollama for chat
+        local model_name="${model#ollama:}"
+        ollama run "$model_name"
+    elif [[ "$model" == local:* ]]; then
+        # Use llama.cpp for local models
+        echo -e "${YELLOW}Local model chat coming soon!${COLOR_RESET}"
+        echo -e "${DIM}This will use llama.cpp for inference${COLOR_RESET}"
+        pause
+    else
+        # Fallback for other model types
+        echo -e "${YELLOW}Chat interface for $model coming soon!${COLOR_RESET}"
+        pause
+    fi
+}
+
+# Check if any models are installed
+check_installed_models() {
+    # Check Ollama models
+    if command_exists ollama; then
+        local ollama_models=$(ollama list 2>/dev/null | tail -n +2 | wc -l)
+        [[ $ollama_models -gt 0 ]] && return 0
+    fi
+    
+    # Check local models
+    if [[ -d "$LEONARDO_MODEL_DIR" ]]; then
+        local local_models=$(find "$LEONARDO_MODEL_DIR" -name "*.gguf" 2>/dev/null | wc -l)
+        [[ $local_models -gt 0 ]] && return 0
+    fi
+    
+    return 1
+}
+
+# System utilities menu
+system_utilities_menu() {
+    while true; do
+        local selection
+        selection=$(show_menu "System Utilities" \
+            "Run System Tests" \
+            "Clean Cache" \
+            "Update Leonardo" \
+            "View Logs" \
+            "Back to Main Menu") || break
+        
+        case "$selection" in
+            "Run System Tests")
+                run_system_tests
+                pause
+                ;;
+            "Clean Cache")
+                echo -e "${YELLOW}Cleaning cache...${COLOR_RESET}"
+                # TODO: Implement cache cleaning
+                pause
+                ;;
+            "Update Leonardo")
+                echo -e "${YELLOW}Checking for updates...${COLOR_RESET}"
+                # TODO: Implement update check
+                pause
+                ;;
+            "View Logs")
+                if [[ -f "$LEONARDO_LOG_FILE" ]]; then
+                    less "$LEONARDO_LOG_FILE"
+                else
+                    echo -e "${YELLOW}No logs found${COLOR_RESET}"
+                    pause
+                fi
+                ;;
+            "Back to Main Menu"|"")
+                break
+                ;;
+        esac
+    done
+}
+
+# Show about information
+show_about() {
+    clear
+    show_banner
+    echo
+    echo -e "${BOLD}About Leonardo AI Universal${COLOR_RESET}"
+    echo -e "${DIM}────────────────────────────────────────────────${COLOR_RESET}"
+    echo
+    echo "Leonardo is a portable AI assistant that can run from USB drives"
+    echo "and provides easy access to various AI models."
+    echo
+    echo -e "${CYAN}Version:${COLOR_RESET} $LEONARDO_VERSION ($LEONARDO_BUILD)"
+    echo -e "${CYAN}License:${COLOR_RESET} MIT"
+    echo -e "${CYAN}Website:${COLOR_RESET} https://github.com/leonardo-ai/leonardo"
+    echo
+    echo -e "${BOLD}Features:${COLOR_RESET}"
+    echo "  • Portable USB deployment"
+    echo "  • Multiple AI model support"
+    echo "  • Offline model management"
+    echo "  • Cross-platform compatibility"
+    echo "  • Web interface"
+    echo
 }
 
 # Call main function with all arguments

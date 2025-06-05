@@ -7,6 +7,11 @@
 # Dependencies: logging.sh, colors.sh
 # ==============================================================================
 
+# Check if a command exists
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
 # Validation error handling
 validation_error() {
     local field="$1"
@@ -407,3 +412,4 @@ export -f format_bytes
 export -f sanitize_string
 export -f confirm
 export -f check_system_requirements
+export -f command_exists

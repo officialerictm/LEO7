@@ -70,19 +70,73 @@ detect_usb_drives_macos() {
 # Detect USB drives on Linux
 detect_usb_drives_linux() {
     local -a drives=()
+    local needs_sudo=false
     
-    # Use lsblk to find USB devices
+    # Debug output
+    if [[ "${LEONARDO_DEBUG:-}" == "true" ]] || [[ -n "${DEBUG:-}" ]]; then
+        echo -e "${YELLOW}DEBUG: Checking USB detection permissions...${COLOR_RESET}" >&2
+    fi
+    
+    # Check if we need sudo by testing udevadm access on any device
+    # Try to access /dev/sda first, if that fails try other common devices
+    local test_devices=("/dev/sda" "/dev/sdb" "/dev/nvme0n1")
+    for test_dev in "${test_devices[@]}"; do
+        if [[ -e "$test_dev" ]]; then
+            if ! udevadm info --query=all --name="$test_dev" &>/dev/null; then
+                needs_sudo=true
+                if [[ "${LEONARDO_DEBUG:-}" == "true" ]] || [[ -n "${DEBUG:-}" ]]; then
+                    echo -e "${YELLOW}DEBUG: Need sudo for udevadm (tested on $test_dev)${COLOR_RESET}" >&2
+                fi
+                break
+            fi
+        fi
+    done
+    
+    # Function to run command with or without sudo
+    run_cmd() {
+        if [[ "$needs_sudo" == "true" ]]; then
+            sudo "$@"
+        else
+            "$@"
+        fi
+    }
+    
+    # If we need sudo, prompt once for password
+    if [[ "$needs_sudo" == "true" ]]; then
+        echo -e "${YELLOW}USB detection requires administrator privileges.${COLOR_RESET}" >&2
+        echo -e "${DIM}Please enter your password to continue...${COLOR_RESET}" >&2
+        # Test sudo access with a simple command
+        if ! sudo -v; then
+            echo -e "${RED}Error: Failed to obtain administrator privileges${COLOR_RESET}" >&2
+            return 1
+        fi
+    fi
+    
+    # Debug: Show what lsblk sees
+    if [[ "${LEONARDO_DEBUG:-}" == "true" ]] || [[ -n "${DEBUG:-}" ]]; then
+        echo -e "${YELLOW}DEBUG: lsblk output for sd devices:${COLOR_RESET}" >&2
+        lsblk -nlo NAME,SIZE,MOUNTPOINT,LABEL | grep -E "^sd[a-z]\s" >&2 || echo "No sd devices found" >&2
+    fi
+    
+    # Use lsblk to find USB devices - only base devices, not partitions
     while IFS= read -r line; do
         local device=$(echo "$line" | awk '{print $1}')
         local size=$(echo "$line" | awk '{print $2}')
         local mount=$(echo "$line" | awk '{print $3}')
         local label=$(echo "$line" | awk '{print $4}')
         
-        # Check if it's a USB device
-        if [[ -n "$device" ]] && udevadm info --query=all --name="$device" 2>/dev/null | grep -q "ID_BUS=usb"; then
-            drives+=("/dev/$device|$label|$size|$mount")
+        if [[ "${LEONARDO_DEBUG:-}" == "true" ]] || [[ -n "${DEBUG:-}" ]]; then
+            echo -e "${YELLOW}DEBUG: Checking device: /dev/$device${COLOR_RESET}" >&2
         fi
-    done < <(lsblk -nlo NAME,SIZE,MOUNTPOINT,LABEL | grep -E "^sd[a-z][0-9]?")
+        
+        # Check if it's a USB device
+        if [[ -n "$device" ]] && run_cmd udevadm info --query=all --name="/dev/$device" 2>/dev/null | grep -q "ID_BUS=usb"; then
+            drives+=("/dev/$device|$label|$size|$mount")
+            if [[ "${LEONARDO_DEBUG:-}" == "true" ]] || [[ -n "${DEBUG:-}" ]]; then
+                echo -e "${GREEN}DEBUG: Found USB device: /dev/$device${COLOR_RESET}" >&2
+            fi
+        fi
+    done < <(lsblk -nlo NAME,SIZE,MOUNTPOINT,LABEL | grep -E "^sd[a-z]\s")
     
     # Output drives
     for drive in "${drives[@]}"; do
@@ -409,7 +463,49 @@ test_usb_write_speed() {
     fi
 }
 
+# Check if device is a Leonardo USB
+is_leonardo_usb() {
+    local device="${1:-}"
+    
+    if [[ -z "$device" ]]; then
+        return 1
+    fi
+    
+    # Get mount point
+    local mount_point=""
+    local platform=$(detect_platform)
+    
+    case "$platform" in
+        "macos")
+            mount_point=$(diskutil info "$device" 2>/dev/null | grep "Mount Point:" | cut -d: -f2- | xargs)
+            ;;
+        "linux")
+            mount_point=$(lsblk -no MOUNTPOINT "$device" 2>/dev/null | grep -v "^$" | head -1)
+            # Try first partition if device is like /dev/sdX
+            if [[ -z "$mount_point" ]] && [[ "$device" =~ ^/dev/sd[a-z]$ ]]; then
+                mount_point=$(lsblk -no MOUNTPOINT "${device}1" 2>/dev/null | grep -v "^$" | head -1)
+            fi
+            ;;
+        "windows")
+            mount_point="$device\\"
+            ;;
+    esac
+    
+    # Check for Leonardo marker files
+    if [[ -n "$mount_point" ]]; then
+        if [[ -f "$mount_point/leonardo.sh" ]] || \
+           [[ -f "$mount_point/leonardo.bat" ]] || \
+           [[ -f "$mount_point/leonardo/config/leonardo.conf" ]] || \
+           [[ -d "$mount_point/leonardo" ]]; then
+            return 0
+        fi
+    fi
+    
+    return 1
+}
+
 # Export USB detection functions
 export -f detect_platform detect_usb_drives get_usb_drive_info
 export -f is_usb_device get_usb_speed monitor_usb_changes
+export -f is_leonardo_usb
 export -f list_usb_drives test_usb_write_speed
