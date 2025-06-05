@@ -115,7 +115,7 @@ deploy_to_usb() {
     # Step 4: Create Leonardo structure
     echo ""
     echo -e "${CYAN}Creating Leonardo structure...${COLOR_RESET}"
-    if ! create_leonardo_structure; then
+    if ! create_leonardo_structure "$LEONARDO_USB_MOUNT"; then
         return 1
     fi
     

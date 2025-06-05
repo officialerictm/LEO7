@@ -1,7 +1,17 @@
 #!/usr/bin/env bash
 # Test USB deployment functionality
 
-source leonardo.sh
+# Load only the utilities needed for this test
+source src/utils/colors.sh
+source src/utils/logging.sh
+source src/utils/filesystem.sh
+source src/usb/detector.sh
+source src/usb/manager.sh
+source src/deployment/usb_deploy.sh
+
+# Minimal logging setup
+export LEONARDO_LOG_DIR="/tmp"
+export LEONARDO_AUDIT_LOG=false
 
 echo -e "${CYAN}Testing USB Deployment Functions${COLOR_RESET}"
 echo "================================="
@@ -35,6 +45,20 @@ fi
 echo ""
 echo "4. Current USB drives:"
 list_usb_drives 2>/dev/null || echo -e "${YELLOW}No USB drives detected${COLOR_RESET}"
+
+echo ""
+echo "5. Testing directory creation under mount point..."
+tmp_dir=$(mktemp -d)
+export LEONARDO_USB_MOUNT="$tmp_dir"
+create_leonardo_structure "$LEONARDO_USB_MOUNT"
+
+if [[ -d "$LEONARDO_USB_MOUNT/leonardo/models" ]] && [[ -d "$LEONARDO_USB_MOUNT/leonardo/config" ]]; then
+    echo -e "${GREEN}✓ Directory tree created at $LEONARDO_USB_MOUNT${COLOR_RESET}"
+else
+    echo -e "${RED}✗ Directory tree not created under $LEONARDO_USB_MOUNT${COLOR_RESET}"
+fi
+
+rm -rf "$tmp_dir"
 
 echo ""
 echo -e "${DIM}Test complete${COLOR_RESET}"
