@@ -7813,6 +7813,13 @@ format_usb_drive() {
             if command_exists "parted"; then
                 parted -s "$device" mklabel gpt >/dev/null 2>&1
                 parted -s "$device" mkpart primary 0% 100% >/dev/null 2>&1
+                parted -s "$device" set 1 msftdata on >/dev/null 2>&1
+                if command_exists "partprobe"; then
+                    partprobe "$device" >/dev/null 2>&1
+                fi
+            else
+                log_message "ERROR" "parted is required to format USB drives"
+                return 1
             fi
             
             # Format partition

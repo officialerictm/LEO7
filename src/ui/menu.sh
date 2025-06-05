@@ -24,13 +24,15 @@ show_menu() {
     local num_options=${#options[@]}
     
     # Debug terminal detection
-    echo -e "${YELLOW}DEBUG: Terminal detection:${COLOR_RESET}" >&2
-    echo -e "${YELLOW}  - tty 0: $([[ -t 0 ]] && echo yes || echo no)${COLOR_RESET}" >&2
-    echo -e "${YELLOW}  - tty 1: $([[ -t 1 ]] && echo yes || echo no)${COLOR_RESET}" >&2
-    echo -e "${YELLOW}  - tty 2: $([[ -t 2 ]] && echo yes || echo no)${COLOR_RESET}" >&2
-    echo -e "${YELLOW}  - PS1: '${PS1:-}'${COLOR_RESET}" >&2
-    echo -e "${YELLOW}  - TERM: '${TERM:-}'${COLOR_RESET}" >&2
-    echo -e "${YELLOW}  - LEONARDO_FORCE_INTERACTIVE: '${LEONARDO_FORCE_INTERACTIVE:-}'${COLOR_RESET}" >&2
+    if [[ "${LEONARDO_DEBUG:-}" == "true" ]]; then
+        echo -e "${YELLOW}DEBUG: Terminal detection:${COLOR_RESET}" >&2
+        echo -e "${YELLOW}  - tty 0: $([[ -t 0 ]] && echo yes || echo no)${COLOR_RESET}" >&2
+        echo -e "${YELLOW}  - tty 1: $([[ -t 1 ]] && echo yes || echo no)${COLOR_RESET}" >&2
+        echo -e "${YELLOW}  - tty 2: $([[ -t 2 ]] && echo yes || echo no)${COLOR_RESET}" >&2
+        echo -e "${YELLOW}  - PS1: '${PS1:-}'${COLOR_RESET}" >&2
+        echo -e "${YELLOW}  - TERM: '${TERM:-}'${COLOR_RESET}" >&2
+        echo -e "${YELLOW}  - LEONARDO_FORCE_INTERACTIVE: '${LEONARDO_FORCE_INTERACTIVE:-}'${COLOR_RESET}" >&2
+    fi
     
     # Check for interactive terminal - more robust check
     local is_interactive=false
@@ -134,14 +136,15 @@ draw_menu() {
         echo -e "${GREEN}╚════════════════════════════════════════════╝${COLOR_RESET}" >/dev/tty
         echo >/dev/tty
         
-        # Display options
+        # Display options with numbering
         local i=1
         for option in "${options[@]}"; do
+            local display_option="${i}) ${option}"
             if [[ $i -eq $((selected + 1)) ]]; then
                 # Highlighted option
-                echo -e "${CYAN}▶ ${BRIGHT}${option}${COLOR_RESET}" >/dev/tty
+                echo -e "${CYAN}▶ ${BRIGHT}${display_option}${COLOR_RESET}" >/dev/tty
             else
-                echo -e "  ${DIM}${option}${COLOR_RESET}" >/dev/tty
+                echo -e "  ${DIM}${display_option}${COLOR_RESET}" >/dev/tty
             fi
             ((i++))
         done

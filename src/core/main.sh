@@ -544,38 +544,43 @@ usb_management_menu() {
 select_and_deploy_usb() {
     echo -e "\n${CYAN}Deploy Leonardo to USB${COLOR_RESET}\n"
     
-    # Get list of USB drives
-    local devices=()
-    local device_info=()
-    
+    # Get list of USB drives and separate recommended devices
+    local -a recommended_devices=()
+    local -a recommended_info=()
+    local -a other_devices=()
+    local -a other_info=()
+
     while IFS='|' read -r device name size mount; do
-        devices+=("$device")
         local info="${name:-Unknown} (${size:-N/A})"
         if [[ -n "$mount" ]] && [[ "$mount" != "Not Mounted" ]]; then
             info="$info - $mount"
         fi
-        device_info+=("$info")
+
+        if check_leonardo_usb "$device" >/dev/null 2>&1; then
+            recommended_devices+=("$device")
+            recommended_info+=("$info")
+        else
+            other_devices+=("$device")
+            other_info+=("$info")
+        fi
     done < <(detect_usb_drives)
     
-    if [[ ${#devices[@]} -eq 0 ]]; then
+    local total_devices=$(( ${#recommended_devices[@]} + ${#other_devices[@]} ))
+    if [[ $total_devices -eq 0 ]]; then
         echo -e "${YELLOW}No USB drives detected${COLOR_RESET}"
         echo -e "${DIM}Please insert a USB drive and try again${COLOR_RESET}"
         echo -e "\n${DIM}Press Enter to continue...${COLOR_RESET}"
         read -r
         return
     fi
-    
+
     # Build menu options
     local menu_options=()
-    for i in "${!devices[@]}"; do
-        local color=""
-        # Check if it's already a Leonardo drive
-        if check_leonardo_usb "${devices[$i]}" >/dev/null 2>&1; then
-            color="${GREEN}"
-            menu_options+=("${color}${devices[$i]} - ${device_info[$i]} [Leonardo USB]${COLOR_RESET}")
-        else
-            menu_options+=("${devices[$i]} - ${device_info[$i]}")
-        fi
+    for i in "${!recommended_devices[@]}"; do
+        menu_options+=("${GREEN}${recommended_devices[$i]} - ${recommended_info[$i]} [Leonardo USB]${COLOR_RESET}")
+    done
+    for i in "${!other_devices[@]}"; do
+        menu_options+=("${YELLOW}${other_devices[$i]} - ${other_info[$i]}${COLOR_RESET}")
     done
     menu_options+=("Cancel")
     
@@ -613,34 +618,42 @@ select_and_deploy_usb() {
 select_usb_for_health_check() {
     echo ""
     
-    # Get list of USB drives
-    local devices=()
-    local device_info=()
-    
+    # Get list of USB drives and categorize
+    local -a recommended_devices=()
+    local -a recommended_info=()
+    local -a other_devices=()
+    local -a other_info=()
+
     while IFS='|' read -r device name size mount; do
-        devices+=("$device")
         local info="${name:-Unknown} (${size:-N/A})"
         if [[ -n "$mount" ]] && [[ "$mount" != "Not Mounted" ]]; then
             info="$info - $mount"
         fi
-        device_info+=("$info")
+
+        if check_leonardo_usb "$device" >/dev/null 2>&1; then
+            recommended_devices+=("$device")
+            recommended_info+=("$info")
+        else
+            other_devices+=("$device")
+            other_info+=("$info")
+        fi
     done < <(detect_usb_drives)
     
-    if [[ ${#devices[@]} -eq 0 ]]; then
+    local total_devices=$(( ${#recommended_devices[@]} + ${#other_devices[@]} ))
+    if [[ $total_devices -eq 0 ]]; then
         echo -e "${YELLOW}No USB drives detected${COLOR_RESET}"
         echo -e "\n${DIM}Press Enter to continue...${COLOR_RESET}"
         read -r
         return
     fi
-    
-    # Build menu options with Leonardo status
+
+    # Build menu options with recommended first
     local menu_options=()
-    for i in "${!devices[@]}"; do
-        if check_leonardo_usb "${devices[$i]}" >/dev/null 2>&1; then
-            menu_options+=("${GREEN}${devices[$i]} - ${device_info[$i]} [Leonardo USB]${COLOR_RESET}")
-        else
-            menu_options+=("${DIM}${devices[$i]} - ${device_info[$i]} [Not Leonardo USB]${COLOR_RESET}")
-        fi
+    for i in "${!recommended_devices[@]}"; do
+        menu_options+=("${GREEN}${recommended_devices[$i]} - ${recommended_info[$i]} [Leonardo USB]${COLOR_RESET}")
+    done
+    for i in "${!other_devices[@]}"; do
+        menu_options+=("${YELLOW}${other_devices[$i]} - ${other_info[$i]}${COLOR_RESET}")
     done
     menu_options+=("Cancel")
     

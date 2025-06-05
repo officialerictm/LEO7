@@ -43,8 +43,34 @@ cd LEO7
 # Run the installer
 ./leonardo.sh
 
+
 # Follow the interactive setup!
 ```
+
+### Navigating the Menus
+
+The installer uses a colorful text menu. Use the **arrow keys** or press a
+**number** to choose an option. The recommended item is always listed first so
+you can simply press **Enter** to accept it. Set `LEONARDO_DEBUG=true` if you
+need verbose output for troubleshooting.
+
+### Formatting a USB Drive
+
+Before installing Leonardo on a USB drive you can format it on **any** platform:
+
+```bash
+# Linux
+./leonardo.sh usb format /dev/sdX --format exfat --label LEONARDO
+
+# macOS
+diskutil eraseDisk ExFAT LEONARDO /dev/diskN
+
+# Windows (run in PowerShell)
+leonardo usb format 1 --format exfat --label LEONARDO
+```
+
+The Linux formatter now marks the partition as `msftdata`, ensuring the drive
+mounts correctly on macOS and Windows.
 
 ## 📋 Requirements
 
