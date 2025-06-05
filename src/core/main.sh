@@ -704,60 +704,534 @@ handle_deployment_command() {
     esac
 }
 
-# Settings menu
-settings_menu() {
+# Joey Bagodonuts menu
+handle_joey_menu() {
+    # Source menu system and new features
+    source "${LEONARDO_BASE_DIR}/src/ui/menu.sh"
+    source "${LEONARDO_BASE_DIR}/src/models/dynamic_models.sh" 2>/dev/null
+    source "${LEONARDO_BASE_DIR}/src/models/usb_model_check.sh" 2>/dev/null
+    source "${LEONARDO_BASE_DIR}/src/models/portable_ollama.sh" 2>/dev/null
+    
     while true; do
-        # Clear screen properly
-        echo -e "\033[H\033[2J" >/dev/tty
+        MENU_POSITION=1
+        local choice=$(show_menu "Leonardo AI - Joey's Easy Menu 🍕" \
+            "💬 Chat with AI" \
+            "🌐 Web Chat Interface" \
+            "📊 Model Management" \
+            "🔐 Stealth Mode (Portable)" \
+            "💾 USB Deployment" \
+            "🔧 System Tools" \
+            "📚 Help & Docs" \
+            "❌ Exit")
         
-        echo -e "${CYAN}Settings & Preferences${COLOR_RESET}"
-        echo ""
+        case "$choice" in
+            "💬 Chat with AI")
+                handle_chat_menu
+                ;;
+            "🌐 Web Chat Interface")
+                handle_web_chat_menu
+                ;;
+            "📊 Model Management")
+                handle_model_management_menu
+                ;;
+            "🔐 Stealth Mode (Portable)")
+                handle_stealth_mode_menu
+                ;;
+            "💾 USB Deployment")
+                handle_usb_menu
+                ;;
+            "🔧 System Tools")
+                handle_tools_menu
+                ;;
+            "📚 Help & Docs")
+                handle_docs_menu
+                ;;
+            "❌ Exit"|"")
+                echo -e "${GREEN}Thanks for using Leonardo AI! 👋${COLOR_RESET}"
+                exit 0
+                ;;
+        esac
+    done
+}
+
+# Chat submenu
+handle_chat_menu() {
+    while true; do
+        MENU_POSITION=1
+        local choice=$(show_menu "Chat Options" \
+            "🚀 Start CLI Chat" \
+            "🤖 Select AI Model" \
+            "💾 View Chat History" \
+            "🔙 Back to Main Menu")
         
-        show_menu "Settings" \
-            "Toggle Debug Mode" \
-            "Configure Model Path" \
-            "Network Settings" \
-            "Security Options" \
-            "Back to Main Menu"
-        
-        case "$MENU_SELECTION" in
-            "Toggle Debug Mode")
-                if [[ "$LEONARDO_DEBUG" == "true" ]]; then
-                    LEONARDO_DEBUG=false
-                    echo -e "\n${GREEN}Debug mode disabled${COLOR_RESET}"
-                else
-                    LEONARDO_DEBUG=true
-                    echo -e "\n${GREEN}Debug mode enabled${COLOR_RESET}"
-                fi
-                echo -e "\n${DIM}Press Enter to continue...${COLOR_RESET}"
-                read -r
+        case "$choice" in
+            "🚀 Start CLI Chat")
+                handle_chat_command
+                read -p "Press Enter to continue..."
                 ;;
-            "Configure Model Path")
-                echo -e "\n${CYAN}Current model path: ${LEONARDO_MODELS_DIR}${COLOR_RESET}"
-                echo -n "Enter new path (or press Enter to keep current): "
-                read -r new_path
-                if [[ -n "$new_path" ]]; then
-                    export LEONARDO_MODELS_DIR="$new_path"
-                    echo -e "${GREEN}Model path updated!${COLOR_RESET}"
-                fi
-                echo -e "\n${DIM}Press Enter to continue...${COLOR_RESET}"
-                read -r
+            "🤖 Select AI Model")
+                handle_model_selection_menu
                 ;;
-            "Network Settings")
-                echo -e "\n${YELLOW}Network configuration coming soon!${COLOR_RESET}"
-                echo -e "\n${DIM}Press Enter to continue...${COLOR_RESET}"
-                read -r
+            "💾 View Chat History")
+                view_chat_history
+                read -p "Press Enter to continue..."
                 ;;
-            "Security Options")
-                echo -e "\n${YELLOW}Security options coming soon!${COLOR_RESET}"
-                echo -e "\n${DIM}Press Enter to continue...${COLOR_RESET}"
-                read -r
-                ;;
-            "Back to Main Menu")
+            "🔙 Back to Main Menu"|"")
                 break
                 ;;
         esac
     done
+}
+
+# Web chat menu
+handle_web_chat_menu() {
+    while true; do
+        MENU_POSITION=1
+        local choice=$(show_menu "Web Chat Interface" \
+            "🚀 Start Web Chat Server" \
+            "🛑 Stop Web Chat Server" \
+            "📊 Check Server Status" \
+            "🔙 Back to Main Menu")
+        
+        case "$choice" in
+            "🚀 Start Web Chat Server")
+                echo -e "${CYAN}Starting web chat server...${COLOR_RESET}"
+                handle_chat_command "web"
+                echo -e "${GREEN}Web chat available at: http://localhost:8080${COLOR_RESET}"
+                read -p "Press Enter to continue..."
+                ;;
+            "🛑 Stop Web Chat Server")
+                handle_chat_command "stop"
+                read -p "Press Enter to continue..."
+                ;;
+            "📊 Check Server Status")
+                handle_chat_command "status"
+                read -p "Press Enter to continue..."
+                ;;
+            "🔙 Back to Main Menu"|"")
+                break
+                ;;
+        esac
+    done
+}
+
+# Model management menu
+handle_model_management_menu() {
+    while true; do
+        MENU_POSITION=1
+        local choice=$(show_menu "Model Management" \
+            "📥 Download New Model" \
+            "📋 View Available Models (Live List)" \
+            "🔍 Check Model Status (USB vs Local)" \
+            "🌐 Use Custom Model Registry" \
+            "🗑️  Remove Model" \
+            "🔙 Back to Main Menu")
+        
+        case "$choice" in
+            "📥 Download New Model")
+                handle_model_download_menu
+                ;;
+            "📋 View Available Models (Live List)")
+                echo -e "${CYAN}Fetching latest models...${COLOR_RESET}"
+                local models_json=$(get_dynamic_models "ollama" 2>/dev/null)
+                if command -v jq &>/dev/null && [[ -n "$models_json" ]]; then
+                    echo "$models_json" | jq -r '.models[] | "• \(.name) - \(.size) - \(.description // "")"' 2>/dev/null
+                else
+                    echo -e "${YELLOW}Live model list unavailable. Showing defaults:${COLOR_RESET}"
+                    echo "• llama3.2:1b - 1GB - Compact Llama model"
+                    echo "• qwen2.5:3b - 2GB - Alibaba's Qwen 2.5"
+                    echo "• mistral:7b - 4GB - Mistral 7B"
+                fi
+                read -p "Press Enter to continue..."
+                ;;
+            "🔍 Check Model Status (USB vs Local)")
+                if command -v check_usb_models &>/dev/null; then
+                    check_usb_models
+                else
+                    echo -e "${YELLOW}Checking model locations...${COLOR_RESET}"
+                    echo
+                    echo "Local models (Ollama):"
+                    ollama list 2>/dev/null || echo "  No local models or Ollama not installed"
+                    echo
+                    echo "USB models:"
+                    if [[ -n "$LEONARDO_USB_MOUNT" ]] && [[ -d "$LEONARDO_USB_MOUNT/leonardo/models" ]]; then
+                        echo -e "${GREEN}✓ Installed on USB${COLOR_RESET}"
+                        echo "  Location: $LEONARDO_USB_MOUNT/leonardo/models"
+                        if [[ -x "$LEONARDO_USB_MOUNT/leonardo/tools/ollama/bin/ollama" ]]; then
+                            echo -e "${GREEN}✓ Ollama binary present and executable${COLOR_RESET}"
+                        fi
+                        if [[ -d "$LEONARDO_USB_MOUNT/leonardo/tools/ollama/models" ]]; then
+                            local model_count=$(ls "$LEONARDO_USB_MOUNT/leonardo/tools/ollama/models" 2>/dev/null | wc -l)
+                            echo "  Models stored: $model_count"
+                        fi
+                    else
+                        echo -e "${YELLOW}⚠ Not installed${COLOR_RESET}"
+                        echo "  Use 'Install Portable Ollama to USB' to set up"
+                    fi
+                fi
+                read -p "Press Enter to continue..."
+                ;;
+            "🌐 Use Custom Model Registry")
+                echo -e "${CYAN}Custom Model Registry${COLOR_RESET}"
+                echo "Enter a URL to your custom model registry JSON file."
+                echo "Leave blank to cancel."
+                echo
+                read -p "Registry URL: " url
+                if [[ -n "$url" ]]; then
+                    export LEONARDO_MODEL_REGISTRY="$url"
+                    echo -e "${GREEN}✓ Custom registry set: $url${COLOR_RESET}"
+                fi
+                read -p "Press Enter to continue..."
+                ;;
+            "🗑️  Remove Model")
+                handle_model_removal_menu
+                ;;
+            "🔙 Back to Main Menu"|"")
+                break
+                ;;
+        esac
+    done
+}
+
+# Model download with dynamic list
+handle_model_download_menu() {
+    if command -v select_model_dynamic &>/dev/null; then
+        local selected_model=$(select_model_dynamic "Select a model to download:")
+        if [[ -n "$selected_model" ]] && [[ "$selected_model" != "⏭️  Skip" ]]; then
+            echo -e "${CYAN}Selected model: $selected_model${COLOR_RESET}"
+            echo
+            
+            # Ask where to download
+            MENU_POSITION=1
+            local location=$(show_menu "Download Location" \
+                "💻 Local (this computer only)" \
+                "💾 USB (portable)" \
+                "🔙 Cancel")
+            
+            case "$location" in
+                "💻 Local (this computer only)")
+                    if command -v ollama &>/dev/null; then
+                        echo -e "${CYAN}Downloading to local system...${COLOR_RESET}"
+                        ollama pull "$selected_model"
+                    else
+                        echo -e "${RED}Ollama not installed${COLOR_RESET}"
+                        echo "Install Ollama first: curl -fsSL https://ollama.com/install.sh | sh"
+                    fi
+                    ;;
+                "💾 USB (portable)")
+                    if [[ -n "$LEONARDO_USB_MOUNT" ]]; then
+                        source "${LEONARDO_BASE_DIR}/src/deployment/usb_deploy.sh"
+                        download_model_to_usb "$selected_model" "$LEONARDO_USB_MOUNT/leonardo/models"
+                    else
+                        echo -e "${YELLOW}No USB mounted. Use USB Deployment menu first.${COLOR_RESET}"
+                    fi
+                    ;;
+            esac
+            read -p "Press Enter to continue..."
+        fi
+    else
+        # Fallback to simple selection
+        echo -e "${YELLOW}Dynamic selection unavailable. Using default list.${COLOR_RESET}"
+        MENU_POSITION=1
+        local model=$(show_menu "Select Model" \
+            "llama3.2:1b" \
+            "qwen2.5:3b" \
+            "mistral:7b" \
+            "Cancel")
+        
+        if [[ "$model" != "Cancel" ]] && [[ -n "$model" ]]; then
+            ollama pull "$model" 2>/dev/null || echo -e "${RED}Failed to download${COLOR_RESET}"
+        fi
+        read -p "Press Enter to continue..."
+    fi
+}
+
+# Stealth mode menu
+handle_stealth_mode_menu() {
+    while true; do
+        MENU_POSITION=1
+        local choice=$(show_menu "🔐 Stealth Mode (Leave No Traces)" \
+            "🚀 Quick Stealth Chat" \
+            "💾 Install Portable Ollama to USB" \
+            "🔒 Run Portable Ollama Server" \
+            "📊 Check Portable Status" \
+            "📚 What is Stealth Mode?" \
+            "🔙 Back to Main Menu")
+        
+        case "$choice" in
+            "🚀 Quick Stealth Chat")
+                if [[ -n "$LEONARDO_USB_MOUNT" ]] && [[ -x "$LEONARDO_USB_MOUNT/leonardo/tools/ollama/stealth-chat.sh" ]]; then
+                    echo -e "${CYAN}Starting stealth chat session...${COLOR_RESET}"
+                    echo -e "${DIM}This leaves no traces on the host computer${COLOR_RESET}"
+                    "$LEONARDO_USB_MOUNT/leonardo/tools/ollama/stealth-chat.sh"
+                else
+                    echo -e "${YELLOW}Portable Ollama not installed on USB.${COLOR_RESET}"
+                    echo "Install it first using 'Install Portable Ollama to USB'"
+                fi
+                read -p "Press Enter to continue..."
+                ;;
+            "💾 Install Portable Ollama to USB")
+                if [[ -n "$LEONARDO_USB_MOUNT" ]]; then
+                    echo -e "${CYAN}Installing Portable Ollama...${COLOR_RESET}"
+                    if command -v install_ollama_portable &>/dev/null; then
+                        install_ollama_portable "$LEONARDO_USB_MOUNT"
+                    else
+                        echo -e "${RED}Portable installer not available${COLOR_RESET}"
+                    fi
+                else
+                    echo -e "${YELLOW}No USB mounted. Use USB Deployment menu first.${COLOR_RESET}"
+                fi
+                read -p "Press Enter to continue..."
+                ;;
+            "🔒 Run Portable Ollama Server")
+                if [[ -n "$LEONARDO_USB_MOUNT" ]] && [[ -x "$LEONARDO_USB_MOUNT/leonardo/tools/ollama/run-ollama.sh" ]]; then
+                    echo -e "${CYAN}Starting portable Ollama server...${COLOR_RESET}"
+                    echo -e "${DIM}Press Ctrl+C to stop${COLOR_RESET}"
+                    "$LEONARDO_USB_MOUNT/leonardo/tools/ollama/run-ollama.sh" serve
+                else
+                    echo -e "${YELLOW}Portable Ollama not found on USB${COLOR_RESET}"
+                fi
+                ;;
+            "📊 Check Portable Status")
+                echo -e "${CYAN}Portable Ollama Status:${COLOR_RESET}"
+                echo
+                if [[ -n "$LEONARDO_USB_MOUNT" ]] && [[ -d "$LEONARDO_USB_MOUNT/leonardo/tools/ollama" ]]; then
+                    echo -e "${GREEN}✓ Installed on USB${COLOR_RESET}"
+                    echo "  Location: $LEONARDO_USB_MOUNT/leonardo/tools/ollama"
+                    if [[ -x "$LEONARDO_USB_MOUNT/leonardo/tools/ollama/bin/ollama" ]]; then
+                        echo -e "${GREEN}✓ Ollama binary present and executable${COLOR_RESET}"
+                    fi
+                    if [[ -d "$LEONARDO_USB_MOUNT/leonardo/tools/ollama/models" ]]; then
+                        local model_count=$(ls "$LEONARDO_USB_MOUNT/leonardo/tools/ollama/models" 2>/dev/null | wc -l)
+                        echo "  Models stored: $model_count"
+                    fi
+                else
+                    echo -e "${YELLOW}⚠ Not installed${COLOR_RESET}"
+                    echo "  Use 'Install Portable Ollama to USB' to set up"
+                fi
+                read -p "Press Enter to continue..."
+                ;;
+            "📚 What is Stealth Mode?")
+                echo -e "${CYAN}═══ About Stealth Mode ═══${COLOR_RESET}"
+                echo
+                echo -e "${BOLD}What is it?${COLOR_RESET}"
+                echo "Stealth mode runs AI entirely from your USB drive without:"
+                echo "• Installing anything on the host computer"
+                echo "• Leaving any files, logs, or traces behind"
+                echo "• Requiring administrator/sudo privileges"
+                echo
+                echo -e "${BOLD}Perfect for:${COLOR_RESET}"
+                echo "• Public computers (libraries, internet cafes)"
+                echo "• Work computers with restrictions"
+                echo "• Privacy-conscious users"
+                echo "• Testing without commitment"
+                echo
+                echo -e "${BOLD}How it works:${COLOR_RESET}"
+                echo "1. Ollama and models are stored on your USB"
+                echo "2. All data stays in USB's temporary folders"
+                echo "3. Nothing touches the host computer's storage"
+                echo "4. Remove USB = remove all traces"
+                echo
+                read -p "Press Enter to continue..."
+                ;;
+            "🔙 Back to Main Menu"|"")
+                break
+                ;;
+        esac
+    done
+}
+
+# USB deployment menu
+handle_usb_menu() {
+    while true; do
+        MENU_POSITION=1
+        local choice=$(show_menu "USB Deployment" \
+            "🚀 Deploy Leonardo to USB" \
+            "📊 Check USB Status" \
+            "🔐 Setup Portable Mode" \
+            "📦 Backup to USB" \
+            "🔙 Back to Main Menu")
+        
+        case "$choice" in
+            "🚀 Deploy Leonardo to USB")
+                echo -e "${CYAN}Starting USB deployment...${COLOR_RESET}"
+                leonardo deploy usb
+                read -p "Press Enter to continue..."
+                ;;
+            "📊 Check USB Status")
+                if [[ -n "$LEONARDO_USB_MOUNT" ]]; then
+                    echo -e "${GREEN}USB Mounted: $LEONARDO_USB_MOUNT${COLOR_RESET}"
+                    echo
+                    if [[ -d "$LEONARDO_USB_MOUNT/leonardo" ]]; then
+                        echo "Leonardo installation found:"
+                        du -sh "$LEONARDO_USB_MOUNT/leonardo"
+                        echo
+                        echo "Contents:"
+                        ls -la "$LEONARDO_USB_MOUNT/leonardo/"
+                    else
+                        echo -e "${YELLOW}Leonardo not installed on USB${COLOR_RESET}"
+                    fi
+                else
+                    echo -e "${YELLOW}No USB currently mounted${COLOR_RESET}"
+                    echo "Mount a USB first using 'Deploy Leonardo to USB'"
+                fi
+                read -p "Press Enter to continue..."
+                ;;
+            "🔐 Setup Portable Mode")
+                if [[ -n "$LEONARDO_USB_MOUNT" ]]; then
+                    echo -e "${CYAN}Setting up portable mode...${COLOR_RESET}"
+                    source "${LEONARDO_BASE_DIR}/src/models/portable_ollama.sh" 2>/dev/null
+                    if command -v install_ollama_portable &>/dev/null; then
+                        install_ollama_portable "$LEONARDO_USB_MOUNT"
+                    fi
+                else
+                    echo -e "${YELLOW}Mount a USB first${COLOR_RESET}"
+                fi
+                read -p "Press Enter to continue..."
+                ;;
+            "📦 Backup to USB")
+                echo -e "${CYAN}Backup feature coming soon!${COLOR_RESET}"
+                read -p "Press Enter to continue..."
+                ;;
+            "🔙 Back to Main Menu"|"")
+                break
+                ;;
+        esac
+    done
+}
+
+# Tools menu
+handle_tools_menu() {
+    while true; do
+        MENU_POSITION=1
+        local choice=$(show_menu "System Tools" \
+            "🔍 System Check" \
+            "📊 Resource Monitor" \
+            "🛠️  Install Dependencies" \
+            "🔙 Back to Main Menu")
+        
+        case "$choice" in
+            "🔍 System Check")
+                leonardo doctor
+                read -p "Press Enter to continue..."
+                ;;
+            "📊 Resource Monitor")
+                echo -e "${CYAN}System Resources:${COLOR_RESET}"
+                echo
+                echo "CPU: $(top -bn1 | grep "Cpu(s)" | awk '{print $2}' | cut -d'%' -f1)% used"
+                echo "Memory: $(free -h | awk '/^Mem:/ {print $3 " / " $2}')"
+                echo "Disk: $(df -h / | awk 'NR==2 {print $3 " / " $2 " (" $5 " used)"}')"
+                read -p "Press Enter to continue..."
+                ;;
+            "🛠️  Install Dependencies")
+                leonardo doctor --fix
+                read -p "Press Enter to continue..."
+                ;;
+            "🔙 Back to Main Menu"|"")
+                break
+                ;;
+        esac
+    done
+}
+
+# Help menu
+handle_docs_menu() {
+    while true; do
+        MENU_POSITION=1
+        local choice=$(show_menu "Help & Documentation" \
+            "📖 Quick Start Guide" \
+            "💡 Tips & Tricks" \
+            "🆘 Troubleshooting" \
+            "📧 Contact Support" \
+            "🔙 Back to Main Menu")
+        
+        case "$choice" in
+            "📖 Quick Start Guide")
+                echo -e "${CYAN}═══ Quick Start Guide ═══${COLOR_RESET}"
+                echo
+                echo "1. ${BOLD}Chat with AI:${COLOR_RESET}"
+                echo "   Select 'Chat with AI' from the main menu"
+                echo
+                echo "2. ${BOLD}Download Models:${COLOR_RESET}"
+                echo "   Go to 'Model Management' > 'Download New Model'"
+                echo
+                echo "3. ${BOLD}Use Stealth Mode:${COLOR_RESET}"
+                echo "   Perfect for using AI without installing anything"
+                echo
+                echo "4. ${BOLD}Deploy to USB:${COLOR_RESET}"
+                echo "   Take Leonardo anywhere with USB deployment"
+                read -p "Press Enter to continue..."
+                ;;
+            "💡 Tips & Tricks")
+                echo -e "${CYAN}═══ Tips & Tricks ═══${COLOR_RESET}"
+                echo
+                echo "• Use smaller models (1b-3b) for faster responses"
+                echo "• Portable mode leaves no traces on the computer"
+                echo "• Custom registries let you use private models"
+                echo "• USB deployment works on any Linux/Mac system"
+                echo "• Web chat interface works on phones/tablets too"
+                read -p "Press Enter to continue..."
+                ;;
+            "🆘 Troubleshooting")
+                echo -e "${CYAN}═══ Common Issues ═══${COLOR_RESET}"
+                echo
+                echo "Q: Models not downloading?"
+                echo "A: Check internet connection and try again"
+                echo
+                echo "Q: USB not detected?"
+                echo "A: Make sure USB is formatted as FAT32 or ext4"
+                echo
+                echo "Q: Chat not working?"
+                echo "A: Run 'System Check' to verify dependencies"
+                read -p "Press Enter to continue..."
+                ;;
+            "📧 Contact Support")
+                echo -e "${CYAN}Support Information:${COLOR_RESET}"
+                echo
+                echo "GitHub: https://github.com/leonardo-ai/leonardo"
+                echo "Email: support@leonardo-ai.com"
+                echo "Discord: https://discord.gg/leonardo-ai"
+                read -p "Press Enter to continue..."
+                ;;
+            "🔙 Back to Main Menu"|"")
+                break
+                ;;
+        esac
+    done
+}
+
+# Helper function for model removal
+handle_model_removal_menu() {
+    echo -e "${CYAN}Model Removal${COLOR_RESET}"
+    echo -e "${YELLOW}This feature is coming soon!${COLOR_RESET}"
+    read -p "Press Enter to continue..."
+}
+
+# Helper function for model selection
+handle_model_selection_menu() {
+    if command -v select_model_dynamic &>/dev/null; then
+        local selected=$(select_model_dynamic "Select default chat model:")
+        if [[ -n "$selected" ]] && [[ "$selected" != "⏭️  Skip" ]]; then
+            echo -e "${GREEN}Default model set to: $selected${COLOR_RESET}"
+            export LEONARDO_DEFAULT_MODEL="$selected"
+        fi
+    else
+        echo -e "${YELLOW}Model selection unavailable${COLOR_RESET}"
+    fi
+    read -p "Press Enter to continue..."
+}
+
+# Helper to view chat history
+view_chat_history() {
+    local history_dir="${LEONARDO_BASE_DIR}/chat_history"
+    if [[ -d "$history_dir" ]]; then
+        echo -e "${CYAN}Recent Chat Sessions:${COLOR_RESET}"
+        ls -lt "$history_dir"/*.txt 2>/dev/null | head -10 | while read -r line; do
+            echo "  $line"
+        done
+    else
+        echo -e "${YELLOW}No chat history found${COLOR_RESET}"
+    fi
 }
 
 # Run system tests
@@ -915,14 +1389,15 @@ handle_exit() {
 
 # Check if any models are installed
 check_installed_models() {
-    # Check for models in default location
-    if [[ -d "$LEONARDO_MODEL_DIR" ]] && [[ -n "$(ls -A "$LEONARDO_MODEL_DIR" 2>/dev/null)" ]]; then
+    # Check Ollama models
+    if command_exists ollama && ollama list 2>/dev/null | grep -q "^[a-zA-Z]"; then
         return 0
     fi
     
-    # Check for Ollama models
-    if command_exists ollama && ollama list 2>/dev/null | grep -q "^[a-zA-Z]"; then
-        return 0
+    # Check local models
+    if [[ -d "$LEONARDO_MODEL_DIR" ]]; then
+        local local_models=$(find "$LEONARDO_MODEL_DIR" -name "*.gguf" 2>/dev/null | wc -l)
+        [[ $local_models -gt 0 ]] && return 0
     fi
     
     return 1

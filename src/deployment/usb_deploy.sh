@@ -574,21 +574,64 @@ download_model_to_usb() {
         done; then
             # Now export the model to USB
             echo -e "${CYAN}Exporting model to USB...${COLOR_RESET}"
-            local model_file="$target_dir/${model_id}-${variant}.gguf"
             
-            # Try to export using ollama show
-            if ollama show "${model_id}:${variant}" --modelfile > "$target_dir/${model_id}-${variant}.modelfile" 2>/dev/null; then
-                echo -e "${GREEN}✓ Model exported to USB${COLOR_RESET}"
+            # Find the actual model files in Ollama's storage
+            local ollama_models_dir="$HOME/.ollama/models"
+            local model_exported=false
+            
+            # Try to find and copy the model blobs
+            if [[ -d "$ollama_models_dir" ]]; then
+                echo "Searching for model files in Ollama storage..."
                 
-                # Create a simple info file
+                # Get model manifest to find the actual blob files
+                local manifest_hash=$(ollama list | grep "${model_id}:${variant}" | awk '{print $2}' | head -1)
+                
+                if [[ -n "$manifest_hash" ]]; then
+                    # Find all related blob files
+                    local blob_count=0
+                    find "$ollama_models_dir/blobs" -type f -name "*" 2>/dev/null | while read -r blob_file; do
+                        # Copy large files that are likely model weights
+                        local file_size=$(stat -f%z "$blob_file" 2>/dev/null || stat -c%s "$blob_file" 2>/dev/null)
+                        if [[ "$file_size" -gt 10485760 ]]; then  # Files > 10MB
+                            local blob_name=$(basename "$blob_file")
+                            echo "Copying model file: $blob_name ($(numfmt --to=iec-i --suffix=B "$file_size" 2>/dev/null || echo "$file_size bytes"))"
+                            cp "$blob_file" "$target_dir/${model_id}-${variant}-${blob_name}.bin"
+                            ((blob_count++))
+                        fi
+                    done
+                    
+                    if [[ $blob_count -gt 0 ]]; then
+                        model_exported=true
+                        echo -e "${GREEN}✓ Exported $blob_count model files to USB${COLOR_RESET}"
+                    fi
+                fi
+            fi
+            
+            # Also save the modelfile for reference
+            if ollama show "${model_id}:${variant}" --modelfile > "$target_dir/${model_id}-${variant}.modelfile" 2>/dev/null; then
+                # Create info file with proper instructions
                 cat > "$target_dir/${model_id}-${variant}.info" <<EOF
 Model: ${model_id}:${variant}
 Downloaded: $(date)
 Type: Ollama Model
 Location: $target_dir
-Note: Use 'ollama run ${model_id}:${variant}' to run this model
+Size: $(du -sh "$target_dir/${model_id}-${variant}"*.bin 2>/dev/null | awk '{sum+=$1} END {print sum "MB"}')
+
+To use this model on another computer:
+1. Install Ollama on the target computer
+2. Copy model files from USB to Ollama directory
+3. Or use Leonardo's built-in model loader
+
+Note: Model weights are stored on USB for portability.
 EOF
-                return 0
+                
+                if [[ "$model_exported" == true ]]; then
+                    echo -e "${GREEN}✓ Model successfully exported to USB${COLOR_RESET}"
+                    return 0
+                else
+                    echo -e "${YELLOW}⚠ Model downloaded but couldn't export weights to USB${COLOR_RESET}"
+                    echo -e "${YELLOW}  The model will only work on this computer${COLOR_RESET}"
+                fi
             else
                 echo -e "${YELLOW}⚠ Could not export model file, using fallback download${COLOR_RESET}"
             fi
@@ -616,6 +659,18 @@ EOF
         "llama3.2:1b")
             model_url="https://huggingface.co/lmstudio-community/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf"
             ;;
+        "qwen2.5:3b")
+            model_url="https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf"
+            ;;
+        "gemma2:2b")
+            model_url="https://huggingface.co/lmstudio-community/gemma-2-2b-it-GGUF/resolve/main/gemma-2-2b-it-Q4_K_M.gguf"
+            ;;
+        "codellama:7b")
+            model_url="https://huggingface.co/TheBloke/CodeLlama-7B-GGUF/resolve/main/codellama-7b.Q4_K_M.gguf"
+            ;;
+        "llama3.1:8b")
+            model_url="https://huggingface.co/lmstudio-community/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf"
+            ;;
         *)
             echo -e "${RED}✗ Model ${full_model} not found in registry${COLOR_RESET}"
             echo -e "${YELLOW}Available models for direct download:${COLOR_RESET}"
@@ -623,6 +678,11 @@ EOF
             echo "  - llama2:7b"
             echo "  - mistral:7b"
             echo "  - llama3.2:1b"
+            echo "  - qwen2.5:3b"
+            echo "  - gemma2:2b"
+            echo "  - codellama:7b"
+            echo "  - llama3.1:8b"
+            echo -e "${DIM}Note: Other models require Ollama for download${COLOR_RESET}"
             return 1
             ;;
     esac
@@ -905,4 +965,129 @@ create_leonardo_structure() {
     done
     
     echo -e "${GREEN}✓ Leonardo directory structure created${COLOR_RESET}"
+}
+
+deploy_to_usb() {
+    local target_device="$1"
+    
+    # Validate USB device
+    if ! validate_usb_device "$target_device"; then
+        return 1
+    fi
+    
+    # Mount or get mount point
+    local mount_point=""
+    mount_point=$(mount_device "$target_device")
+    
+    if [[ -z "$mount_point" ]]; then
+        echo -e "${RED}Failed to mount USB device${COLOR_RESET}"
+        return 1
+    fi
+    
+    export LEONARDO_USB_MOUNT="$mount_point"
+    echo -e "${GREEN}USB mounted at: $mount_point${COLOR_RESET}"
+    
+    # Ask about portable mode
+    echo
+    echo -e "${CYAN}Deployment Mode:${COLOR_RESET}"
+    echo "1) Standard - Use system Ollama (requires installation on target)"
+    echo "2) Portable - Install Ollama on USB (stealth mode, no traces)"
+    echo
+    read -p "Select mode (1-2): " deploy_mode
+    
+    local portable_mode=false
+    if [[ "$deploy_mode" == "2" ]]; then
+        portable_mode=true
+        echo -e "${YELLOW}Portable mode selected - Ollama will be installed on USB${COLOR_RESET}"
+    fi
+    
+    # Create Leonardo directory structure
+    local leonardo_dir="$mount_point/leonardo"
+    echo -e "${CYAN}Creating Leonardo directory structure...${COLOR_RESET}"
+    
+    mkdir -p "$leonardo_dir"/{bin,config,models,logs,data,tools}
+    
+    # Copy Leonardo executable
+    echo -e "${CYAN}Copying Leonardo executable...${COLOR_RESET}"
+    local leonardo_script="${LEONARDO_BASE_DIR}/leonardo.sh"
+    
+    if [[ ! -f "$leonardo_script" ]]; then
+        echo -e "${YELLOW}Building Leonardo executable...${COLOR_RESET}"
+        (cd "$LEONARDO_BASE_DIR" && ./assembly/build-simple.sh)
+    fi
+    
+    if [[ -f "$leonardo_script" ]]; then
+        cp "$leonardo_script" "$leonardo_dir/bin/leonardo"
+        chmod +x "$leonardo_dir/bin/leonardo"
+        echo -e "${GREEN}✓ Leonardo executable copied${COLOR_RESET}"
+    else
+        echo -e "${RED}Leonardo executable not found${COLOR_RESET}"
+        return 1
+    fi
+    
+    # Copy web assets
+    if [[ -d "${LEONARDO_BASE_DIR}/src/ui" ]]; then
+        echo -e "${CYAN}Copying web interface assets...${COLOR_RESET}"
+        mkdir -p "$leonardo_dir/web"
+        cp "${LEONARDO_BASE_DIR}/src/ui/web_chat.html" "$leonardo_dir/web/" 2>/dev/null || true
+        echo -e "${GREEN}✓ Web assets copied${COLOR_RESET}"
+    fi
+    
+    # Install portable Ollama if requested
+    if [[ "$portable_mode" == true ]]; then
+        source "${LEONARDO_BASE_DIR}/src/models/portable_ollama.sh"
+        install_ollama_portable "$mount_point"
+    fi
+    
+    # Model selection with dynamic list
+    echo
+    echo -e "${CYAN}Model Selection${COLOR_RESET}"
+    echo -e "${DIM}Leonardo can download AI models to the USB for offline use${COLOR_RESET}"
+    echo
+    
+    # Source dynamic models module
+    source "${LEONARDO_BASE_DIR}/src/models/dynamic_models.sh" 2>/dev/null || true
+    
+    # Ask about model download
+    local download_models=""
+    echo "Would you like to download AI models to the USB?"
+    echo "1) Yes - Select from live model list"
+    echo "2) Yes - Use custom model registry"
+    echo "3) No - Skip model download"
+    read -p "Choice (1-3): " model_choice
+    
+    case "$model_choice" in
+        1)
+            # Dynamic model selection
+            if command -v select_model_dynamic &>/dev/null; then
+                while true; do
+                    local selected_model=$(select_model_dynamic "Select a model to download:")
+                    if [[ -z "$selected_model" ]] || [[ "$selected_model" == "⏭️  Skip" ]]; then
+                        break
+                    fi
+                    
+                    echo -e "${CYAN}Downloading $selected_model...${COLOR_RESET}"
+                    if download_model_to_usb "$selected_model" "$leonardo_dir/models"; then
+                        echo -e "${GREEN}✓ Model downloaded successfully${COLOR_RESET}"
+                    fi
+                    
+                    echo
+                    read -p "Download another model? (y/n): " another
+                    [[ "$another" != "y" ]] && break
+                done
+            else
+                # Fallback to static selection
+                select_and_download_models "$leonardo_dir/models"
+            fi
+            ;;
+        2)
+            # Custom registry
+            read -p "Enter custom model registry URL: " custom_url
+            export LEONARDO_MODEL_REGISTRY="$custom_url"
+            select_and_download_models "$leonardo_dir/models"
+            ;;
+        3)
+            echo -e "${YELLOW}Skipping model download${COLOR_RESET}"
+            ;;
+    esac
 }
