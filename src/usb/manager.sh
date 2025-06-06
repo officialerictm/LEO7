@@ -177,14 +177,20 @@ mount_usb_drive() {
     
     case "$platform" in
         "macos")
-            # macOS auto-mounts, but we can force it
-            if ! diskutil mount "$device" >/dev/null 2>&1; then
-                log_message "ERROR" "Failed to mount device"
-                return 1
-            fi
-            
-            # Get actual mount point
+            # Check if already mounted
             LEONARDO_USB_MOUNT=$(diskutil info "$device" 2>/dev/null | grep "Mount Point:" | cut -d: -f2- | xargs)
+            if [[ -z "$LEONARDO_USB_MOUNT" || "$LEONARDO_USB_MOUNT" == "not mounted" ]]; then
+                if ! diskutil mountDisk "$device" >/dev/null 2>&1; then
+                    local part="${device}s1"
+                    if ! diskutil mount "$part" >/dev/null 2>&1; then
+                        log_message "ERROR" "Failed to mount device"
+                        return 1
+                    fi
+                    LEONARDO_USB_MOUNT=$(diskutil info "$part" 2>/dev/null | grep "Mount Point:" | cut -d: -f2- | xargs)
+                else
+                    LEONARDO_USB_MOUNT=$(diskutil info "$device" 2>/dev/null | grep "Mount Point:" | cut -d: -f2- | xargs)
+                fi
+            fi
             export LEONARDO_USB_MOUNT
             ;;
         "linux")
@@ -250,7 +256,7 @@ unmount_usb_drive() {
     
     case "$platform" in
         "macos")
-            if diskutil unmount "$device" >/dev/null 2>&1; then
+            if diskutil unmountDisk "$device" >/dev/null 2>&1 || diskutil unmount "${device}s1" >/dev/null 2>&1; then
                 log_message "INFO" "USB drive unmounted"
                 return 0
             fi
