@@ -185,6 +185,9 @@ mount_usb_drive() {
             # Check if already mounted (partition or disk)
             LEONARDO_USB_MOUNT=$(diskutil info "$device" 2>/dev/null | grep "Mount Point:" | cut -d: -f2- | xargs)
             if [[ -z "$LEONARDO_USB_MOUNT" || "$LEONARDO_USB_MOUNT" =~ [Nn]ot\ mounted ]]; then
+            # Check if already mounted
+            LEONARDO_USB_MOUNT=$(diskutil info "$device" 2>/dev/null | grep "Mount Point:" | cut -d: -f2- | xargs)
+            if [[ -z "$LEONARDO_USB_MOUNT" || "$LEONARDO_USB_MOUNT" == "not mounted" ]]; then
                 if ! diskutil mountDisk "$device" >/dev/null 2>&1; then
                     local part="${device}s1"
                     if ! diskutil mount "$part" >/dev/null 2>&1; then
@@ -196,6 +199,7 @@ mount_usb_drive() {
                     local part="$device"
                     [[ ! "$device" =~ s[0-9]+$ ]] && part="${device}s1"
                     LEONARDO_USB_MOUNT=$(diskutil info "$part" 2>/dev/null | grep "Mount Point:" | cut -d: -f2- | xargs)
+                    LEONARDO_USB_MOUNT=$(diskutil info "$device" 2>/dev/null | grep "Mount Point:" | cut -d: -f2- | xargs)
                 fi
             fi
             export LEONARDO_USB_MOUNT
