@@ -957,15 +957,28 @@ get_chat_models() {
 handle_chat_command() {
     # Get available models  
     local models=()
-    if command_exists ollama; then
-        mapfile -t models < <(ollama list 2>/dev/null | tail -n +2 | awk '{print $1}')
-    fi
     
-    # Check for local models in LEONARDO_MODEL_DIR
-    if [[ -d "$LEONARDO_MODEL_DIR" ]]; then
-        while IFS= read -r -d '' model_file; do
-            models+=("local:$(basename "$model_file")")
-        done < <(find "$LEONARDO_MODEL_DIR" -name "*.gguf" -print0 2>/dev/null)
+    # Check USB mode - only show USB models when running from USB
+    if is_usb_deployment; then
+        # Only check for models on USB
+        if [[ -d "$LEONARDO_MODEL_DIR" ]]; then
+            while IFS= read -r -d '' model_file; do
+                local model_name=$(basename "$model_file" .gguf | sed 's/-[0-9]*B-.*$//')
+                models+=("usb:$model_name")
+            done < <(find "$LEONARDO_MODEL_DIR" -name "*.gguf" -print0 2>/dev/null)
+        fi
+    else
+        # Normal mode - check Ollama first
+        if command_exists ollama; then
+            mapfile -t models < <(ollama list 2>/dev/null | tail -n +2 | awk '{print $1}')
+        fi
+        
+        # Check for local models in LEONARDO_MODEL_DIR
+        if [[ -d "$LEONARDO_MODEL_DIR" ]]; then
+            while IFS= read -r -d '' model_file; do
+                models+=("local:$(basename "$model_file")")
+            done < <(find "$LEONARDO_MODEL_DIR" -name "*.gguf" -print0 2>/dev/null)
+        fi
     fi
     
     if [[ ${#models[@]} -eq 0 ]]; then
@@ -1004,15 +1017,127 @@ start_chat_interface() {
         # Use Ollama for chat
         local model_name="${model#ollama:}"
         ollama run "$model_name"
-    elif [[ "$model" == local:* ]]; then
-        # Use llama.cpp for local models
-        echo -e "${YELLOW}Local model chat coming soon!${COLOR_RESET}"
-        echo -e "${DIM}This will use llama.cpp for inference${COLOR_RESET}"
-        pause
+    elif [[ "$model" == local:* ]] || [[ "$model" == usb:* ]]; then
+        # Use llama.cpp for local/USB models
+        local model_prefix="${model%%:*}"
+        local model_name="${model#*:}"
+        
+        # Find the actual GGUF file
+        local model_file=""
+        if [[ -d "$LEONARDO_MODEL_DIR" ]]; then
+            # Look for exact match first
+            model_file=$(find "$LEONARDO_MODEL_DIR" -name "${model_name}.gguf" -print -quit 2>/dev/null)
+            
+            # If not found, look for pattern match
+            if [[ -z "$model_file" ]]; then
+                model_file=$(find "$LEONARDO_MODEL_DIR" -name "${model_name}*.gguf" -print -quit 2>/dev/null)
+            fi
+        fi
+        
+        if [[ -n "$model_file" ]] && [[ -f "$model_file" ]]; then
+            # Check if we have llama.cpp server
+            if command -v llama-server &>/dev/null; then
+                echo -e "${CYAN}Starting local inference server...${COLOR_RESET}"
+                
+                # Start llama.cpp server
+                local server_port=8080
+                llama-server -m "$model_file" -c 2048 --port $server_port --host 127.0.0.1 &
+                local server_pid=$!
+                
+                # Wait for server to start
+                sleep 3
+                
+                # Simple chat loop using curl
+                echo -e "${GREEN}Chat ready! Server running on port $server_port${COLOR_RESET}"
+                echo
+                
+                while true; do
+                    read -p "You: " user_input
+                    
+                    if [[ "$user_input" == "exit" ]] || [[ "$user_input" == "quit" ]]; then
+                        break
+                    elif [[ "$user_input" == "clear" ]]; then
+                        clear
+                        continue
+                    fi
+                    
+                    echo -n "AI: "
+                    # Send request to llama.cpp server
+                    curl -s -X POST http://127.0.0.1:$server_port/completion \
+                        -H "Content-Type: application/json" \
+                        -d "{\"prompt\": \"User: $user_input\nAssistant:\", \"n_predict\": 256}" | \
+                        jq -r '.content' 2>/dev/null || echo "Error: Could not get response"
+                    echo
+                done
+                
+                # Stop server
+                kill $server_pid 2>/dev/null
+                
+            else
+                echo -e "${YELLOW}llama.cpp server not found!${COLOR_RESET}"
+                echo
+                
+                # Check for Python fallback
+                if command -v python3 &>/dev/null; then
+                    echo -e "${CYAN}Trying Python-based chat interface...${COLOR_RESET}"
+                    
+                    # Create a simple Python chat script
+                    local python_chat_script="/tmp/leonardo_chat_$$.py"
+                    cat > "$python_chat_script" << 'EOF'
+#!/usr/bin/env python3
+import sys
+import os
+
+print("Simple Leonardo Chat Interface (Python fallback)")
+print("=" * 50)
+print("Note: This is a basic interface. For better performance,")
+print("install llama.cpp: https://github.com/ggerganov/llama.cpp")
+print()
+print("Model file:", sys.argv[1])
+print()
+print("Type 'exit' or 'quit' to end the chat")
+print("=" * 50)
+print()
+
+# Simple echo bot for demonstration
+# In a real implementation, this would load and run the GGUF model
+while True:
+    try:
+        user_input = input("You: ")
+        if user_input.lower() in ['exit', 'quit']:
+            break
+        print("AI: I'm a placeholder response. To enable real AI responses,")
+        print("    please install llama.cpp or use Ollama models instead.")
+        print()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        break
+EOF
+                    
+                    python3 "$python_chat_script" "$model_file"
+                    rm -f "$python_chat_script"
+                else
+                    echo -e "${DIM}To enable chat, install llama.cpp:${COLOR_RESET}"
+                    echo -e "  git clone https://github.com/ggerganov/llama.cpp"
+                    echo -e "  cd llama.cpp && make"
+                    echo -e "  sudo make install"
+                    echo
+                    echo -e "${DIM}Model file: $model_file${COLOR_RESET}"
+                    pause
+                fi
+            fi
+        else
+            echo -e "${RED}Model file not found for: $model_name${COLOR_RESET}"
+            pause
+        fi
     else
-        # Fallback for other model types
-        echo -e "${YELLOW}Chat interface for $model coming soon!${COLOR_RESET}"
-        pause
+        # Direct Ollama model without prefix
+        if command_exists ollama; then
+            ollama run "$model"
+        else
+            echo -e "${RED}Ollama not available for model: $model${COLOR_RESET}"
+            pause
+        fi
     fi
 }
 

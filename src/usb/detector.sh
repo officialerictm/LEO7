@@ -281,12 +281,22 @@ is_usb_device() {
     local device="$1"
     local platform=$(detect_platform)
     
+    # Extract base device from partition (e.g., /dev/sdd1 -> /dev/sdd)
+    local base_device="$device"
+    if [[ "$device" =~ ^(/dev/[a-z]+)[0-9]+$ ]]; then
+        base_device="${BASH_REMATCH[1]}"
+    elif [[ "$device" =~ ^(/dev/nvme[0-9]+n[0-9]+)p[0-9]+$ ]]; then
+        base_device="${BASH_REMATCH[1]}"
+    elif [[ "$device" =~ ^(/dev/mmcblk[0-9]+)p[0-9]+$ ]]; then
+        base_device="${BASH_REMATCH[1]}"
+    fi
+    
     case "$platform" in
         "macos")
-            diskutil info "$device" 2>/dev/null | grep -q "Protocol:.*USB"
+            diskutil info "$base_device" 2>/dev/null | grep -q "Protocol:.*USB"
             ;;
         "linux")
-            udevadm info --query=all --name="$device" 2>/dev/null | grep -q "ID_BUS=usb"
+            udevadm info --query=all --name="$base_device" 2>/dev/null | grep -q "ID_BUS=usb"
             ;;
         "windows")
             wmic logicaldisk where "DeviceID='$device' and DriveType=2" get DeviceID 2>/dev/null | grep -q "$device"

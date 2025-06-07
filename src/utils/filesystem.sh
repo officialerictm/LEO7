@@ -103,6 +103,7 @@ format_usb_device() {
     local label="${3:-$LEONARDO_USB_LABEL}"
 
     log_message "INFO" "Formatting $device as $filesystem with label $label"
+    echo -e "${CYAN}→ Starting format of $device as $filesystem${COLOR_RESET}"
 
     # Unmount if mounted
     unmount_device "$device"
@@ -111,47 +112,215 @@ format_usb_device() {
     if [[ "$OSTYPE" == "linux-gnu"* ]]; then
         local partition="$device"
         if [[ "$device" =~ ^/dev/(sd[a-z]|nvme[0-9]+n[0-9]+)$ ]]; then
+            echo -e "${DIM}Creating partition table...${COLOR_RESET}"
+            
+            # Unmount any mounted partitions first
+            echo -e "${DIM}Unmounting any existing partitions on $device...${COLOR_RESET}"
+            
+            # Get base device name
+            local base_device=$(basename "$device")
+            
+            # First, try to unmount all mounted partitions
+            for part in $(lsblk -lno NAME,MOUNTPOINT | grep "^${base_device}[0-9]" | awk '{if ($2) print $1}'); do
+                local mount_point=$(lsblk -lno MOUNTPOINT "/dev/$part" 2>/dev/null || true)
+                if [[ -n "$mount_point" ]]; then
+                    echo -e "${DIM}  Unmounting /dev/$part from $mount_point...${COLOR_RESET}"
+                    sudo umount "/dev/$part" 2>/dev/null || true
+                fi
+            done
+            
+            # Force unmount any remaining mounts
+            for mount_point in $(mount | grep "$device" | awk '{print $3}'); do
+                echo -e "${DIM}  Force unmounting $mount_point...${COLOR_RESET}"
+                sudo umount -l "$mount_point" 2>/dev/null || true
+            done
+            
+            # Ensure device isn't in use by any process
+            if command -v lsof >/dev/null 2>&1; then
+                local device_in_use=$(sudo lsof "$device" 2>/dev/null || true)
+                if [[ -n "$device_in_use" ]]; then
+                    echo -e "${YELLOW}Device $device is in use by processes${COLOR_RESET}"
+                    echo -e "${DIM}  Attempting to close processes...${COLOR_RESET}"
+                    sudo lsof -t "$device" 2>/dev/null | xargs -r sudo kill -9 2>/dev/null || true
+                fi
+            fi
+            
+            # Give the system a moment to process the unmounts
+            sleep 2
+            
+            # Wipe existing filesystem signatures first
+            if command -v wipefs >/dev/null 2>&1; then
+                echo -e "${DIM}Wiping existing filesystem signatures...${COLOR_RESET}"
+                if ! wipefs -a -f "$device" >/dev/null 2>&1; then
+                    # Try with sudo if permission denied
+                    sudo wipefs -a -f "$device" >/dev/null 2>&1 || true
+                fi
+                sync
+                sleep 1
+            fi
+            
             if command -v parted >/dev/null 2>&1; then
-                parted -s "$device" mklabel gpt >/dev/null 2>&1
-                parted -s "$device" mkpart primary 0% 100% >/dev/null 2>&1
-                parted -s "$device" set 1 msftdata on >/dev/null 2>&1
+                if ! parted -s "$device" mklabel gpt >/dev/null 2>&1; then
+                    # Try with sudo if permission denied
+                    sudo parted -s "$device" mklabel gpt >/dev/null 2>&1
+                fi
+                sudo parted -s "$device" mkpart primary 0% 100% >/dev/null 2>&1
+                sudo parted -s "$device" set 1 msftdata on >/dev/null 2>&1
+                
+                # Force kernel to re-read partition table
+                sync
                 if command -v partprobe >/dev/null 2>&1; then
                     partprobe "$device" >/dev/null 2>&1
                 fi
+                
+                # Wait for partition to appear
+                sleep 2
             else
                 log_message "ERROR" "parted is required to format USB drives"
+                echo -e "${RED}Error: parted is required to format USB drives${COLOR_RESET}"
                 return 1
             fi
-            partition="${device}1"
-            [[ -b "${device}p1" ]] && partition="${device}p1"
+            
+            # Determine partition path based on device type
+            if [[ "$device" == *"nvme"* ]] || [[ "$device" == *"mmcblk"* ]]; then
+                partition="${device}p1"
+            else
+                partition="${device}1"
+            fi
+            
+            echo -e "${GREEN}✓ Partition ready: $partition${COLOR_RESET}"
+            
+            case "$filesystem" in
+                exfat)
+                    # Force kernel to re-read partition table immediately
+                    sudo partprobe "$device" 2>/dev/null || true
+                    
+                    # Check for mkfs.exfat
+                    if ! command -v mkfs.exfat >/dev/null 2>&1; then
+                        echo -e "${RED}mkfs.exfat not found.${COLOR_RESET}"
+                        install_missing_filesystem_tool "exfat" || return 1
+                        # Retry formatting after installation
+                        format_usb_device "$device" "$filesystem" "$label"
+                        return $?
+                    fi
+                    
+                    # Try to format immediately without waiting
+                    echo -e "${DIM}Using mkfs.exfat...${COLOR_RESET}"
+                    echo -e "${YELLOW}Root privileges required for formatting.${COLOR_RESET}"
+                    echo -e "${BLUE}Please enter your password when prompted:${COLOR_RESET}"
+                    
+                    if sudo mkfs.exfat -n "$label" "$partition"; then
+                        echo -e "${GREEN}✓ Successfully formatted with exFAT${COLOR_RESET}"
+                    else
+                        # If immediate format fails, try a different approach
+                        echo -e "${YELLOW}Initial format failed, trying alternative approach...${COLOR_RESET}"
+                        
+                        # First, check what's using the device
+                        echo -e "${DIM}Checking what's using the device...${COLOR_RESET}"
+                        local device_users=$(sudo lsof "$partition" 2>/dev/null || true)
+                        if [[ -n "$device_users" ]]; then
+                            echo -e "${YELLOW}Processes using device:${COLOR_RESET}"
+                            echo "$device_users"
+                        fi
+                        
+                        # Try to eject the device properly first
+                        echo -e "${DIM}Ejecting device properly...${COLOR_RESET}"
+                        sudo eject "$partition" 2>/dev/null || true
+                        sleep 2
+                        
+                        # Now unmount with all methods
+                        sudo umount "$partition" 2>/dev/null || true
+                        sudo umount -f "$partition" 2>/dev/null || true
+                        sudo umount -l "$partition" 2>/dev/null || true
+                        
+                        # Force a sync
+                        sync
+                        
+                        # Wait for device to settle (you mentioned hearing disconnect)
+                        echo -e "${DIM}Waiting for device to settle...${COLOR_RESET}"
+                        sleep 3
+                        
+                        # Try formatting one more time
+                        echo -e "${DIM}Final format attempt...${COLOR_RESET}"
+                        if sudo mkfs.exfat -n "$label" "$partition"; then
+                            echo -e "${GREEN}✓ Successfully formatted with exFAT${COLOR_RESET}"
+                        else
+                            # If all else fails, suggest manual intervention
+                            echo -e "${RED}Error: Unable to format device${COLOR_RESET}"
+                            echo -e "${YELLOW}The device appears to be locked by the system.${COLOR_RESET}"
+                            echo -e "${YELLOW}Please try one of these solutions:${COLOR_RESET}"
+                            echo -e "${YELLOW}  1. Close any file managers or applications using the USB${COLOR_RESET}"
+                            echo -e "${YELLOW}  2. Run: sudo umount -f $partition${COLOR_RESET}"
+                            echo -e "${YELLOW}  3. Physically unplug and replug the USB device${COLOR_RESET}"
+                            echo -e "${YELLOW}  4. Try formatting with a different filesystem (FAT32)${COLOR_RESET}"
+                            return 1
+                        fi
+                    fi
+                    
+                    # Ensure auto-mount services are running again
+                    sudo systemctl start udisks2.service 2>/dev/null || true
+                    
+                    # Force kernel to recognize the new filesystem
+                    sudo partprobe "$device" 2>/dev/null || true
+                    sync
+                    sleep 2
+                    ;;
+                fat32)
+                    # Check if command exists
+                    echo -e "${DIM}Checking for mkfs.vfat...${COLOR_RESET}"
+                    if ! command -v mkfs.vfat >/dev/null 2>&1; then
+                        echo -e "${RED}mkfs.vfat not found.${COLOR_RESET}"
+                        install_missing_filesystem_tool "fat32" || return 1
+                        # Retry formatting after installation
+                        format_usb_device "$device" "$filesystem" "$label"
+                        return $?
+                    fi
+                    
+                    echo -e "${DIM}Found mkfs.vfat, formatting...${COLOR_RESET}"
+                    # Always use sudo for formatting
+                    echo -e "${YELLOW}Root privileges required for formatting.${COLOR_RESET}"
+                    echo -e "${BLUE}Please enter your password when prompted:${COLOR_RESET}"
+                    
+                    if sudo mkfs.vfat -F 32 -n "$label" "$partition"; then
+                        echo -e "${GREEN}✓ Successfully formatted with FAT32${COLOR_RESET}"
+                    else
+                        local exit_code=$?
+                        echo -e "${RED}mkfs.vfat failed with error code $exit_code${COLOR_RESET}"
+                        return 1
+                    fi
+                    ;;
+                ntfs)
+                    # Check if command exists  
+                    echo -e "${DIM}Checking for mkfs.ntfs...${COLOR_RESET}"
+                    if ! command -v mkfs.ntfs >/dev/null 2>&1; then
+                        echo -e "${RED}mkfs.ntfs not found.${COLOR_RESET}"
+                        install_missing_filesystem_tool "ntfs" || return 1
+                        # Retry formatting after installation
+                        format_usb_device "$device" "$filesystem" "$label"
+                        return $?
+                    fi
+                    
+                    echo -e "${DIM}Found mkfs.ntfs, formatting...${COLOR_RESET}"
+                    # Always use sudo for formatting
+                    echo -e "${YELLOW}Root privileges required for formatting.${COLOR_RESET}"
+                    echo -e "${BLUE}Please enter your password when prompted:${COLOR_RESET}"
+                    if ! sudo mkfs.ntfs -f -L "$label" "$partition"; then
+                        local exit_code=$?
+                        echo -e "${RED}mkfs.ntfs failed with error code $exit_code${COLOR_RESET}"
+                        return 1
+                    fi
+                    ;;
+                ext4)
+                    mkfs.ext4 -L "$label" "$partition" 2>&1 | while read -r line; do
+                        log_message "DEBUG" "mkfs.ext4: $line"
+                    done
+                    ;;
+                *)
+                    log_message "ERROR" "Unsupported filesystem: $filesystem"
+                    return 1
+                    ;;
+            esac
         fi
-
-        case "$filesystem" in
-            exfat)
-                mkfs.exfat -n "$label" "$partition" 2>&1 | while read -r line; do
-                    log_message "DEBUG" "mkfs.exfat: $line"
-                done
-                ;;
-            fat32|vfat)
-                mkfs.vfat -F 32 -n "$label" "$partition" 2>&1 | while read -r line; do
-                    log_message "DEBUG" "mkfs.vfat: $line"
-                done
-                ;;
-            ntfs)
-                mkfs.ntfs -Q -L "$label" "$partition" 2>&1 | while read -r line; do
-                    log_message "DEBUG" "mkfs.ntfs: $line"
-                done
-                ;;
-            ext4)
-                mkfs.ext4 -L "$label" "$partition" 2>&1 | while read -r line; do
-                    log_message "DEBUG" "mkfs.ext4: $line"
-                done
-                ;;
-            *)
-                log_message "ERROR" "Unsupported filesystem: $filesystem"
-                return 1
-                ;;
-        esac
 
     elif [[ "$OSTYPE" == "darwin"* ]]; then
         case "$filesystem" in
