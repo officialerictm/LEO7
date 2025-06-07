@@ -22,16 +22,16 @@ deploy_to_usb() {
     sleep 1  # Give time to see the message
     
     echo
-    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
-    echo -e "${BOLD}              🚀 Leonardo USB Deployment${COLOR_RESET}"
-    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
-    echo
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}" >&2
+    echo -e "${BOLD}              🚀 Leonardo USB Deployment${COLOR_RESET}" >&2
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}" >&2
+    echo >&2
     
     # Step 1: Detect or use provided USB device
     if [[ -z "$target_device" ]]; then
         # Auto-detect USB drives
         local usb_drives=()
-        echo -e "${DIM}Detecting USB drives...${COLOR_RESET}"
+        echo -e "${DIM}Detecting USB drives...${COLOR_RESET}" >&2
         
         # Get USB drives - let debug output go to stderr
         local raw_output=$(detect_usb_drives)
@@ -41,20 +41,20 @@ deploy_to_usb() {
         fi
         
         if [[ ${#usb_drives[@]} -eq 0 ]]; then
-            echo -e "${RED}No USB drives detected!${COLOR_RESET}"
-            echo -e "${YELLOW}Please insert a USB drive and try again.${COLOR_RESET}"
-            echo
-            echo -e "${DIM}Tip: Make sure your USB drive is properly connected and recognized by the system.${COLOR_RESET}"
-            echo -e "${DIM}On Linux, you might need to run with sudo for device detection.${COLOR_RESET}"
+            echo -e "${RED}No USB drives detected!${COLOR_RESET}" >&2
+            echo -e "${YELLOW}Please insert a USB drive and try again.${COLOR_RESET}" >&2
+            echo >&2
+            echo -e "${DIM}Tip: Make sure your USB drive is properly connected and recognized by the system.${COLOR_RESET}" >&2
+            echo -e "${DIM}On Linux, you might need to run with sudo for device detection.${COLOR_RESET}" >&2
             pause
             return 1
         elif [[ ${#usb_drives[@]} -eq 1 ]]; then
             target_device="${usb_drives[0]}"
-            echo -e "${GREEN}Found USB drive: $target_device${COLOR_RESET}"
+            echo -e "${GREEN}Found USB drive: $target_device${COLOR_RESET}" >&2
         else
             # Multiple drives - let user select with better formatting
-            echo -e "${YELLOW}Multiple USB drives detected:${COLOR_RESET}"
-            echo
+            echo -e "${YELLOW}Multiple USB drives detected:${COLOR_RESET}" >&2
+            echo >&2
             
             # Create formatted menu options
             local menu_options=()
@@ -85,94 +85,116 @@ deploy_to_usb() {
     local device_size_mb=$(get_device_size_mb "$target_device")
     local device_size_gb=$((device_size_mb / 1024))
     
-    echo
-    echo -e "${BOLD}Target USB:${COLOR_RESET} $target_device (${device_size_gb}GB)"
-    echo
+    echo >&2
+    echo -e "${BOLD}Target USB:${COLOR_RESET} $target_device (${device_size_gb}GB)" >&2
+    echo >&2
     
     # Step 2: Initialize USB (includes format option)
-    echo -e "${YELLOW}Step 1/4: Preparing USB Drive${COLOR_RESET}"
+    echo -e "${YELLOW}Step 1/4: Preparing USB Drive${COLOR_RESET}" >&2
     
     # Check if already initialized
     if is_leonardo_usb "$target_device"; then
-        echo -e "${YELLOW}⚠ Leonardo installation detected on USB${COLOR_RESET}"
-        echo
+        echo -e "${YELLOW}⚠ Leonardo installation detected on USB${COLOR_RESET}" >&2
+        echo >&2
         
         # Show current installation info
         if [[ -f "$LEONARDO_USB_MOUNT/leonardo/VERSION" ]]; then
             local current_version=$(cat "$LEONARDO_USB_MOUNT/leonardo/VERSION" 2>/dev/null || echo "Unknown")
-            echo -e "Current version: ${CYAN}$current_version${COLOR_RESET}"
+            echo -e "Current version: ${CYAN}$current_version${COLOR_RESET}" >&2
         fi
         
         # Show options in interactive mode
         if [[ -t 0 ]]; then
-            echo
-            echo -e "${BOLD}What would you like to do?${COLOR_RESET}"
+            echo >&2
+            echo -e "${BOLD}What would you like to do?${COLOR_RESET}" >&2
             echo -e "1) ${GREEN}Update/Fix${COLOR_RESET} - Keep data and update Leonardo"
             echo -e "2) ${RED}Format & Reinstall${COLOR_RESET} - Fresh installation (erases all data)"
             echo -e "3) ${DIM}Cancel${COLOR_RESET} - Exit without changes"
-            echo
+            echo >&2
             
             local choice
             read -p "Enter choice (1-3): " choice
             
             case "$choice" in
                 1)
-                    echo -e "${CYAN}→ Updating Leonardo installation...${COLOR_RESET}"
+                    echo -e "${CYAN}→ Updating Leonardo installation...${COLOR_RESET}" >&2
                     # Skip formatting, just update
                     ;;
                 2)
                     if confirm_menu "Format USB and install fresh? ${RED}WARNING: This will erase all data!${COLOR_RESET}"; then
-                        echo -e "${CYAN}→ Formatting USB drive...${COLOR_RESET}"
+                        echo -e "${CYAN}→ Formatting USB drive...${COLOR_RESET}" >&2
                         if ! format_usb_device "$target_device"; then
-                            echo -e "${RED}Failed to format USB drive${COLOR_RESET}"
+                            echo -e "${RED}Failed to format USB drive${COLOR_RESET}" >&2
                             pause
                             return 1
                         fi
                         
-                        # Mount the newly formatted device
-                        echo -e "${CYAN}→ Mounting USB drive...${COLOR_RESET}"
-                        if ! mount_usb_drive "$target_device"; then
-                            echo -e "${RED}Failed to mount USB drive${COLOR_RESET}"
+                        # Mount the newly formatted device - use partition not device
+                        echo -e "${CYAN}→ Mounting USB drive...${COLOR_RESET}" >&2
+                        # After formatting, we need to mount the partition, not the device
+                        local mount_device="$target_device"
+                        if [[ "$target_device" =~ ^/dev/(sd[a-z]|nvme[0-9]+n[0-9]+|mmcblk[0-9]+)$ ]]; then
+                            # Determine partition naming
+                            if [[ "$target_device" =~ ^/dev/(nvme|mmcblk) ]]; then
+                                mount_device="${target_device}p1"
+                            else
+                                mount_device="${target_device}1"
+                            fi
+                        fi
+                        
+                        if ! mount_usb_drive "$mount_device"; then
+                            echo -e "${RED}Failed to mount USB drive${COLOR_RESET}" >&2
                             pause
                             return 1
                         fi
                     else
-                        echo -e "${DIM}Cancelled${COLOR_RESET}"
+                        echo -e "${DIM}Cancelled${COLOR_RESET}" >&2
                         return 0
                     fi
                     ;;
                 3|*)
-                    echo -e "${DIM}Cancelled${COLOR_RESET}"
+                    echo -e "${DIM}Cancelled${COLOR_RESET}" >&2
                     return 0
                     ;;
             esac
         else
-            echo -e "${YELLOW}Non-interactive mode: Updating existing installation${COLOR_RESET}"
+            echo -e "${YELLOW}Non-interactive mode: Updating existing installation${COLOR_RESET}" >&2
             # In non-interactive mode, default to update
         fi
     else
         # Ask about formatting only in interactive mode
         if [[ -t 0 ]]; then
             if confirm_menu "Format USB drive? ${RED}WARNING: This will erase all data!${COLOR_RESET}"; then
-                echo -e "${CYAN}→ Formatting USB drive...${COLOR_RESET}"
+                echo -e "${CYAN}→ Formatting USB drive...${COLOR_RESET}" >&2
                 if ! format_usb_device "$target_device"; then
-                    echo -e "${RED}Failed to format USB drive${COLOR_RESET}"
+                    echo -e "${RED}Failed to format USB drive${COLOR_RESET}" >&2
                     pause
                     return 1
                 fi
                 
-                # Mount the newly formatted device
-                echo -e "${CYAN}→ Mounting USB drive...${COLOR_RESET}"
-                if ! mount_usb_drive "$target_device"; then
-                    echo -e "${RED}Failed to mount USB drive${COLOR_RESET}"
+                # Mount the newly formatted device - use partition not device
+                echo -e "${CYAN}→ Mounting USB drive...${COLOR_RESET}" >&2
+                # After formatting, we need to mount the partition, not the device
+                local mount_device="$target_device"
+                if [[ "$target_device" =~ ^/dev/(sd[a-z]|nvme[0-9]+n[0-9]+|mmcblk[0-9]+)$ ]]; then
+                    # Determine partition naming
+                    if [[ "$target_device" =~ ^/dev/(nvme|mmcblk) ]]; then
+                        mount_device="${target_device}p1"
+                    else
+                        mount_device="${target_device}1"
+                    fi
+                fi
+                
+                if ! mount_usb_drive "$mount_device"; then
+                    echo -e "${RED}Failed to mount USB drive${COLOR_RESET}" >&2
                     pause
                     return 1
                 fi
             fi
         else
-            echo -e "${YELLOW}Non-interactive mode: Skipping format prompt${COLOR_RESET}"
+            echo -e "${YELLOW}Non-interactive mode: Skipping format prompt${COLOR_RESET}" >&2
             # Try to mount if not already mounted
-            echo -e "${CYAN}→ Checking USB mount status...${COLOR_RESET}"
+            echo -e "${CYAN}→ Checking USB mount status...${COLOR_RESET}" >&2
             
             # Check if we need to try partition instead
             local mount_device="$target_device"
@@ -180,24 +202,24 @@ deploy_to_usb() {
                 # Check if partition exists
                 if [[ -b "${target_device}1" ]]; then
                     mount_device="${target_device}1"
-                    echo -e "${DIM}Using partition: $mount_device${COLOR_RESET}"
+                    echo -e "${DIM}Using partition: $mount_device${COLOR_RESET}" >&2
                 fi
             fi
             
             # Try to mount if not already mounted
             local existing_mount=$(lsblk -no MOUNTPOINT "$mount_device" 2>/dev/null | grep -v "^$" | head -1)
             if [[ -z "$existing_mount" ]]; then
-                echo -e "${CYAN}→ Mounting USB drive...${COLOR_RESET}"
+                echo -e "${CYAN}→ Mounting USB drive...${COLOR_RESET}" >&2
                 if ! mount_usb_drive "$mount_device"; then
-                    echo -e "${RED}Failed to mount USB drive${COLOR_RESET}"
-                    echo -e "${YELLOW}Try one of these options:${COLOR_RESET}"
-                    echo -e "  1. Run with sudo: ${CYAN}sudo ./leonardo.sh deploy usb $target_device${COLOR_RESET}"
-                    echo -e "  2. Mount manually first: ${CYAN}sudo mount $mount_device /mnt/usb${COLOR_RESET}"
+                    echo -e "${RED}Failed to mount USB drive${COLOR_RESET}" >&2
+                    echo -e "${YELLOW}Try one of these options:${COLOR_RESET}" >&2
+                    echo -e "  1. Run with sudo: ${CYAN}sudo ./leonardo.sh deploy usb $target_device${COLOR_RESET}" >&2
+                    echo -e "  2. Mount manually first: ${CYAN}sudo mount $mount_device /mnt/usb${COLOR_RESET}" >&2
                     echo -e "  3. Use your desktop file manager to mount the USB"
                     return 1
                 fi
             else
-                echo -e "${GREEN}✓ USB already mounted at: $existing_mount${COLOR_RESET}"
+                echo -e "${GREEN}✓ USB already mounted at: $existing_mount${COLOR_RESET}" >&2
                 # Update target device to use the partition
                 target_device="$mount_device"
             fi
@@ -205,9 +227,11 @@ deploy_to_usb() {
     fi
     
     # Initialize USB
-    echo -e "${CYAN}→ Initializing USB device...${COLOR_RESET}"
-    if ! init_usb_device "$target_device"; then
-        echo -e "${RED}Failed to initialize USB device${COLOR_RESET}"
+    echo -e "${CYAN}→ Initializing USB device...${COLOR_RESET}" >&2
+    # Use mount_device if available (after formatting), otherwise use target_device
+    local init_device="${mount_device:-$target_device}"
+    if ! init_usb_device "$init_device"; then
+        echo -e "${RED}Failed to initialize USB device${COLOR_RESET}" >&2
         pause
         return 1
     fi
@@ -217,15 +241,15 @@ deploy_to_usb() {
     
     # Ensure mount point is set
     if [[ -z "$LEONARDO_USB_MOUNT" ]]; then
-        echo -e "${RED}Error: USB mount point not detected${COLOR_RESET}"
-        echo -e "${YELLOW}Please ensure the USB drive is properly mounted${COLOR_RESET}"
+        echo -e "${RED}Error: USB mount point not detected${COLOR_RESET}" >&2
+        echo -e "${YELLOW}Please ensure the USB drive is properly mounted${COLOR_RESET}" >&2
         pause
         return 1
     fi
     
     # Create Leonardo directory structure if it doesn't exist
     if [[ ! -d "$LEONARDO_USB_MOUNT/leonardo" ]]; then
-        echo -e "${CYAN}→ Creating Leonardo directory structure...${COLOR_RESET}"
+        echo -e "${CYAN}→ Creating Leonardo directory structure...${COLOR_RESET}" >&2
         create_leonardo_structure "$LEONARDO_USB_MOUNT"
     fi
     
@@ -236,21 +260,21 @@ deploy_to_usb() {
     fi
     
     # Step 3: Install Leonardo
-    echo
-    echo -e "${YELLOW}Step 2/4: Installing Leonardo AI${COLOR_RESET}"
+    echo >&2
+    echo -e "${YELLOW}Step 2/4: Installing Leonardo AI${COLOR_RESET}" >&2
     copy_leonardo_to_usb "$leonardo_script" "$LEONARDO_USB_MOUNT"
     
     # Create platform launchers
     create_platform_launchers "$LEONARDO_USB_MOUNT"
     
     # Step 4: Configure
-    echo
-    echo -e "${YELLOW}Step 3/4: Configuring Leonardo${COLOR_RESET}"
+    echo >&2
+    echo -e "${YELLOW}Step 3/4: Configuring Leonardo${COLOR_RESET}" >&2
     configure_usb_leonardo
     
     # Step 5: Model deployment
-    echo
-    echo -e "${YELLOW}Step 4/4: AI Model Setup${COLOR_RESET}"
+    echo >&2
+    echo -e "${YELLOW}Step 4/4: AI Model Setup${COLOR_RESET}" >&2
     
     # Get USB free space for model recommendations
     local usb_free_mb=$(get_usb_free_space_mb "$LEONARDO_USB_MOUNT")
@@ -259,38 +283,38 @@ deploy_to_usb() {
     local selected_model=$(select_model_interactive "$usb_free_mb")
     
     if [[ -n "$selected_model" ]]; then
-        echo
-        echo -e "${CYAN}Installing $selected_model...${COLOR_RESET}"
+        echo >&2
+        echo -e "${CYAN}Installing $selected_model...${COLOR_RESET}" >&2
         if download_model_to_usb "$selected_model"; then
-            echo -e "${GREEN}✓ Model installed successfully${COLOR_RESET}"
+            echo -e "${GREEN}✓ Model installed successfully${COLOR_RESET}" >&2
         else
-            echo -e "${YELLOW}⚠ Model installation failed${COLOR_RESET}"
+            echo -e "${YELLOW}⚠ Model installation failed${COLOR_RESET}" >&2
         fi
     else
-        echo -e "${DIM}Skipping model installation${COLOR_RESET}"
+        echo -e "${DIM}Skipping model installation${COLOR_RESET}" >&2
     fi
     
     # Final verification
-    echo
-    echo -e "${CYAN}Verifying deployment...${COLOR_RESET}"
+    echo >&2
+    echo -e "${CYAN}Verifying deployment...${COLOR_RESET}" >&2
     if verify_usb_deployment; then
-        echo
-        echo -e "${GREEN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
-        echo -e "${GREEN}✨ USB deployment successful!${COLOR_RESET}"
-        echo -e "${GREEN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
-        echo
-        echo -e "${BOLD}To use Leonardo on any computer:${COLOR_RESET}"
+        echo >&2
+        echo -e "${GREEN}═══════════════════════════════════════════════════════════════${COLOR_RESET}" >&2
+        echo -e "${GREEN}✨ USB deployment successful!${COLOR_RESET}" >&2
+        echo -e "${GREEN}═══════════════════════════════════════════════════════════════${COLOR_RESET}" >&2
+        echo >&2
+        echo -e "${BOLD}To use Leonardo on any computer:${COLOR_RESET}" >&2
         echo -e "1. Insert the USB drive"
         echo -e "2. Navigate to the USB in terminal"
-        echo -e "3. Run: ${CYAN}./leonardo${COLOR_RESET} (Linux/Mac) or ${CYAN}leonardo.bat${COLOR_RESET} (Windows)"
-        echo
-        echo -e "${DIM}The USB is ready to use on any computer!${COLOR_RESET}"
+        echo -e "3. Run: ${CYAN}./start-leonardo${COLOR_RESET} (Linux/Mac) or ${CYAN}leonardo.bat${COLOR_RESET} (Windows)"
+        echo >&2
+        echo -e "${DIM}The USB is ready to use on any computer!${COLOR_RESET}" >&2
     else
-        echo -e "${RED}⚠ Deployment verification failed${COLOR_RESET}"
-        echo -e "${YELLOW}The USB may still work but some features might be missing.${COLOR_RESET}"
+        echo -e "${RED}⚠ Deployment verification failed${COLOR_RESET}" >&2
+        echo -e "${YELLOW}The USB may still work but some features might be missing.${COLOR_RESET}" >&2
     fi
     
-    echo
+    echo >&2
     pause
     return 0
 }
@@ -301,7 +325,7 @@ copy_leonardo_to_usb() {
     local target_dir="$2"
     
     # Copy Leonardo script
-    echo -e "${CYAN}→ Copying Leonardo executable...${COLOR_RESET}"
+    echo -e "${CYAN}→ Copying Leonardo executable...${COLOR_RESET}" >&2
     
     # Create leonardo directory if needed
     mkdir -p "$target_dir/leonardo"
@@ -314,7 +338,7 @@ copy_leonardo_to_usb() {
     else
         # Small file, just copy normally
         cp "$leonardo_script" "$target_dir/leonardo/leonardo.sh"
-        echo -e "${GREEN}✓ Leonardo installed${COLOR_RESET}"
+        echo -e "${GREEN}✓ Leonardo installed${COLOR_RESET}" >&2
     fi
     
     # Also copy to root for convenience
@@ -342,13 +366,13 @@ if errorlevel 1 (
 EOF
     
     # Create Mac/Linux launcher (executable)
-    cat > "$target_dir/leonardo" << 'EOF'
+    cat > "$target_dir/start-leonardo" << 'EOF'
 #!/bin/bash
 # Leonardo AI Universal Launcher
 cd "$(dirname "$0")"
-./leonardo.sh "$@"
+./leonardo/leonardo.sh "$@"
 EOF
-    chmod +x "$target_dir/leonardo" 2>/dev/null || true
+    chmod +x "$target_dir/start-leonardo" 2>/dev/null || true
     
     # Create desktop entry for Linux
     cat > "$target_dir/Leonardo.desktop" << EOF
@@ -362,7 +386,7 @@ Type=Application
 Categories=Utility;Development;
 EOF
     
-    echo -e "${GREEN}✓ Platform launchers created${COLOR_RESET}"
+    echo -e "${GREEN}✓ Platform launchers created${COLOR_RESET}" >&2
 }
 
 # Configure Leonardo for USB deployment
@@ -406,38 +430,38 @@ EOF
 
 # Deploy models to USB
 deploy_models_to_usb() {
-    echo ""
-    echo -e "${CYAN}Model Deployment${COLOR_RESET}"
-    echo ""
+    echo >&2
+    echo -e "${CYAN}Model Deployment${COLOR_RESET}" >&2
+    echo >&2
     
     # Check available space
     check_usb_free_space "$LEONARDO_USB_MOUNT" 1024
     local free_gb=$((LEONARDO_USB_FREE_MB / 1024))
     
-    echo "Available space: ${free_gb}GB"
-    echo ""
+    echo "Available space: ${free_gb}GB" >&2
+    echo >&2
     
     # Show model recommendations based on space
     if [[ $free_gb -lt 8 ]]; then
-        echo -e "${YELLOW}Limited space. Recommended models:${COLOR_RESET}"
-        echo "- TinyLlama (1.1B) - 2GB"
-        echo "- Phi-2 (2.7B) - 3GB"
+        echo -e "${YELLOW}Limited space. Recommended models:${COLOR_RESET}" >&2
+        echo "- TinyLlama (1.1B) - 2GB" >&2
+        echo "- Phi-2 (2.7B) - 3GB" >&2
     elif [[ $free_gb -lt 16 ]]; then
-        echo -e "${CYAN}Recommended models:${COLOR_RESET}"
-        echo "- Llama 3.2 (3B) - 4GB"
-        echo "- Mistral 7B - 8GB"
-        echo "- Gemma 2B - 3GB"
+        echo -e "${CYAN}Recommended models:${COLOR_RESET}" >&2
+        echo "- Llama 3.2 (3B) - 4GB" >&2
+        echo "- Mistral 7B - 8GB" >&2
+        echo "- Gemma 2B - 3GB" >&2
     else
-        echo -e "${GREEN}Plenty of space! Popular models:${COLOR_RESET}"
-        echo "- Llama 3.1 (8B) - 8GB"
-        echo "- Mistral 7B - 8GB"
-        echo "- Mixtral 8x7B - 48GB (if space permits)"
+        echo -e "${GREEN}Plenty of space! Popular models:${COLOR_RESET}" >&2
+        echo "- Llama 3.1 (8B) - 8GB" >&2
+        echo "- Mistral 7B - 8GB" >&2
+        echo "- Mixtral 8x7B - 48GB (if space permits)" >&2
     fi
     
-    echo ""
+    echo >&2
     
     # Use interactive model selector
-    echo ""
+    echo >&2
     
     # Simple model selection menu for USB deployment
     local popular_models=(
@@ -449,20 +473,20 @@ deploy_models_to_usb() {
         "skip:0:Skip model installation:0"
     )
     
-    echo -e "${CYAN}Select models to install:${COLOR_RESET}"
-    echo -e "${DIM}Use space to select/deselect, Enter when done${COLOR_RESET}"
-    echo ""
+    echo -e "${CYAN}Select models to install:${COLOR_RESET}" >&2
+    echo -e "${DIM}Use space to select/deselect, Enter when done${COLOR_RESET}" >&2
+    echo >&2
     
     local selected_models=()
     local i=1
     for model_info in "${popular_models[@]}"; do
         IFS=':' read -r model_id variant name size_gb <<< "$model_info"
-        printf "  %d) %-20s - %s (%sGB)\n" "$i" "$model_id" "$name" "$size_gb"
+        printf "  %d) %-20s - %s (%sGB)\n" "$i" "$model_id" "$name" "$size_gb" >&2
         ((i++))
     done
     
-    echo ""
-    echo -n "Enter model numbers (space-separated, or 'skip'): "
+    echo >&2
+    echo -n "Enter model numbers (space-separated, or 'skip'): " >&2
     read -r model_selection
     
     if [[ "$model_selection" != "skip" ]] && [[ -n "$model_selection" ]]; then
@@ -479,11 +503,11 @@ deploy_models_to_usb() {
     
     # Download and install selected models
     if [[ ${#selected_models[@]} -gt 0 ]]; then
-        echo ""
-        echo -e "${CYAN}Downloading models...${COLOR_RESET}"
+        echo >&2
+        echo -e "${CYAN}Downloading models...${COLOR_RESET}" >&2
         
         for model_id in "${selected_models[@]}"; do
-            echo ""
+            echo >&2
             download_model_to_usb "$model_id"
         done
     fi
@@ -504,63 +528,207 @@ download_model_to_usb() {
     # Set download target
     export LEONARDO_MODEL_DIR="$target_dir"
     
-    echo -e "${CYAN}Downloading ${model_id}:${variant}${COLOR_RESET}"
+    echo -e "${CYAN}Downloading ${model_id}:${variant}${COLOR_RESET}" >&2
     
     # Check if we have Ollama provider
     if command_exists ollama; then
         # Use Ollama to pull the model
-        echo "Using Ollama to download model..."
+        echo "Using Ollama to download model..." >&2
         
-        # First pull the model
-        if ollama pull "${model_id}:${variant}" 2>&1 | \
-        while IFS= read -r line; do
-            # Parse Ollama progress output
-            if [[ "$line" =~ pulling[[:space:]].*[[:space:]]([0-9]+)%[[:space:]]+\|.*\|[[:space:]]+([0-9.]+[[:space:]]?[KMGT]?B)/([0-9.]+[[:space:]]?[KMGT]?B)[[:space:]]+([0-9.]+[[:space:]]?[KMGT]?B/s) ]]; then
-                local percent="${BASH_REMATCH[1]}"
-                local downloaded="${BASH_REMATCH[2]}"
-                local total="${BASH_REMATCH[3]}"
-                local speed="${BASH_REMATCH[4]}"
-                
-                printf "\r"
-                show_progress_bar "$percent" 100 40
-                printf " ${percent}%% | ${downloaded}/${total} | ${speed}  "
-            elif [[ "$line" =~ "success" ]] || [[ "$line" =~ "already up to date" ]]; then
-                printf "\r%-80s\r" " "
-                echo -e "${GREEN}✓ Model downloaded to Ollama${COLOR_RESET}"
-                return 0
-            fi
-        done; then
-            # Now export the model to USB
-            echo -e "${CYAN}Exporting model to USB...${COLOR_RESET}"
-            local model_file="$target_dir/${model_id}-${variant}.gguf"
+        # First check if Ollama is running
+        if ! ollama list >/dev/null 2>&1; then
+            echo -e "${YELLOW}⚠ Ollama is not running. Starting Ollama service...${COLOR_RESET}" >&2
+            # Try to start Ollama in the background
+            ollama serve >/dev/null 2>&1 &
+            local ollama_pid=$!
+            sleep 3
             
-            # Try to export using ollama show
-            if ollama show "${model_id}:${variant}" --modelfile > "$target_dir/${model_id}-${variant}.modelfile" 2>/dev/null; then
-                echo -e "${GREEN}✓ Model exported to USB${COLOR_RESET}"
+            # Check if it started
+            if ! ollama list >/dev/null 2>&1; then
+                echo -e "${YELLOW}⚠ Could not start Ollama, falling back to direct download${COLOR_RESET}" >&2
+                kill $ollama_pid 2>/dev/null || true
+            fi
+        fi
+        
+        # Try to pull the model if Ollama is available
+        if ollama list >/dev/null 2>&1; then
+            # First pull the model with progress
+            echo -e "${CYAN}Pulling model from Ollama...${COLOR_RESET}" >&2
+            
+            # Use a simpler progress display that works better with Ollama's output
+            local last_percent=0
+            if ollama pull "${model_id}:${variant}" 2>&1 | \
+            while IFS= read -r line; do
+                # Debug: show what we're getting from ollama
+                # echo "DEBUG: $line" >&2
                 
-                # Create a simple info file
+                # Parse different Ollama output formats
+                if [[ "$line" =~ ([0-9]+)% ]]; then
+                    local percent="${BASH_REMATCH[1]}"
+                    
+                    # Only update if percentage changed
+                    if [[ "$percent" != "$last_percent" ]]; then
+                        last_percent="$percent"
+                        printf "\r${CYAN}Downloading:${COLOR_RESET} ["
+                        
+                        # Draw progress bar
+                        local filled=$((percent * 40 / 100))
+                        local empty=$((40 - filled))
+                        printf "%${filled}s" | tr ' ' '='
+                        printf "%${empty}s" | tr ' ' ' '
+                        printf "] ${YELLOW}${percent}%%${COLOR_RESET}  "
+                    fi
+                elif [[ "$line" =~ "success" ]] || [[ "$line" =~ "up to date" ]]; then
+                    printf "\r%-80s\r" " "
+                    echo -e "${GREEN}✓ Model downloaded to Ollama${COLOR_RESET}" >&2
+                    break
+                elif [[ "$line" =~ "error" ]]; then
+                    printf "\r%-80s\r" " "
+                    echo -e "${RED}✗ Download failed: $line${COLOR_RESET}" >&2
+                    return 1
+                fi
+            done; then
+                # Now export the model to USB
+                echo -e "${CYAN}Exporting model to USB...${COLOR_RESET}" >&2
+                
+                # Ollama stores models in ~/.ollama/models/blobs/
+                # We need to find the actual model file and copy it
+                local ollama_dir="${HOME}/.ollama/models"
+                
+                # First, create the modelfile
+                if ollama show "${model_id}:${variant}" --modelfile > "$target_dir/${model_id}-${variant}.modelfile" 2>/dev/null; then
+                    echo -e "${DIM}Created modelfile${COLOR_RESET}" >&2
+                fi
+                
+                # Try to find the model's manifest to locate the actual weights
+                echo -e "${DIM}Looking for model weights...${COLOR_RESET}" >&2
+                
+                # Get model info from Ollama
+                local model_info=$(ollama show "${model_id}:${variant}" 2>/dev/null)
+                
+                # For now, we'll note that the model is managed by Ollama
+                # and will need Ollama installed to use it
                 cat > "$target_dir/${model_id}-${variant}.info" <<EOF
 Model: ${model_id}:${variant}
-Downloaded: $(date)
-Type: Ollama Model
-Location: $target_dir
-Note: Use 'ollama run ${model_id}:${variant}' to run this model
+Type: Ollama-managed
+Date: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
 EOF
+
+                # Map the model to a direct download URL if available
+                local gguf_url=""
+                case "${model_id}:${variant}" in
+                    "phi:2.7b")
+                        gguf_url="https://huggingface.co/microsoft/phi-2/resolve/main/phi-2.Q4_K_M.gguf"
+                        ;;
+                    "llama2:7b")
+                        gguf_url="https://huggingface.co/TheBloke/Llama-2-7B-GGUF/resolve/main/llama-2-7b.Q4_K_M.gguf"
+                        ;;
+                    "mistral:7b")
+                        gguf_url="https://huggingface.co/TheBloke/Mistral-7B-v0.1-GGUF/resolve/main/mistral-7b-v0.1.Q4_K_M.gguf"
+                        ;;
+                    "llama3.2:1b")
+                        gguf_url="https://huggingface.co/lmstudio-community/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf"
+                        ;;
+                    "llama3.2:3b")
+                        gguf_url="https://huggingface.co/lmstudio-community/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf"
+                        ;;
+                    "qwen2.5:3b")
+                        gguf_url="https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf"
+                        ;;
+                    "gemma2:2b")
+                        gguf_url="https://huggingface.co/lmstudio-community/gemma-2-2b-it-GGUF/resolve/main/gemma-2-2b-it-Q4_K_M.gguf"
+                        ;;
+                    "codellama:7b")
+                        gguf_url="https://huggingface.co/TheBloke/CodeLlama-7B-Instruct-GGUF/resolve/main/codellama-7b-instruct.Q4_K_M.gguf"
+                        ;;
+                    "llama3.1:8b")
+                        gguf_url="https://huggingface.co/lmstudio-community/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf"
+                        ;;
+                    "llama2:13b")
+                        gguf_url="https://huggingface.co/TheBloke/Llama-2-13B-chat-GGUF/resolve/main/llama-2-13b-chat.Q4_K_M.gguf"
+                        ;;
+                    *)
+                        echo -e "${DIM}No direct download available for ${model_id}:${variant}${COLOR_RESET}" >&2
+                        ;;
+                esac
+
+                if [[ -n "$gguf_url" ]]; then
+                    local gguf_file="$target_dir/${model_id}-${variant}.gguf"
+                    echo -e "${CYAN}Downloading GGUF for offline use...${COLOR_RESET}" >&2
+                    
+                    # Download with proper progress bar
+                    if command -v curl >/dev/null 2>&1; then
+                        # Use curl with progress bar
+                        if curl -L --progress-bar "$gguf_url" -o "$gguf_file"; then
+                            echo -e "${GREEN}✓ GGUF model downloaded for offline use${COLOR_RESET}" >&2
+                        else
+                            echo -e "${YELLOW}⚠ GGUF download failed${COLOR_RESET}" >&2
+                            rm -f "$gguf_file" 2>/dev/null
+                        fi
+                    elif command -v wget >/dev/null 2>&1; then
+                        # Use wget with custom progress parsing
+                        echo -e "${DIM}Downloading from: $gguf_url${COLOR_RESET}" >&2
+                        local last_percent=0
+                        if wget -O "$gguf_file" "$gguf_url" 2>&1 | \
+                            while IFS= read -r line; do
+                                if [[ "$line" =~ ([0-9]+)% ]]; then
+                                    local percent="${BASH_REMATCH[1]}"
+                                    if [[ "$percent" != "$last_percent" ]]; then
+                                        last_percent=$percent
+                                        printf "\r${CYAN}Progress:${COLOR_RESET} ["
+                                        local filled=$((percent * 40 / 100))
+                                        local empty=$((40 - filled))
+                                        printf "%${filled}s" | tr ' ' '='
+                                        printf "%${empty}s" | tr ' ' ' '
+                                        printf "] ${YELLOW}${percent}%%${COLOR_RESET}  "
+                                    fi
+                                fi
+                            done; then
+                            printf "\r%-80s\r" " "
+                            echo -e "${GREEN}✓ GGUF model downloaded for offline use${COLOR_RESET}" >&2
+                        else
+                            echo -e "${YELLOW}⚠ GGUF download failed${COLOR_RESET}" >&2
+                            rm -f "$gguf_file" 2>/dev/null
+                        fi
+                    else
+                        echo -e "${RED}Error: Neither curl nor wget is available${COLOR_RESET}" >&2
+                    fi
+                    
+                    # Verify the download and update info file
+                    if [[ -f "$gguf_file" ]]; then
+                        local file_size=$(du -h "$gguf_file" | cut -f1)
+                        echo -e "${DIM}GGUF file size: $file_size${COLOR_RESET}" >&2
+                        
+                        # Update info file
+                        cat >> "$target_dir/${model_id}-${variant}.info" <<EOF
+
+GGUF File: ${model_id}-${variant}.gguf
+Size: $file_size
+Offline Ready: Yes
+EOF
+                    else
+                        echo -e "${DIM}No GGUF file downloaded${COLOR_RESET}" >&2
+                    fi
+                else
+                    echo -e "${GREEN}✓ Model exported (Ollama format)${COLOR_RESET}" >&2
+                fi
+                
                 return 0
-            else
-                echo -e "${YELLOW}⚠ Could not export model file, using fallback download${COLOR_RESET}"
             fi
         fi
     fi
     
     # Direct download from registry as fallback
-    echo "Downloading from model registry..."
+    echo "Downloading from model registry..." >&2
+    
+    # Debug output
+    echo -e "${DIM}DEBUG: Looking for model '${model_id}:${variant}' in registry${COLOR_RESET}" >&2
     
     # Map common model names to HuggingFace URLs
     local model_url=""
     case "${model_id}:${variant}" in
         "phi:2.7b")
-            model_url="https://huggingface.co/microsoft/phi-2/resolve/main/phi-2_Q4_K_M.gguf"
+            model_url="https://huggingface.co/microsoft/phi-2/resolve/main/phi-2.Q4_K_M.gguf"
             ;;
         "llama2:7b")
             model_url="https://huggingface.co/TheBloke/Llama-2-7B-GGUF/resolve/main/llama-2-7b.Q4_K_M.gguf"
@@ -571,13 +739,33 @@ EOF
         "llama3.2:1b")
             model_url="https://huggingface.co/lmstudio-community/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf"
             ;;
+        "llama3.2:3b")
+            model_url="https://huggingface.co/lmstudio-community/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf"
+            ;;
+        "gemma2:2b")
+            model_url="https://huggingface.co/lmstudio-community/gemma-2-2b-it-GGUF/resolve/main/gemma-2-2b-it-Q4_K_M.gguf"
+            ;;
+        "codellama:7b")
+            model_url="https://huggingface.co/TheBloke/CodeLlama-7B-Instruct-GGUF/resolve/main/codellama-7b-instruct.Q4_K_M.gguf"
+            ;;
+        "llama3.1:8b")
+            model_url="https://huggingface.co/lmstudio-community/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf"
+            ;;
+        "llama2:13b")
+            model_url="https://huggingface.co/TheBloke/Llama-2-13B-chat-GGUF/resolve/main/llama-2-13b-chat.Q4_K_M.gguf"
+            ;;
         *)
-            echo -e "${RED}✗ Model ${model_id}:${variant} not found in registry${COLOR_RESET}"
-            echo -e "${YELLOW}Available models for direct download:${COLOR_RESET}"
-            echo "  - phi:2.7b"
-            echo "  - llama2:7b"
-            echo "  - mistral:7b"
-            echo "  - llama3.2:1b"
+            echo -e "${RED}✗ Model ${model_id}:${variant} not found in registry${COLOR_RESET}" >&2
+            echo -e "${YELLOW}Available models for direct download:${COLOR_RESET}" >&2
+            echo "  - phi:2.7b" >&2
+            echo "  - llama2:7b" >&2
+            echo "  - mistral:7b" >&2
+            echo "  - llama3.2:1b" >&2
+            echo "  - llama3.2:3b" >&2
+            echo "  - gemma2:2b" >&2
+            echo "  - codellama:7b" >&2
+            echo "  - llama3.1:8b" >&2
+            echo "  - llama2:13b" >&2
             return 1
             ;;
     esac
@@ -594,10 +782,10 @@ Type: GGUF Model
 Location: $output_file
 Size: $(du -h "$output_file" | cut -f1)
 EOF
-        echo -e "${GREEN}✓ Model downloaded successfully to USB${COLOR_RESET}"
+        echo -e "${GREEN}✓ Model downloaded successfully to USB${COLOR_RESET}" >&2
         return 0
     else
-        echo -e "${RED}✗ Failed to download model${COLOR_RESET}"
+        echo -e "${RED}✗ Failed to download model${COLOR_RESET}" >&2
         return 1
     fi
 }
@@ -610,7 +798,7 @@ create_usb_autorun() {
 label=Leonardo AI Universal
 icon=leonardo\\assets\\leonardo.ico
 action=Run Leonardo AI Universal
-open=leonardo.bat
+open=start-leonardo.bat
 EOF
     
     # Create desktop entry for Linux
@@ -618,7 +806,7 @@ EOF
 #!/bin/bash
 # Leonardo AI Universal Autorun
 cd "\$(dirname "\$0")"
-./leonardo.sh
+./start-leonardo.sh
 EOF
     chmod +x "$LEONARDO_USB_MOUNT/.autorun"
     
@@ -633,10 +821,10 @@ verify_usb_deployment() {
     # Check 1: Leonardo executable
     ((checks_total++))
     if [[ -f "$LEONARDO_USB_MOUNT/leonardo.sh" ]]; then
-        echo "✓ Leonardo executable found"
+        echo "✓ Leonardo executable found" >&2
         ((checks_passed++))
     else
-        echo "✗ Leonardo executable missing"
+        echo "✗ Leonardo executable missing" >&2
     fi
     
     # Check 2: Directory structure
@@ -652,42 +840,42 @@ verify_usb_deployment() {
     done
     
     if [[ "$dirs_ok" == "true" ]]; then
-        echo "✓ Directory structure complete"
+        echo "✓ Directory structure complete" >&2
         ((checks_passed++))
     else
-        echo "✗ Directory structure incomplete"
+        echo "✗ Directory structure incomplete" >&2
     fi
     
     # Check 3: Configuration
     ((checks_total++))
     if [[ -f "$LEONARDO_USB_MOUNT/leonardo/config/leonardo.conf" ]]; then
-        echo "✓ Configuration file present"
+        echo "✓ Configuration file present" >&2
         ((checks_passed++))
     else
-        echo "✗ Configuration file missing"
+        echo "✗ Configuration file missing" >&2
     fi
     
     # Check 4: Platform launchers
     ((checks_total++))
-    if [[ -f "$LEONARDO_USB_MOUNT/leonardo.bat" ]] || [[ -f "$LEONARDO_USB_MOUNT/leonardo.command" ]]; then
-        echo "✓ Platform launchers created"
+    if [[ -f "$LEONARDO_USB_MOUNT/leonardo.bat" ]] || [[ -f "$LEONARDO_USB_MOUNT/start-leonardo.command" ]]; then
+        echo "✓ Platform launchers created" >&2
         ((checks_passed++))
     else
-        echo "✗ Platform launchers missing"
+        echo "✗ Platform launchers missing" >&2
     fi
     
     # Check 5: Write test
     ((checks_total++))
     local test_file="$LEONARDO_USB_MOUNT/.leonardo_test_$$"
     if echo "test" > "$test_file" 2>/dev/null && rm -f "$test_file" 2>/dev/null; then
-        echo "✓ USB is writable"
+        echo "✓ USB is writable" >&2
         ((checks_passed++))
     else
-        echo "✗ USB write test failed"
+        echo "✗ USB write test failed" >&2
     fi
     
-    echo ""
-    echo "Verification: $checks_passed/$checks_total checks passed"
+    echo >&2
+    echo "Verification: $checks_passed/$checks_total checks passed" >&2
     
     return $((checks_total - checks_passed))
 }
@@ -750,93 +938,34 @@ get_usb_deployment_status() {
     
     # Initialize device
     if ! init_usb_device "$device" >/dev/null 2>&1; then
-        echo "Status: Not mounted"
+        echo "Status: Not mounted" >&2
         return 1
     fi
     
     # Check deployment
     if [[ -f "$LEONARDO_USB_MOUNT/leonardo.sh" ]]; then
-        echo "Status: Leonardo installed"
+        echo "Status: Leonardo installed" >&2
         
         # Check version
         if [[ -f "$LEONARDO_USB_MOUNT/leonardo/VERSION" ]]; then
-            echo "Version: $(cat "$LEONARDO_USB_MOUNT/leonardo/VERSION")"
+            echo "Version: $(cat "$LEONARDO_USB_MOUNT/leonardo/VERSION")" >&2
         fi
         
         # Check models
         local model_count=$(find "$LEONARDO_USB_MOUNT/leonardo/models" -name "*.gguf" 2>/dev/null | wc -l)
-        echo "Models: $model_count installed"
+        echo "Models: $model_count installed" >&2
         
         # Check space
         check_usb_free_space "$LEONARDO_USB_MOUNT" 0
-        echo "Free space: ${LEONARDO_USB_FREE}"
+        echo "Free space: ${LEONARDO_USB_FREE}" >&2
     else
-        echo "Status: Not deployed"
-    fi
-}
-
-# Interactive model selection with size recommendations
-select_model_interactive() {
-    local usb_size_mb="${1:-8192}"  # Default 8GB
-    local usb_size_gb=$((usb_size_mb / 1024))
-    
-    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
-    echo -e "${BOLD}               🤖 Select AI Model${COLOR_RESET}"
-    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
-    echo
-    echo -e "${YELLOW}USB Size: ${usb_size_gb}GB${COLOR_RESET}"
-    echo -e "${DIM}Recommended models based on available space:${COLOR_RESET}"
-    echo
-    
-    # Get recommended models
-    local models=()
-    readarray -t models < <(get_recommended_models "$usb_size_gb")
-    
-    if [[ ${#models[@]} -eq 0 ]]; then
-        echo -e "${RED}USB too small for any models!${COLOR_RESET}"
-        echo -e "${YELLOW}Minimum 2GB required.${COLOR_RESET}"
-        return 1
-    fi
-    
-    # Add option to skip
-    models+=("Skip (no model)")
-    
-    # Show menu
-    local selected=$(show_menu "Available Models" "${models[@]}")
-    
-    # Extract model name without size
-    if [[ "$selected" == "Skip (no model)" ]] || [[ -z "$selected" ]]; then
-        echo ""
-        return 1
-    else
-        # Remove size annotation
-        echo "${selected% (*}"
-    fi
-}
-
-# Get USB free space in MB
-get_usb_free_space_mb() {
-    local mount_point="$1"
-    df -BM "$mount_point" | awk 'NR==2 {print $4}' | sed 's/M$//'
-}
-
-# Get device size in MB
-get_device_size_mb() {
-    local device="$1"
-    # Try different methods to get device size
-    if command_exists lsblk; then
-        lsblk -ndo SIZE -b "$device" 2>/dev/null | awk '{print int($1/1024/1024)}'
-    elif command_exists blockdev; then
-        blockdev --getsize64 "$device" 2>/dev/null | awk '{print int($1/1024/1024)}'
-    else
-        # Fallback to 8GB
-        echo "8192"
+        echo "Status: Not deployed" >&2
     fi
 }
 
 # Pause function
 pause() {
-    echo
+    echo >&2
     read -p "Press Enter to continue..." -r
 }
 
@@ -858,5 +987,67 @@ create_leonardo_structure() {
         fi
     done
     
-    echo -e "${GREEN}✓ Leonardo directory structure created${COLOR_RESET}"
+    echo -e "${GREEN}✓ Leonardo directory structure created${COLOR_RESET}" >&2
+}
+
+# Interactive model selection with size recommendations
+select_model_interactive() {
+    local usb_size_mb="${1:-8192}"  # Default 8GB
+    local usb_size_gb=$((usb_size_mb / 1024))
+    
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}" >&2
+    echo -e "${BOLD}               🤖 Select AI Model${COLOR_RESET}" >&2
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}" >&2
+    echo >&2
+    echo -e "${YELLOW}USB Size: ${usb_size_gb}GB${COLOR_RESET}" >&2
+    echo -e "${DIM}Recommended models based on available space:${COLOR_RESET}" >&2
+    echo >&2
+    
+    # Get recommended models
+    local models=()
+    readarray -t models < <(get_recommended_models "$usb_size_gb")
+    
+    if [[ ${#models[@]} -eq 0 ]]; then
+        echo -e "${RED}USB too small for any models!${COLOR_RESET}" >&2
+        echo -e "${YELLOW}Minimum 2GB required.${COLOR_RESET}" >&2
+        return 1
+    fi
+    
+    # Add option to skip
+    models+=("Skip (no model)")
+    
+    # Show menu
+    local selected=$(show_menu "Available Models" "${models[@]}")
+    
+    # Extract model name without size
+    if [[ "$selected" == "Skip (no model)" ]] || [[ -z "$selected" ]]; then
+        echo >&2
+        return 1
+    else
+        # Remove size annotation and any trailing whitespace/carriage returns
+        local model_name="${selected% (*}"
+        # Clean up any carriage returns or trailing whitespace
+        model_name=$(echo "$model_name" | tr -d '\r' | xargs)
+        echo "$model_name"
+    fi
+}
+
+# Get USB free space in MB
+get_usb_free_space_mb() {
+    local mount_point="$1"
+    df -BM "$mount_point" | awk 'NR==2 {print $4}' | sed 's/M$//'
+}
+
+# Get device size in MB
+get_device_size_mb() {
+    local device="$1"
+    # Try different methods to get device size
+    if command_exists lsblk; then
+        lsblk -ndo SIZE -b "$device" 2>/dev/null | awk '{print int($1/1024/1024)}'
+    elif command_exists blockdev; then
+        blockdev --getsize64 "$device" 2>/dev/null | awk '{print int($1/1024/1024)}'
+    else
+        # Fallback to 8GB
+        echo "8192"
+    fi
 }

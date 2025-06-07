@@ -122,22 +122,149 @@ format_usb_drive() {
                 return 1
             fi
             
+            # Wait a moment for partition to be ready
+            sleep 1
+            
             # Format partition
             local partition="${device}1"
             [[ -b "${device}p1" ]] && partition="${device}p1"
             
             case "$filesystem" in
                 "exfat")
-                    mkfs.exfat -n "$label" "$partition" >/dev/null 2>&1
+                    if command_exists "mkfs.exfat"; then
+                        if ! mkfs.exfat -n "$label" "$partition"; then
+                            echo -e "${RED}Failed to format USB drive as exFAT${COLOR_RESET}"
+                            echo -e "${YELLOW}Error: mkfs.exfat failed${COLOR_RESET}"
+                            return 1
+                        fi
+                    else
+                        echo -e "${YELLOW}mkfs.exfat not found.${COLOR_RESET}"
+                        if confirm_action "Install exfat-utils now?"; then
+                            echo -e "${CYAN}Installing exfat-utils...${COLOR_RESET}"
+                            local install_cmd=""
+                            
+                            # Detect package manager
+                            if command_exists "apt-get"; then
+                                install_cmd="sudo apt-get update && sudo apt-get install -y exfat-utils exfat-fuse"
+                            elif command_exists "yum"; then
+                                install_cmd="sudo yum install -y exfat-utils fuse-exfat"
+                            elif command_exists "dnf"; then
+                                install_cmd="sudo dnf install -y exfat-utils fuse-exfat"
+                            elif command_exists "pacman"; then
+                                install_cmd="sudo pacman -S --noconfirm exfat-utils"
+                            elif command_exists "zypper"; then
+                                install_cmd="sudo zypper install -y exfat-utils"
+                            else
+                                echo -e "${RED}Unable to detect package manager${COLOR_RESET}"
+                                echo -e "${YELLOW}Please install exfat-utils manually${COLOR_RESET}"
+                                return 1
+                            fi
+                            
+                            echo -e "${DIM}Running: $install_cmd${COLOR_RESET}"
+                            if eval "$install_cmd"; then
+                                echo -e "${GREEN}✓ exfat-utils installed successfully${COLOR_RESET}"
+                                # Try formatting again
+                                if ! mkfs.exfat -n "$label" "$partition"; then
+                                    echo -e "${RED}Format still failed after installation${COLOR_RESET}"
+                                    return 1
+                                fi
+                            else
+                                echo -e "${RED}Failed to install exfat-utils${COLOR_RESET}"
+                                return 1
+                            fi
+                        else
+                            echo -e "${YELLOW}Please install manually: sudo apt-get install exfat-utils exfat-fuse${COLOR_RESET}"
+                            return 1
+                        fi
+                    fi
                     ;;
                 "fat32")
-                    mkfs.vfat -F 32 -n "$label" "$partition" >/dev/null 2>&1
+                    if command_exists "mkfs.vfat"; then
+                        mkfs.vfat -F 32 -n "$label" "$partition" >/dev/null 2>&1
+                    else
+                        echo -e "${YELLOW}mkfs.vfat not found.${COLOR_RESET}"
+                        if confirm_action "Install dosfstools now?"; then
+                            echo -e "${CYAN}Installing dosfstools...${COLOR_RESET}"
+                            local install_cmd=""
+                            
+                            # Detect package manager
+                            if command_exists "apt-get"; then
+                                install_cmd="sudo apt-get update && sudo apt-get install -y dosfstools"
+                            elif command_exists "yum"; then
+                                install_cmd="sudo yum install -y dosfstools"
+                            elif command_exists "dnf"; then
+                                install_cmd="sudo dnf install -y dosfstools"
+                            elif command_exists "pacman"; then
+                                install_cmd="sudo pacman -S --noconfirm dosfstools"
+                            elif command_exists "zypper"; then
+                                install_cmd="sudo zypper install -y dosfstools"
+                            else
+                                echo -e "${RED}Unable to detect package manager${COLOR_RESET}"
+                                return 1
+                            fi
+                            
+                            echo -e "${DIM}Running: $install_cmd${COLOR_RESET}"
+                            if eval "$install_cmd"; then
+                                echo -e "${GREEN}✓ dosfstools installed successfully${COLOR_RESET}"
+                                # Try formatting again
+                                mkfs.vfat -F 32 -n "$label" "$partition" >/dev/null 2>&1
+                            else
+                                echo -e "${RED}Failed to install dosfstools${COLOR_RESET}"
+                                return 1
+                            fi
+                        else
+                            echo -e "${YELLOW}Please install manually: sudo apt-get install dosfstools${COLOR_RESET}"
+                            return 1
+                        fi
+                    fi
                     ;;
                 "ntfs")
-                    mkfs.ntfs -f -L "$label" "$partition" >/dev/null 2>&1
+                    if command_exists "mkfs.ntfs"; then
+                        mkfs.ntfs -f -L "$label" "$partition" >/dev/null 2>&1
+                    else
+                        echo -e "${YELLOW}mkfs.ntfs not found.${COLOR_RESET}"
+                        if confirm_action "Install ntfs-3g now?"; then
+                            echo -e "${CYAN}Installing ntfs-3g...${COLOR_RESET}"
+                            local install_cmd=""
+                            
+                            # Detect package manager
+                            if command_exists "apt-get"; then
+                                install_cmd="sudo apt-get update && sudo apt-get install -y ntfs-3g"
+                            elif command_exists "yum"; then
+                                install_cmd="sudo yum install -y ntfs-3g"
+                            elif command_exists "dnf"; then
+                                install_cmd="sudo dnf install -y ntfs-3g"
+                            elif command_exists "pacman"; then
+                                install_cmd="sudo pacman -S --noconfirm ntfs-3g"
+                            elif command_exists "zypper"; then
+                                install_cmd="sudo zypper install -y ntfs-3g"
+                            else
+                                echo -e "${RED}Unable to detect package manager${COLOR_RESET}"
+                                return 1
+                            fi
+                            
+                            echo -e "${DIM}Running: $install_cmd${COLOR_RESET}"
+                            if eval "$install_cmd"; then
+                                echo -e "${GREEN}✓ ntfs-3g installed successfully${COLOR_RESET}"
+                                # Try formatting again
+                                mkfs.ntfs -f -L "$label" "$partition" >/dev/null 2>&1
+                            else
+                                echo -e "${RED}Failed to install ntfs-3g${COLOR_RESET}"
+                                return 1
+                            fi
+                        else
+                            echo -e "${YELLOW}Please install manually: sudo apt-get install ntfs-3g${COLOR_RESET}"
+                            return 1
+                        fi
+                    fi
                     ;;
                 "ext4")
-                    mkfs.ext4 -L "$label" "$partition" >/dev/null 2>&1
+                    if command_exists "mkfs.ext4"; then
+                        mkfs.ext4 -L "$label" "$partition" >/dev/null 2>&1
+                    else
+                        echo -e "${RED}mkfs.ext4 not found${COLOR_RESET}"
+                        return 1
+                    fi
                     ;;
             esac
             
@@ -207,17 +334,16 @@ mount_usb_drive() {
         "linux")
             # Create mount point if not specified
             if [[ -z "$mount_point" ]]; then
-                # Try user-writable locations first
-                if [[ -w "$HOME" ]]; then
-                    mount_point="$HOME/leonardo_usb_$$"
-                    mkdir -p "$mount_point"
-                else
-                    mount_point="/mnt/leonardo_$$"
-                    mkdir -p "$mount_point" 2>/dev/null || {
-                        log_message "ERROR" "Cannot create mount point - need sudo permissions"
+                # Use a temporary mount point
+                mount_point="/tmp/leonardo_mount_$(basename "$device")"
+                mkdir -p "$mount_point" 2>/dev/null || {
+                    # Try with sudo
+                    echo -e "${YELLOW}Creating mount point requires root privileges${COLOR_RESET}"
+                    sudo mkdir -p "$mount_point" || {
+                        log_message "ERROR" "Cannot create mount point"
                         return 1
                     }
-                fi
+                }
             fi
             
             # Try different mount methods
@@ -227,20 +353,38 @@ mount_usb_drive() {
             elif command -v udisksctl >/dev/null 2>&1; then
                 # Try udisksctl for user mounting
                 log_message "INFO" "Trying udisksctl mount..."
+                echo -e "${DIM}Attempting to mount using udisksctl...${COLOR_RESET}"
                 local mount_output=$(udisksctl mount -b "$device" 2>&1)
                 if [[ $? -eq 0 ]]; then
-                    LEONARDO_USB_MOUNT=$(echo "$mount_output" | grep -oP "Mounted .* at \K.*" | sed 's/\.$//')
+                    # Extract mount point from output
+                    LEONARDO_USB_MOUNT=$(echo "$mount_output" | grep -oP "Mounted .* at \K[^.]*" | tail -1)
+                    if [[ -z "$LEONARDO_USB_MOUNT" ]]; then
+                        # Alternative parsing for different udisksctl versions
+                        LEONARDO_USB_MOUNT=$(echo "$mount_output" | sed -n 's/.*at \(.*\)\.$/\1/p' | tail -1)
+                    fi
                     export LEONARDO_USB_MOUNT
                     log_message "INFO" "Mounted via udisksctl at: $LEONARDO_USB_MOUNT"
+                    echo -e "${GREEN}✓ Mounted at: $LEONARDO_USB_MOUNT${COLOR_RESET}"
+                    # Clean up our temporary mount point since udisksctl created its own
+                    rmdir "$mount_point" 2>/dev/null || true
                 else
-                    log_message "ERROR" "Failed to mount device - $mount_output"
-                    rmdir "$mount_point" 2>/dev/null
+                    echo -e "${RED}Failed to mount using udisksctl${COLOR_RESET}"
+                    echo -e "${YELLOW}Error: $mount_output${COLOR_RESET}"
                     return 1
                 fi
             else
-                log_message "ERROR" "Failed to mount device - need sudo or udisksctl"
-                rmdir "$mount_point" 2>/dev/null
-                return 1
+                # No udisksctl, try sudo directly
+                echo -e "${YELLOW}Mounting requires root privileges${COLOR_RESET}"
+                echo -e "${BLUE}Please enter your password when prompted:${COLOR_RESET}"
+                if sudo mount "$device" "$mount_point"; then
+                    LEONARDO_USB_MOUNT="$mount_point"
+                    export LEONARDO_USB_MOUNT
+                    log_message "INFO" "Mounted with sudo at: $LEONARDO_USB_MOUNT"
+                else
+                    log_message "ERROR" "Failed to mount device"
+                    rmdir "$mount_point" 2>/dev/null || true
+                    return 1
+                fi
             fi
             ;;
         "windows")
@@ -275,7 +419,7 @@ unmount_usb_drive() {
         "linux")
             if umount "$device" 2>/dev/null || umount "$LEONARDO_USB_MOUNT" 2>/dev/null; then
                 # Clean up mount point if it's our temporary one
-                [[ "$LEONARDO_USB_MOUNT" =~ ^/mnt/leonardo_ ]] && rmdir "$LEONARDO_USB_MOUNT" 2>/dev/null
+                [[ "$LEONARDO_USB_MOUNT" =~ ^/tmp/leonardo_mount_ ]] && rmdir "$LEONARDO_USB_MOUNT" 2>/dev/null
                 log_message "INFO" "USB drive unmounted"
                 return 0
             fi
