@@ -4611,13 +4611,33 @@ start_location_aware_chat() {
     local model="${1:-}"
     local preference="${2:-auto}"
     
+    # For USB deployments without Ollama, use direct model access
+    if [[ "${LEONARDO_USB_MODE:-}" == "true" ]] || [[ "$preference" == "usb" ]]; then
+        # Check for GGUF models in USB
+        local model_dir="${LEONARDO_MODEL_DIR:-${LEONARDO_BASE_DIR}/models}"
+        if [[ -d "$model_dir" ]] && [[ -n "$(find "$model_dir" -name "*.gguf" 2>/dev/null | head -1)" ]]; then
+            echo -e "${CYAN}USB Mode: Using local GGUF models${COLOR_RESET}"
+            # Fallback to simple chat interface for GGUF models
+            handle_gguf_chat "$model_dir"
+            return
+        fi
+    fi
+    
     # Get the appropriate endpoint
     local endpoint=$(get_ollama_endpoint "$preference")
     
     # Check if endpoint is available
     if ! curl -s "$endpoint/api/tags" >/dev/null 2>&1; then
-        echo -e "${RED}Error: Selected Ollama instance is not available${COLOR_RESET}"
-        echo -e "${YELLOW}Tip: Make sure Ollama is running on the selected system${COLOR_RESET}"
+        # If Ollama not available, check for local models
+        local model_dir="${LEONARDO_MODEL_DIR:-${LEONARDO_BASE_DIR}/models}"
+        if [[ -d "$model_dir" ]] && [[ -n "$(find "$model_dir" -name "*.gguf" 2>/dev/null | head -1)" ]]; then
+            echo -e "${YELLOW}Ollama not available, using local GGUF models${COLOR_RESET}"
+            handle_gguf_chat "$model_dir"
+            return
+        fi
+        
+        echo -e "${RED}Error: No AI service available${COLOR_RESET}"
+        echo -e "${YELLOW}Tip: Make sure Ollama is running or GGUF models are installed${COLOR_RESET}"
         return 1
     fi
     
@@ -4708,9 +4728,59 @@ start_location_aware_chat() {
     echo -e "\n${GREEN}Chat session ended${COLOR_RESET}"
 }
 
+# Handle GGUF model chat (fallback when Ollama not available)
+handle_gguf_chat() {
+    local model_dir="$1"
+    
+    echo -e "\n${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
+    echo -e "${BOLD}               🤖 Leonardo AI Chat - Local Models${COLOR_RESET}"
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
+    
+    # List available GGUF models
+    echo -e "\n${CYAN}Available GGUF Models:${COLOR_RESET}\n"
+    local models=()
+    local i=1
+    
+    while IFS= read -r -d '' model_file; do
+        local model_name=$(basename "$model_file" .gguf)
+        echo "  $i) $model_name"
+        models+=("$model_file")
+        ((i++))
+    done < <(find "$model_dir" -name "*.gguf" -print0 2>/dev/null)
+    
+    if [[ ${#models[@]} -eq 0 ]]; then
+        echo -e "${RED}No GGUF models found in $model_dir${COLOR_RESET}"
+        return 1
+    fi
+    
+    # Select model
+    echo
+    read -p "Select model (1-${#models[@]}): " selection
+    
+    if [[ ! "$selection" =~ ^[0-9]+$ ]] || [[ $selection -lt 1 ]] || [[ $selection -gt ${#models[@]} ]]; then
+        echo -e "${RED}Invalid selection${COLOR_RESET}"
+        return 1
+    fi
+    
+    local selected_model="${models[$((selection-1))]}"
+    local model_name=$(basename "$selected_model" .gguf)
+    
+    echo -e "\n${GREEN}Selected: $model_name${COLOR_RESET}"
+    echo -e "${DIM}Model file: $selected_model${COLOR_RESET}"
+    echo
+    echo -e "${YELLOW}Note: Chat interface requires llama.cpp or compatible runtime${COLOR_RESET}"
+    echo -e "${DIM}Without a runtime, models can only be managed, not used for chat${COLOR_RESET}"
+    echo
+    echo -e "${CYAN}To enable chat on macOS:${COLOR_RESET}"
+    echo "  1. Install Ollama: https://ollama.ai"
+    echo "  2. Or install llama.cpp: brew install llama.cpp"
+    echo
+}
+
 # Export functions
 export -f select_ollama_instance
 export -f start_location_aware_chat
+export -f handle_gguf_chat
 
 # ==== Component: src/security/audit.sh (STUB) ====
 # TODO: Implement src/security/audit.sh
@@ -11250,8 +11320,29 @@ handle_chat_command() {
     start_location_aware_chat "" "$instance_preference"
 }
 
+# Check if running from USB deployment
+is_usb_deployment() {
+    # Check multiple indicators
+    [[ "${LEONARDO_USB_MODE:-}" == "true" ]] && return 0
+    [[ -n "${LEONARDO_USB_MOUNT:-}" ]] && return 0
+    [[ -f "/leonardo_usb_marker" ]] && return 0
+    
+    # Check if script path contains common USB mount patterns
+    local script_path="${BASH_SOURCE[0]:-$0}"
+    if [[ "$script_path" =~ /(Volumes|media|mnt|run/media)/ ]]; then
+        return 0
+    fi
+    
+    return 1
+}
+
 # Check if any models are installed
 check_installed_models() {
+    # For USB deployment, always show chat option
+    if is_usb_deployment; then
+        return 0  # Always allow chat on USB - models should be there
+    fi
+    
     # Check Ollama models
     if command_exists ollama; then
         local ollama_models=$(ollama list 2>/dev/null | tail -n +2 | wc -l)
@@ -11263,6 +11354,20 @@ check_installed_models() {
         local local_models=$(find "$LEONARDO_MODEL_DIR" -name "*.gguf" 2>/dev/null | wc -l)
         [[ $local_models -gt 0 ]] && return 0
     fi
+    
+    # Also check common model locations
+    local common_dirs=(
+        "$LEONARDO_BASE_DIR/models"
+        "$HOME/.leonardo/models"
+        "/opt/leonardo/models"
+        "./models"
+    )
+    
+    for dir in "${common_dirs[@]}"; do
+        if [[ -d "$dir" ]] && [[ -n "$(find "$dir" -name "*.gguf" 2>/dev/null | head -1)" ]]; then
+            return 0
+        fi
+    done
     
     return 1
 }

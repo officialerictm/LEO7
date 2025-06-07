@@ -925,8 +925,38 @@ handle_chat_command() {
     start_location_aware_chat "" "$instance_preference"
 }
 
+# Check if running from USB deployment
+is_usb_deployment() {
+    # Check multiple indicators
+    [[ "${LEONARDO_USB_MODE:-}" == "true" ]] && return 0
+    [[ -n "${LEONARDO_USB_MOUNT:-}" ]] && return 0
+    [[ -f "/leonardo_usb_marker" ]] && return 0
+    
+    # Check if script path contains common USB mount patterns
+    local script_path="${BASH_SOURCE[0]:-$0}"
+    local real_path=$(readlink -f "$script_path" 2>/dev/null || realpath "$script_path" 2>/dev/null || echo "$script_path")
+    
+    # Check for common USB mount patterns (case-insensitive for macOS)
+    if echo "$real_path" | grep -iE '/(Volumes|media|mnt|run/media|usb|removable)/' >/dev/null 2>&1; then
+        return 0
+    fi
+    
+    # Check if we're in a leonardo directory on a removable device
+    if [[ -d "${script_path%/*}/models" ]] && [[ -f "${script_path%/*}/leonardo.sh" ]]; then
+        # Likely a portable installation
+        return 0
+    fi
+    
+    return 1
+}
+
 # Check if any models are installed
 check_installed_models() {
+    # For USB deployment, always show chat option
+    if is_usb_deployment; then
+        return 0  # Always allow chat on USB - models should be there
+    fi
+    
     # Check Ollama models
     if command_exists ollama; then
         local ollama_models=$(ollama list 2>/dev/null | tail -n +2 | wc -l)
@@ -938,6 +968,20 @@ check_installed_models() {
         local local_models=$(find "$LEONARDO_MODEL_DIR" -name "*.gguf" 2>/dev/null | wc -l)
         [[ $local_models -gt 0 ]] && return 0
     fi
+    
+    # Also check common model locations
+    local common_dirs=(
+        "$LEONARDO_BASE_DIR/models"
+        "$HOME/.leonardo/models"
+        "/opt/leonardo/models"
+        "./models"
+    )
+    
+    for dir in "${common_dirs[@]}"; do
+        if [[ -d "$dir" ]] && [[ -n "$(find "$dir" -name "*.gguf" 2>/dev/null | head -1)" ]]; then
+            return 0
+        fi
+    done
     
     return 1
 }
