@@ -7229,6 +7229,12 @@ download_model_to_usb() {
             printf "\r%-80s\r" " "  # Clear line
             rm -f "$temp_out"
             
+            # Check if last line indicated success
+            if [[ "$last_line" =~ "success" ]] || [[ "$download_done" == "true" ]]; then
+                download_done=true
+                result=0
+            fi
+            
             if [[ $result -eq 0 ]] && [[ "$download_done" == "true" ]]; then
                 echo -e "${GREEN}✓ Model downloaded to Ollama${COLOR_RESET}" >&2
                 
@@ -7350,6 +7356,9 @@ EOF
         "llama3.2:3b")
             model_url="https://huggingface.co/lmstudio-community/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf"
             ;;
+        "qwen2.5:3b")
+            model_url="https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf"
+            ;;
         "gemma2:2b")
             model_url="https://huggingface.co/lmstudio-community/gemma-2-2b-it-GGUF/resolve/main/gemma-2-2b-it-Q4_K_M.gguf"
             ;;
@@ -7370,6 +7379,7 @@ EOF
             echo "  - mistral:7b" >&2
             echo "  - llama3.2:1b" >&2
             echo "  - llama3.2:3b" >&2
+            echo "  - qwen2.5:3b" >&2
             echo "  - gemma2:2b" >&2
             echo "  - codellama:7b" >&2
             echo "  - llama3.1:8b" >&2
