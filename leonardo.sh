@@ -2124,6 +2124,158 @@ command_exists() {
 # Export functions
 export -f clear command_exists
 
+# ==== Component: src/core/system_status.sh ====
+
+# System Status Module - Track where services are running
+# Part of Leonardo AI Universal
+
+# Ensure color variables are defined
+: "${GREEN:=\033[32m}"
+: "${CYAN:=\033[36m}"
+: "${YELLOW:=\033[33m}"
+: "${RED:=\033[31m}"
+: "${DIM:=\033[2m}"
+: "${COLOR_RESET:=\033[0m}"
+
+# Detect Ollama location (host vs USB)
+detect_ollama_location() {
+    local location="none"
+    local ollama_pid=""
+    local ollama_path=""
+    
+    # Check if Ollama is running
+    if command -v pgrep >/dev/null 2>&1; then
+        ollama_pid=$(pgrep -f "ollama serve" 2>/dev/null | head -1)
+    fi
+    
+    if [[ -n "$ollama_pid" ]]; then
+        # Get the path of the running Ollama process
+        if command -v pwdx >/dev/null 2>&1; then
+            ollama_path=$(pwdx "$ollama_pid" 2>/dev/null | cut -d: -f2- | xargs)
+        elif [[ -e "/proc/$ollama_pid/cwd" ]]; then
+            ollama_path=$(readlink "/proc/$ollama_pid/cwd" 2>/dev/null)
+        fi
+        
+        # Check if running from USB
+        if [[ -n "$LEONARDO_USB_MOUNT" ]] && [[ "$ollama_path" =~ "$LEONARDO_USB_MOUNT" ]]; then
+            location="USB"
+        elif [[ -n "$ollama_path" ]]; then
+            location="Host"
+        else
+            # Fallback: check if standard Ollama is responding
+            if ollama list >/dev/null 2>&1; then
+                location="Host"
+            fi
+        fi
+    else
+        # Ollama not running, check if it's available
+        if command -v ollama >/dev/null 2>&1; then
+            # Check if it's the USB version
+            local ollama_bin=$(which ollama)
+            if [[ -n "$LEONARDO_USB_MOUNT" ]] && [[ "$ollama_bin" =~ "$LEONARDO_USB_MOUNT" ]]; then
+                location="USB (not running)"
+            else
+                location="Host (not running)"
+            fi
+        fi
+    fi
+    
+    echo "$location"
+}
+
+# Detect Leonardo location (where the script is running from)
+detect_leonardo_location() {
+    local script_path="${BASH_SOURCE[0]}"
+    local real_path=$(readlink -f "$script_path" 2>/dev/null || realpath "$script_path" 2>/dev/null)
+    
+    if [[ -n "$LEONARDO_USB_MOUNT" ]] && [[ "$real_path" =~ "$LEONARDO_USB_MOUNT" ]]; then
+        echo "USB"
+    else
+        echo "Host"
+    fi
+}
+
+# Get Ollama endpoint based on location preference
+get_ollama_endpoint() {
+    local preference="${1:-auto}"  # auto, host, usb
+    local host_endpoint="http://localhost:11434"
+    local usb_endpoint="http://localhost:11435"  # Different port for USB instance
+    
+    case "$preference" in
+        host)
+            echo "$host_endpoint"
+            ;;
+        usb)
+            echo "$usb_endpoint"
+            ;;
+        auto)
+            # Check which one is available
+            if curl -s "$usb_endpoint/api/tags" >/dev/null 2>&1; then
+                echo "$usb_endpoint"
+            elif curl -s "$host_endpoint/api/tags" >/dev/null 2>&1; then
+                echo "$host_endpoint"
+            else
+                echo "$host_endpoint"  # Default
+            fi
+            ;;
+    esac
+}
+
+# Format system status for display
+format_system_status() {
+    local ollama_loc=$(detect_ollama_location)
+    local leonardo_loc=$(detect_leonardo_location)
+    local status=""
+    
+    # Ollama status with color
+    case "$ollama_loc" in
+        Host)
+            status="${GREEN}Ollama: Host${COLOR_RESET}"
+            ;;
+        USB)
+            status="${CYAN}Ollama: USB${COLOR_RESET}"
+            ;;
+        "Host (not running)")
+            status="${YELLOW}Ollama: Host (offline)${COLOR_RESET}"
+            ;;
+        "USB (not running)")
+            status="${YELLOW}Ollama: USB (offline)${COLOR_RESET}"
+            ;;
+        none)
+            status="${RED}Ollama: Not found${COLOR_RESET}"
+            ;;
+    esac
+    
+    # Add Leonardo location
+    if [[ "$leonardo_loc" == "USB" ]]; then
+        status="$status | ${CYAN}Leonardo: USB${COLOR_RESET}"
+    else
+        status="$status | ${GREEN}Leonardo: Host${COLOR_RESET}"
+    fi
+    
+    echo -e "$status"
+}
+
+# Get location prefix for chat prompt
+get_chat_location_prefix() {
+    local ollama_endpoint="${1:-}"
+    local model="${2:-unknown}"
+    local location="Host"
+    
+    if [[ "$ollama_endpoint" =~ ":11435" ]]; then
+        location="USB"
+    fi
+    
+    echo "[${location}:${model}]"
+}
+
+# Export functions
+export -f detect_ollama_location
+export -f detect_leonardo_location
+export -f get_ollama_endpoint
+export -f format_system_status
+export -f get_chat_location_prefix
+
 # ==== Component: src/ui/menu.sh ====
 # ==============================================================================
 # Leonardo AI Universal - Menu System
@@ -3321,42 +3473,39 @@ show_system_info() {
     # OS info
     local os_name=$(uname -s)
     local os_version=$(uname -r)
-    printf "OS: ${CYAN}%-25s${RESET}\n" "$os_name $os_version"
+    echo -e "${DIM}OS:${RESET} $os_name $os_version"
     
-    # CPU info
-    local cpu_model="Unknown"
-    local cpu_cores=1
-    if [[ -f /proc/cpuinfo ]]; then
-        cpu_model=$(grep "model name" /proc/cpuinfo | head -1 | cut -d: -f2 | xargs)
-        cpu_cores=$(grep -c "processor" /proc/cpuinfo)
-    elif command -v sysctl >/dev/null 2>&1; then
-        cpu_model=$(sysctl -n machdep.cpu.brand_string 2>/dev/null || echo "Unknown")
-        cpu_cores=$(sysctl -n hw.ncpu 2>/dev/null || echo "1")
+    # Service locations
+    local ollama_loc=$(detect_ollama_location)
+    local leonardo_loc=$(detect_leonardo_location)
+    
+    # Ollama status with color
+    echo -ne "${DIM}Ollama:${RESET} "
+    case "$ollama_loc" in
+        Host)
+            echo -e "${GREEN}Running on Host${RESET}"
+            ;;
+        USB)
+            echo -e "${CYAN}Running on USB${RESET}"
+            ;;
+        "Host (not running)")
+            echo -e "${YELLOW}Host (offline)${RESET}"
+            ;;
+        "USB (not running)")
+            echo -e "${YELLOW}USB (offline)${RESET}"
+            ;;
+        none)
+            echo -e "${RED}Not found${RESET}"
+            ;;
+    esac
+    
+    # Leonardo location
+    echo -ne "${DIM}Leonardo:${RESET} "
+    if [[ "$leonardo_loc" == "USB" ]]; then
+        echo -e "${CYAN}Running from USB${RESET}"
+    else
+        echo -e "${GREEN}Running from Host${RESET}"
     fi
-    printf "CPU: ${CYAN}%-24s${RESET}\n" "${cpu_model:0:24}"
-    printf "Cores: ${CYAN}%-22s${RESET}\n" "$cpu_cores"
-    
-    # Memory info
-    local total_mem=0
-    local free_mem=0
-    if command -v free >/dev/null 2>&1; then
-        total_mem=$(free -b | awk '/^Mem:/ {print $2}')
-        free_mem=$(free -b | awk '/^Mem:/ {print $4}')
-    elif command -v vm_stat >/dev/null 2>&1; then
-        local pages=$(vm_stat | grep "Pages free" | awk '{print $3}' | tr -d '.')
-        free_mem=$((pages * 4096))
-        total_mem=$(sysctl -n hw.memsize 2>/dev/null || echo "0")
-    fi
-    
-    printf "Memory: ${CYAN}%s / %s${RESET}\n" \
-        "$(format_bytes "$free_mem")" \
-        "$(format_bytes "$total_mem")"
-    
-    # Disk space
-    local disk_info=$(df -h / | tail -1)
-    local disk_used=$(echo "$disk_info" | awk '{print $3}')
-    local disk_total=$(echo "$disk_info" | awk '{print $2}')
-    printf "Disk: ${CYAN}%s / %s${RESET}\n" "$disk_used" "$disk_total"
 }
 
 # USB device status
@@ -4421,6 +4570,147 @@ stop_web_server() {
     echo -e "${CYAN}Stopping web server...${COLOR_RESET}"
     pkill -f "python3 -m http.server" 2>/dev/null || true
 }
+
+# ==== Component: src/chat/chat_wrapper.sh ====
+
+# Chat Wrapper - Provides location-aware chat interface
+# Part of Leonardo AI Universal
+
+# Ensure color variables are defined
+: "${GREEN:=\033[32m}"
+: "${CYAN:=\033[36m}"
+: "${YELLOW:=\033[33m}"
+: "${RED:=\033[31m}"
+: "${DIM:=\033[2m}"
+: "${BOLD:=\033[1m}"
+: "${COLOR_RESET:=\033[0m}"
+
+# Select Ollama instance
+select_ollama_instance() {
+    echo -e "\n${CYAN}Select Ollama Instance:${COLOR_RESET}\n"
+    
+    local host_status=$(detect_ollama_location | grep -q "Host" && echo "Available" || echo "Not Available")
+    local usb_status=$(detect_ollama_location | grep -q "USB" && echo "Available" || echo "Not Available")
+    
+    echo -e "1) ${GREEN}Host Ollama${COLOR_RESET} ($host_status)"
+    echo -e "2) ${CYAN}USB Ollama${COLOR_RESET} ($usb_status)"
+    echo -e "3) ${YELLOW}Auto-detect${COLOR_RESET} (Use available instance)"
+    echo
+    
+    read -p "Select option (1-3): " choice
+    
+    case "$choice" in
+        1) echo "host" ;;
+        2) echo "usb" ;;
+        3|*) echo "auto" ;;
+    esac
+}
+
+# Start chat with location awareness
+start_location_aware_chat() {
+    local model="${1:-}"
+    local preference="${2:-auto}"
+    
+    # Get the appropriate endpoint
+    local endpoint=$(get_ollama_endpoint "$preference")
+    
+    # Check if endpoint is available
+    if ! curl -s "$endpoint/api/tags" >/dev/null 2>&1; then
+        echo -e "${RED}Error: Selected Ollama instance is not available${COLOR_RESET}"
+        echo -e "${YELLOW}Tip: Make sure Ollama is running on the selected system${COLOR_RESET}"
+        return 1
+    fi
+    
+    # If no model specified, let user select
+    if [[ -z "$model" ]]; then
+        echo -e "\n${CYAN}Available Models:${COLOR_RESET}\n"
+        
+        # List models from the selected endpoint
+        local models=$(curl -s "$endpoint/api/tags" | jq -r '.models[].name' 2>/dev/null)
+        
+        if [[ -z "$models" ]]; then
+            echo -e "${RED}No models found on selected instance${COLOR_RESET}"
+            return 1
+        fi
+        
+        # Show models with numbers
+        local i=1
+        local model_array=()
+        while IFS= read -r m; do
+            echo -e "$i) $m"
+            model_array+=("$m")
+            ((i++))
+        done <<< "$models"
+        
+        echo
+        read -p "Select model (1-$((i-1))): " model_choice
+        
+        if [[ "$model_choice" =~ ^[0-9]+$ ]] && (( model_choice > 0 && model_choice < i )); then
+            model="${model_array[$((model_choice-1))]}"
+        else
+            echo -e "${RED}Invalid selection${COLOR_RESET}"
+            return 1
+        fi
+    fi
+    
+    # Start chat with location prefix in prompt
+    echo -e "\n${GREEN}Starting chat with $model...${COLOR_RESET}"
+    echo -e "${DIM}Endpoint: $endpoint${COLOR_RESET}\n"
+    
+    # Export endpoint for ollama CLI
+    export OLLAMA_HOST="$endpoint"
+    
+    # Create custom prompt with location prefix
+    local location_prefix=$(get_chat_location_prefix "$endpoint" "$model")
+    
+    # Start interactive chat
+    echo -e "${CYAN}═══════════════════════════════════════════════════════${COLOR_RESET}"
+    echo -e "${BOLD}Leonardo AI Chat${COLOR_RESET} - ${DIM}Type 'exit' or Ctrl+C to quit${COLOR_RESET}"
+    echo -e "${CYAN}═══════════════════════════════════════════════════════${COLOR_RESET}\n"
+    
+    while true; do
+        # Show custom prompt with location
+        echo -ne "${BOLD}${location_prefix}${COLOR_RESET} > "
+        read -r user_input
+        
+        # Check for exit
+        if [[ "$user_input" == "exit" ]] || [[ "$user_input" == "quit" ]]; then
+            break
+        fi
+        
+        # Skip empty input
+        if [[ -z "$user_input" ]]; then
+            continue
+        fi
+        
+        # Send to ollama
+        echo -e "\n${DIM}Thinking...${COLOR_RESET}\n"
+        
+        # Use ollama run for interactive chat
+        if command -v ollama >/dev/null 2>&1; then
+            ollama run "$model" "$user_input"
+        else
+            # Fallback to API if ollama CLI not available
+            local response=$(curl -s "$endpoint/api/generate" \
+                -d "{\"model\": \"$model\", \"prompt\": \"$user_input\", \"stream\": false}" \
+                | jq -r '.response' 2>/dev/null)
+            
+            if [[ -n "$response" ]]; then
+                echo -e "$response"
+            else
+                echo -e "${RED}Error: Failed to get response${COLOR_RESET}"
+            fi
+        fi
+        
+        echo
+    done
+    
+    echo -e "\n${GREEN}Chat session ended${COLOR_RESET}"
+}
+
+# Export functions
+export -f select_ollama_instance
+export -f start_location_aware_chat
 
 # ==== Component: src/security/audit.sh (STUB) ====
 # TODO: Implement src/security/audit.sh
@@ -10192,6 +10482,9 @@ main() {
         clear
         show_banner
         
+        # Show system status
+        echo -e "\n${DIM}System Status: $(format_system_status)${COLOR_RESET}\n"
+        
         # Build menu options dynamically
         local menu_options=()
         
@@ -10946,234 +11239,15 @@ handle_exit() {
     exit 0
 }
 
-# Check if any models are installed
-check_installed_models() {
-    # Check for models in default location
-    if [[ -d "$LEONARDO_MODEL_DIR" ]] && [[ -n "$(ls -A "$LEONARDO_MODEL_DIR" 2>/dev/null)" ]]; then
-        return 0
-    fi
-    
-    # Check for Ollama models
-    if command_exists ollama && ollama list 2>/dev/null | grep -q "^[a-zA-Z]"; then
-        return 0
-    fi
-    
-    return 1
-}
-
-# Get list of available models for chat
-get_chat_models() {
-    local models=()
-    
-    # Get Ollama models
-    if command_exists ollama; then
-        while IFS= read -r line; do
-            if [[ -n "$line" && ! "$line" =~ ^NAME ]]; then
-                local model_name=$(echo "$line" | awk '{print $1}')
-                models+=("$model_name")
-            fi
-        done < <(ollama list 2>/dev/null)
-    fi
-    
-    # Get local GGUF models
-    if [[ -d "$LEONARDO_MODEL_DIR" ]]; then
-        for model_file in "$LEONARDO_MODEL_DIR"/*.gguf; do
-            if [[ -f "$model_file" ]]; then
-                local model_name=$(basename "$model_file" .gguf)
-                models+=("$model_name")
-            fi
-        done
-    fi
-    
-    printf '%s\n' "${models[@]}"
-}
-
 # Handle chat command
 handle_chat_command() {
-    # Get available models  
-    local models=()
+    log_message "INFO" "Starting chat interface"
     
-    # Check USB mode - only show USB models when running from USB
-    if is_usb_deployment; then
-        # Only check for models on USB
-        if [[ -d "$LEONARDO_MODEL_DIR" ]]; then
-            while IFS= read -r -d '' model_file; do
-                local model_name=$(basename "$model_file" .gguf | sed 's/-[0-9]*B-.*$//')
-                models+=("usb:$model_name")
-            done < <(find "$LEONARDO_MODEL_DIR" -name "*.gguf" -print0 2>/dev/null)
-        fi
-    else
-        # Normal mode - check Ollama first
-        if command_exists ollama; then
-            mapfile -t models < <(ollama list 2>/dev/null | tail -n +2 | awk '{print $1}')
-        fi
-        
-        # Check for local models in LEONARDO_MODEL_DIR
-        if [[ -d "$LEONARDO_MODEL_DIR" ]]; then
-            while IFS= read -r -d '' model_file; do
-                models+=("local:$(basename "$model_file")")
-            done < <(find "$LEONARDO_MODEL_DIR" -name "*.gguf" -print0 2>/dev/null)
-        fi
-    fi
+    # Let user select Ollama instance first
+    local instance_preference=$(select_ollama_instance)
     
-    if [[ ${#models[@]} -eq 0 ]]; then
-        echo -e "${RED}No AI models installed!${COLOR_RESET}"
-        echo -e "${YELLOW}Install a model first using Model Manager.${COLOR_RESET}"
-        pause
-        return
-    fi
-    
-    # Select model if multiple available
-    local selected_model
-    if [[ ${#models[@]} -eq 1 ]]; then
-        selected_model="${models[0]}"
-    else
-        selected_model=$(show_menu "Select AI Model" "${models[@]}") || return
-    fi
-    
-    # Launch chat interface
-    start_chat_interface "$selected_model"
-}
-
-# Start chat interface with selected model
-start_chat_interface() {
-    local model="$1"
-    
-    clear
-    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
-    echo -e "${BOLD}               🤖 Leonardo AI Chat - $model${COLOR_RESET}"
-    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
-    echo
-    echo -e "${DIM}Type 'exit' or 'quit' to end the chat session${COLOR_RESET}"
-    echo -e "${DIM}Type 'clear' to clear the conversation${COLOR_RESET}"
-    echo
-    
-    if [[ "$model" == ollama:* ]] && command_exists ollama; then
-        # Use Ollama for chat
-        local model_name="${model#ollama:}"
-        ollama run "$model_name"
-    elif [[ "$model" == local:* ]] || [[ "$model" == usb:* ]]; then
-        # Use llama.cpp for local/USB models
-        local model_prefix="${model%%:*}"
-        local model_name="${model#*:}"
-        
-        # Find the actual GGUF file
-        local model_file=""
-        if [[ -d "$LEONARDO_MODEL_DIR" ]]; then
-            # Look for exact match first
-            model_file=$(find "$LEONARDO_MODEL_DIR" -name "${model_name}.gguf" -print -quit 2>/dev/null)
-            
-            # If not found, look for pattern match
-            if [[ -z "$model_file" ]]; then
-                model_file=$(find "$LEONARDO_MODEL_DIR" -name "${model_name}*.gguf" -print -quit 2>/dev/null)
-            fi
-        fi
-        
-        if [[ -n "$model_file" ]] && [[ -f "$model_file" ]]; then
-            # Check if we have llama.cpp server
-            if command -v llama-server &>/dev/null; then
-                echo -e "${CYAN}Starting local inference server...${COLOR_RESET}"
-                
-                # Start llama.cpp server
-                local server_port=8080
-                llama-server -m "$model_file" -c 2048 --port $server_port --host 127.0.0.1 &
-                local server_pid=$!
-                
-                # Wait for server to start
-                sleep 3
-                
-                # Simple chat loop using curl
-                echo -e "${GREEN}Chat ready! Server running on port $server_port${COLOR_RESET}"
-                echo
-                
-                while true; do
-                    read -p "You: " user_input
-                    
-                    if [[ "$user_input" == "exit" ]] || [[ "$user_input" == "quit" ]]; then
-                        break
-                    elif [[ "$user_input" == "clear" ]]; then
-                        clear
-                        continue
-                    fi
-                    
-                    echo -n "AI: "
-                    # Send request to llama.cpp server
-                    curl -s -X POST http://127.0.0.1:$server_port/completion \
-                        -H "Content-Type: application/json" \
-                        -d "{\"prompt\": \"User: $user_input\nAssistant:\", \"n_predict\": 256}" | \
-                        jq -r '.content' 2>/dev/null || echo "Error: Could not get response"
-                    echo
-                done
-                
-                # Stop server
-                kill $server_pid 2>/dev/null
-                
-            else
-                echo -e "${YELLOW}llama.cpp server not found!${COLOR_RESET}"
-                echo
-                
-                # Check for Python fallback
-                if command -v python3 &>/dev/null; then
-                    echo -e "${CYAN}Trying Python-based chat interface...${COLOR_RESET}"
-                    
-                    # Create a simple Python chat script
-                    local python_chat_script="/tmp/leonardo_chat_$$.py"
-                    cat > "$python_chat_script" << 'EOF'
-#!/usr/bin/env python3
-import sys
-import os
-
-print("Simple Leonardo Chat Interface (Python fallback)")
-print("=" * 50)
-print("Note: This is a basic interface. For better performance,")
-print("install llama.cpp: https://github.com/ggerganov/llama.cpp")
-print()
-print("Model file:", sys.argv[1])
-print()
-print("Type 'exit' or 'quit' to end the chat")
-print("=" * 50)
-print()
-
-# Simple echo bot for demonstration
-# In a real implementation, this would load and run the GGUF model
-while True:
-    try:
-        user_input = input("You: ")
-        if user_input.lower() in ['exit', 'quit']:
-            break
-        print("AI: I'm a placeholder response. To enable real AI responses,")
-        print("    please install llama.cpp or use Ollama models instead.")
-        print()
-    except (EOFError, KeyboardInterrupt):
-        print()
-        break
-EOF
-                    
-                    python3 "$python_chat_script" "$model_file"
-                    rm -f "$python_chat_script"
-                else
-                    echo -e "${DIM}To enable chat, install llama.cpp:${COLOR_RESET}"
-                    echo -e "  git clone https://github.com/ggerganov/llama.cpp"
-                    echo -e "  cd llama.cpp && make"
-                    echo -e "  sudo make install"
-                    echo
-                    echo -e "${DIM}Model file: $model_file${COLOR_RESET}"
-                    pause
-                fi
-            fi
-        else
-            echo -e "${RED}Model file not found for: $model_name${COLOR_RESET}"
-            pause
-        fi
-    else
-        # Direct Ollama model without prefix
-        if command_exists ollama; then
-            ollama run "$model"
-        else
-            echo -e "${RED}Ollama not available for model: $model${COLOR_RESET}"
-            pause
-        fi
-    fi
+    # Then start location-aware chat
+    start_location_aware_chat "" "$instance_preference"
 }
 
 # Check if any models are installed
