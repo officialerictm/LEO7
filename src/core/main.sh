@@ -183,35 +183,11 @@ main() {
         selection=$(show_menu "Leonardo AI Universal - Main Menu" "${menu_options[@]}")
         local menu_exit_code=$?
         
-        # Debug: Show menu exit code and selection
-        echo -e "${YELLOW}DEBUG: Menu exit code: $menu_exit_code${COLOR_RESET}" >&2
-        echo -e "${YELLOW}DEBUG: Raw selection: '$selection'${COLOR_RESET}" >&2
-        sleep 2
-        
         # If show_menu returned error (user pressed q), exit
         if [[ $menu_exit_code -ne 0 ]]; then
             keep_running=false
             continue
         fi
-        
-        # Debug: Show what was selected
-        if [[ "$LEONARDO_DEBUG" == "true" ]] || [[ -n "${DEBUG:-}" ]]; then
-            echo "DEBUG: Selected: '$selection'" >&2
-            sleep 1
-        fi
-        
-        # Extra debug: Show hex dump of selection to see any hidden characters
-        echo -e "${YELLOW}DEBUG: Hex dump of selection:${COLOR_RESET}" >&2
-        echo -n "$selection" | od -An -tx1 >&2
-        echo -e "${YELLOW}DEBUG: Length: ${#selection}${COLOR_RESET}" >&2
-        
-        # Test exact match
-        if [[ "$selection" == "🚀 Deploy to USB" ]]; then
-            echo -e "${GREEN}DEBUG: Exact match found!${COLOR_RESET}" >&2
-        else
-            echo -e "${RED}DEBUG: No exact match${COLOR_RESET}" >&2
-        fi
-        sleep 2
         
         case "$selection" in
             "🚀 Deploy to USB")
@@ -918,11 +894,8 @@ handle_exit() {
 handle_chat_command() {
     log_message "INFO" "Starting chat interface"
     
-    # Let user select Ollama instance first
-    local instance_preference=$(select_ollama_instance)
-    
-    # Then start location-aware chat
-    start_location_aware_chat "" "$instance_preference"
+    # Auto-detect by default, no prompt needed
+    start_location_aware_chat "" "auto"
 }
 
 # Check if running from USB deployment

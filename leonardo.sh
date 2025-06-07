@@ -7172,42 +7172,66 @@ download_model_to_usb() {
         
         # Try to pull the model if Ollama is available
         if ollama list >/dev/null 2>&1; then
-            # First pull the model with progress
+            # First pull the model with visual feedback
             echo -e "${CYAN}Pulling model from Ollama...${COLOR_RESET}" >&2
+            echo -e "${DIM}This may take a few minutes depending on model size and connection speed${COLOR_RESET}" >&2
             
-            # Use a simpler progress display that works better with Ollama's output
-            local last_percent=0
-            if ollama pull "${model_id}:${variant}" 2>&1 | \
-            while IFS= read -r line; do
-                # Debug: show what we're getting from ollama
-                # echo "DEBUG: $line" >&2
-                
-                # Parse different Ollama output formats
-                if [[ "$line" =~ ([0-9]+)% ]]; then
-                    local percent="${BASH_REMATCH[1]}"
-                    
-                    # Only update if percentage changed
-                    if [[ "$percent" != "$last_percent" ]]; then
-                        last_percent="$percent"
-                        printf "\r${CYAN}Downloading:${COLOR_RESET} ["
+            # Run ollama pull and capture output
+            local temp_out="/tmp/ollama_pull_$$.log"
+            local download_done=false
+            
+            # Start the download in background
+            (ollama pull "${model_id}:${variant}" 2>&1 | tee "$temp_out") &
+            local download_pid=$!
+            
+            # Show spinner while downloading
+            local spin='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+            local spin_i=0
+            local last_line=""
+            
+            while kill -0 $download_pid 2>/dev/null; do
+                # Read the last line from the log
+                if [[ -f "$temp_out" ]]; then
+                    local current_line=$(tail -n1 "$temp_out" 2>/dev/null | tr -d '\r\n')
+                    if [[ -n "$current_line" ]] && [[ "$current_line" != "$last_line" ]]; then
+                        last_line="$current_line"
                         
-                        # Draw progress bar
-                        local filled=$((percent * 40 / 100))
-                        local empty=$((40 - filled))
-                        printf "%${filled}s" | tr ' ' '='
-                        printf "%${empty}s" | tr ' ' ' '
-                        printf "] ${YELLOW}${percent}%%${COLOR_RESET}  "
+                        # Check for progress percentage
+                        if [[ "$current_line" =~ ([0-9]+)% ]] || [[ "$current_line" =~ pulling.*([0-9]+)% ]]; then
+                            local percent="${BASH_REMATCH[1]}"
+                            printf "\r${CYAN}Downloading:${COLOR_RESET} [%-40s] ${YELLOW}%3d%%${COLOR_RESET}" \
+                                   "$(printf '%*s' $((percent * 40 / 100)) | tr ' ' '=')" "$percent"
+                        elif [[ "$current_line" =~ "success" ]] || [[ "$current_line" =~ "up to date" ]]; then
+                            download_done=true
+                            break
+                        elif [[ "$current_line" =~ "error" ]]; then
+                            break
+                        else
+                            # Show current status with spinner
+                            local status_text=$(echo "$current_line" | sed 's/[[:space:]]*$//' | cut -c1-50)
+                            printf "\r${CYAN}Downloading:${COLOR_RESET} ${spin:spin_i:1} %s..." "$status_text"
+                            spin_i=$(( (spin_i + 1) % ${#spin} ))
+                        fi
+                    else
+                        # Just update spinner if no new content
+                        printf "\r${CYAN}Downloading:${COLOR_RESET} ${spin:spin_i:1} Waiting for Ollama..."
+                        spin_i=$(( (spin_i + 1) % ${#spin} ))
                     fi
-                elif [[ "$line" =~ "success" ]] || [[ "$line" =~ "up to date" ]]; then
-                    printf "\r%-80s\r" " "
-                    echo -e "${GREEN}✓ Model downloaded to Ollama${COLOR_RESET}" >&2
-                    break
-                elif [[ "$line" =~ "error" ]]; then
-                    printf "\r%-80s\r" " "
-                    echo -e "${RED}✗ Download failed: $line${COLOR_RESET}" >&2
-                    return 1
                 fi
-            done; then
+                sleep 0.1
+            done
+            
+            # Wait for the process to complete
+            wait $download_pid
+            local result=$?
+            
+            # Clean up
+            printf "\r%-80s\r" " "  # Clear line
+            rm -f "$temp_out"
+            
+            if [[ $result -eq 0 ]] && [[ "$download_done" == "true" ]]; then
+                echo -e "${GREEN}✓ Model downloaded to Ollama${COLOR_RESET}" >&2
+                
                 # Now export the model to USB
                 echo -e "${CYAN}Exporting model to USB...${COLOR_RESET}" >&2
                 
@@ -7274,66 +7298,30 @@ EOF
 
                 if [[ -n "$gguf_url" ]]; then
                     local gguf_file="$target_dir/${model_id}-${variant}.gguf"
-                    echo -e "${CYAN}Downloading GGUF for offline use...${COLOR_RESET}" >&2
                     
-                    # Download with proper progress bar
-                    if command -v curl >/dev/null 2>&1; then
-                        # Use curl with progress bar
-                        if curl -L --progress-bar "$gguf_url" -o "$gguf_file"; then
-                            echo -e "${GREEN}✓ GGUF model downloaded for offline use${COLOR_RESET}" >&2
-                        else
-                            echo -e "${YELLOW}⚠ GGUF download failed${COLOR_RESET}" >&2
-                            rm -f "$gguf_file" 2>/dev/null
-                        fi
-                    elif command -v wget >/dev/null 2>&1; then
-                        # Use wget with custom progress parsing
-                        echo -e "${DIM}Downloading from: $gguf_url${COLOR_RESET}" >&2
-                        local last_percent=0
-                        if wget -O "$gguf_file" "$gguf_url" 2>&1 | \
-                            while IFS= read -r line; do
-                                if [[ "$line" =~ ([0-9]+)% ]]; then
-                                    local percent="${BASH_REMATCH[1]}"
-                                    if [[ "$percent" != "$last_percent" ]]; then
-                                        last_percent=$percent
-                                        printf "\r${CYAN}Progress:${COLOR_RESET} ["
-                                        local filled=$((percent * 40 / 100))
-                                        local empty=$((40 - filled))
-                                        printf "%${filled}s" | tr ' ' '='
-                                        printf "%${empty}s" | tr ' ' ' '
-                                        printf "] ${YELLOW}${percent}%%${COLOR_RESET}  "
-                                    fi
-                                fi
-                            done; then
-                            printf "\r%-80s\r" " "
-                            echo -e "${GREEN}✓ GGUF model downloaded for offline use${COLOR_RESET}" >&2
-                        else
-                            echo -e "${YELLOW}⚠ GGUF download failed${COLOR_RESET}" >&2
-                            rm -f "$gguf_file" 2>/dev/null
-                        fi
-                    else
-                        echo -e "${RED}Error: Neither curl nor wget is available${COLOR_RESET}" >&2
-                    fi
-                    
-                    # Verify the download and update info file
-                    if [[ -f "$gguf_file" ]]; then
-                        local file_size=$(du -h "$gguf_file" | cut -f1)
-                        echo -e "${DIM}GGUF file size: $file_size${COLOR_RESET}" >&2
+                    # Use download_with_progress for better visual feedback
+                    if download_with_progress "$gguf_url" "$gguf_file" "Downloading GGUF for offline use"; then
+                        echo -e "${GREEN}✓ GGUF model downloaded for offline use${COLOR_RESET}" >&2
                         
                         # Update info file
                         cat >> "$target_dir/${model_id}-${variant}.info" <<EOF
 
 GGUF File: ${model_id}-${variant}.gguf
-Size: $file_size
+Size: $(du -h "$gguf_file" 2>/dev/null | cut -f1)
 Offline Ready: Yes
 EOF
                     else
-                        echo -e "${DIM}No GGUF file downloaded${COLOR_RESET}" >&2
+                        echo -e "${YELLOW}⚠ GGUF download failed${COLOR_RESET}" >&2
+                        rm -f "$gguf_file" 2>/dev/null
                     fi
                 else
                     echo -e "${GREEN}✓ Model exported (Ollama format)${COLOR_RESET}" >&2
                 fi
                 
                 return 0
+            else
+                echo -e "${RED}✗ Ollama download failed${COLOR_RESET}" >&2
+                # Fall through to direct download
             fi
         fi
     fi
@@ -7400,7 +7388,7 @@ Model: ${model_id}:${variant}
 Downloaded: $(date)
 Type: GGUF Model
 Location: $output_file
-Size: $(du -h "$output_file" | cut -f1)
+Size: $(du -h "$output_file" 2>/dev/null | cut -f1)
 EOF
         echo -e "${GREEN}✓ Model downloaded successfully to USB${COLOR_RESET}" >&2
         return 0
@@ -10578,35 +10566,11 @@ main() {
         selection=$(show_menu "Leonardo AI Universal - Main Menu" "${menu_options[@]}")
         local menu_exit_code=$?
         
-        # Debug: Show menu exit code and selection
-        echo -e "${YELLOW}DEBUG: Menu exit code: $menu_exit_code${COLOR_RESET}" >&2
-        echo -e "${YELLOW}DEBUG: Raw selection: '$selection'${COLOR_RESET}" >&2
-        sleep 2
-        
         # If show_menu returned error (user pressed q), exit
         if [[ $menu_exit_code -ne 0 ]]; then
             keep_running=false
             continue
         fi
-        
-        # Debug: Show what was selected
-        if [[ "$LEONARDO_DEBUG" == "true" ]] || [[ -n "${DEBUG:-}" ]]; then
-            echo "DEBUG: Selected: '$selection'" >&2
-            sleep 1
-        fi
-        
-        # Extra debug: Show hex dump of selection to see any hidden characters
-        echo -e "${YELLOW}DEBUG: Hex dump of selection:${COLOR_RESET}" >&2
-        echo -n "$selection" | od -An -tx1 >&2
-        echo -e "${YELLOW}DEBUG: Length: ${#selection}${COLOR_RESET}" >&2
-        
-        # Test exact match
-        if [[ "$selection" == "🚀 Deploy to USB" ]]; then
-            echo -e "${GREEN}DEBUG: Exact match found!${COLOR_RESET}" >&2
-        else
-            echo -e "${RED}DEBUG: No exact match${COLOR_RESET}" >&2
-        fi
-        sleep 2
         
         case "$selection" in
             "🚀 Deploy to USB")
@@ -11313,11 +11277,8 @@ handle_exit() {
 handle_chat_command() {
     log_message "INFO" "Starting chat interface"
     
-    # Let user select Ollama instance first
-    local instance_preference=$(select_ollama_instance)
-    
-    # Then start location-aware chat
-    start_location_aware_chat "" "$instance_preference"
+    # Auto-detect by default, no prompt needed
+    start_location_aware_chat "" "auto"
 }
 
 # Check if running from USB deployment
@@ -11329,7 +11290,16 @@ is_usb_deployment() {
     
     # Check if script path contains common USB mount patterns
     local script_path="${BASH_SOURCE[0]:-$0}"
-    if [[ "$script_path" =~ /(Volumes|media|mnt|run/media)/ ]]; then
+    local real_path=$(readlink -f "$script_path" 2>/dev/null || realpath "$script_path" 2>/dev/null || echo "$script_path")
+    
+    # Check for common USB mount patterns (case-insensitive for macOS)
+    if echo "$real_path" | grep -iE '/(Volumes|media|mnt|run/media|usb|removable)/' >/dev/null 2>&1; then
+        return 0
+    fi
+    
+    # Check if we're in a leonardo directory on a removable device
+    if [[ -d "${script_path%/*}/models" ]] && [[ -f "${script_path%/*}/leonardo.sh" ]]; then
+        # Likely a portable installation
         return 0
     fi
     
