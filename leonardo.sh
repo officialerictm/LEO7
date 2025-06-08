@@ -2955,7 +2955,7 @@ declare -a SPINNER_STYLES=(
     "▁▂▃▄▅▆▇█▇▆▅▄▃▂"                    # Building blocks
     "⣾⣽⣻⢿⡿⣟⣯⣷"                    # Braille blocks
     "←↖↑↗→↘↓↙"                          # Arrows
-    "|/-\"                             # Classic
+    "|/-\\"                             # Classic
     "◢◣◤◥"                              # Triangles
     "⬒⬔⬓⬕"                              # Diamond
     "⠁⠂⠄⡀⢀⠠⠐⠈"                    # Dots
