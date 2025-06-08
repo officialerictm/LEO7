@@ -1,0 +1,21 @@
+WIP: Attempting to fix bash syntax errors in progress.sh
+
+This commit contains multiple attempts to fix syntax errors preventing
+Leonardo from running. The build completes but execution fails with
+syntax errors.
+
+Fixes attempted:
+- Commented out problematic show_matrix_progress() function
+- Escaped pipe characters in printf format strings
+- Changed direct variable interpolation to %s format specifiers
+- Moved utility functions to top of file (format_bytes, format_duration)
+- Added fallback for systems without bc command
+
+Current status:
+- Build succeeds: bash assembly/build-simple.sh
+- Execution fails: ./leonardo.sh line 3127 syntax error
+
+See ISSUE_SYNTAX_ERRORS.md for detailed problem description and
+help needed from other contributors.
+
+Related to USB-first deployment and chat startup improvements.

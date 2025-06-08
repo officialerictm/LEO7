@@ -154,97 +154,22 @@ main() {
     # Main interactive menu
     local keep_running=true
     while [[ "$keep_running" == "true" ]]; do
-        clear
-        show_banner
+        # Show appropriate menu
+        show_main_menu
         
-        # Show system status
-        echo -e "\n${DIM}System Status: $(format_system_status)${COLOR_RESET}\n"
+        # Read user choice
+        read -p "Enter your choice: " choice
         
-        # Build menu options dynamically
-        local menu_options=()
-        
-        # Always show deployment option first for MVP
-        menu_options+=("🚀 Deploy to USB")
-        
-        # Show chat option if models are installed
-        if check_installed_models; then
-            menu_options+=("💬 Chat with AI")
-        fi
-        
-        # System management options
-        menu_options+=("📦 Model Manager")
-        menu_options+=("🔧 System Utilities")
-        menu_options+=("📊 System Dashboard")
-        menu_options+=("⚙️  Settings")
-        menu_options+=("📖 Help")
-        menu_options+=("🚪 Exit")
-        
-        local selection
-        selection=$(show_menu "Leonardo AI Universal - Main Menu" "${menu_options[@]}")
-        local menu_exit_code=$?
-        
-        # If show_menu returned error (user pressed q), exit
-        if [[ $menu_exit_code -ne 0 ]]; then
+        # Process the choice
+        if ! process_choice "$choice"; then
             keep_running=false
-            continue
         fi
         
-        case "$selection" in
-            "🚀 Deploy to USB")
-                if [[ "$LEONARDO_DEBUG" == "true" ]] || [[ -n "${DEBUG:-}" ]]; then
-                    echo "DEBUG: Calling deploy_to_usb" >&2
-                fi
-                deploy_to_usb
-                # Don't exit on failure, just return to menu
-                ;;
-            "💬 Chat with AI")
-                if [[ "$LEONARDO_DEBUG" == "true" ]] || [[ -n "${DEBUG:-}" ]]; then
-                    echo "DEBUG: Calling handle_chat_command" >&2
-                fi
-                handle_chat_command
-                ;;
-            "📦 Model Manager")
-                if [[ "$LEONARDO_DEBUG" == "true" ]] || [[ -n "${DEBUG:-}" ]]; then
-                    echo "DEBUG: Calling handle_model_command menu" >&2
-                fi
-                handle_model_command "menu"
-                ;;
-            "🔧 System Utilities")
-                if [[ "$LEONARDO_DEBUG" == "true" ]] || [[ -n "${DEBUG:-}" ]]; then
-                    echo "DEBUG: Calling system_utilities_menu" >&2
-                fi
-                system_utilities_menu
-                ;;
-            "📊 System Dashboard")
-                if [[ "$LEONARDO_DEBUG" == "true" ]] || [[ -n "${DEBUG:-}" ]]; then
-                    echo "DEBUG: Calling show_dashboard" >&2
-                fi
-                show_dashboard
-                pause
-                ;;
-            "⚙️  Settings")
-                if [[ "$LEONARDO_DEBUG" == "true" ]] || [[ -n "${DEBUG:-}" ]]; then
-                    echo "DEBUG: Calling settings_menu" >&2
-                fi
-                settings_menu
-                ;;
-            "📖 Help")
-                if [[ "$LEONARDO_DEBUG" == "true" ]] || [[ -n "${DEBUG:-}" ]]; then
-                    echo "DEBUG: Calling show_help" >&2
-                fi
-                show_help
-                pause
-                ;;
-            "🚪 Exit"|"")
-                handle_exit
-                keep_running=false
-                ;;
-            *)
-                if [[ "$LEONARDO_DEBUG" == "true" ]] || [[ -n "${DEBUG:-}" ]]; then
-                    echo "DEBUG: Unknown selection: '$selection'" >&2
-                fi
-                ;;
-        esac
+        # Pause before returning to menu (unless exiting)
+        if [[ "$keep_running" == "true" ]]; then
+            echo
+            read -p "Press Enter to continue..."
+        fi
     done
 }
 
@@ -681,60 +606,118 @@ handle_deployment_command() {
     esac
 }
 
-# Settings menu
-settings_menu() {
-    while true; do
-        # Clear screen properly
-        echo -e "\033[H\033[2J" >/dev/tty
-        
-        echo -e "${CYAN}Settings & Preferences${COLOR_RESET}"
-        echo ""
-        
-        show_menu "Settings" \
-            "Toggle Debug Mode" \
-            "Configure Model Path" \
-            "Network Settings" \
-            "Security Options" \
-            "Back to Main Menu"
-        
-        case "$MENU_SELECTION" in
-            "Toggle Debug Mode")
-                if [[ "$LEONARDO_DEBUG" == "true" ]]; then
-                    LEONARDO_DEBUG=false
-                    echo -e "\n${GREEN}Debug mode disabled${COLOR_RESET}"
-                else
-                    LEONARDO_DEBUG=true
-                    echo -e "\n${GREEN}Debug mode enabled${COLOR_RESET}"
-                fi
-                echo -e "\n${DIM}Press Enter to continue...${COLOR_RESET}"
-                read -r
-                ;;
-            "Configure Model Path")
-                echo -e "\n${CYAN}Current model path: ${LEONARDO_MODELS_DIR}${COLOR_RESET}"
-                echo -n "Enter new path (or press Enter to keep current): "
-                read -r new_path
-                if [[ -n "$new_path" ]]; then
-                    export LEONARDO_MODELS_DIR="$new_path"
-                    echo -e "${GREEN}Model path updated!${COLOR_RESET}"
-                fi
-                echo -e "\n${DIM}Press Enter to continue...${COLOR_RESET}"
-                read -r
-                ;;
-            "Network Settings")
-                echo -e "\n${YELLOW}Network configuration coming soon!${COLOR_RESET}"
-                echo -e "\n${DIM}Press Enter to continue...${COLOR_RESET}"
-                read -r
-                ;;
-            "Security Options")
-                echo -e "\n${YELLOW}Security options coming soon!${COLOR_RESET}"
-                echo -e "\n${DIM}Press Enter to continue...${COLOR_RESET}"
-                read -r
-                ;;
-            "Back to Main Menu")
-                break
-                ;;
+# Function to check if running from USB
+is_usb_deployment() {
+    # Check environment variable first
+    if [[ "${LEONARDO_USB_MODE:-}" == "true" ]]; then
+        return 0
+    fi
+    
+    # Check if script path indicates USB location
+    local script_path="${BASH_SOURCE[0]:-$0}"
+    local real_path=$(readlink -f "$script_path" 2>/dev/null || realpath "$script_path" 2>/dev/null || echo "$script_path")
+    
+    if echo "$real_path" | grep -iE '/(media|mnt|run/media|Volumes)/[^/]+/(leonardo|LEONARDO)' >/dev/null; then
+        return 0
+    fi
+    
+    return 1
+}
+
+# Show USB-specific main menu
+show_usb_main_menu() {
+    clear
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
+    echo -e "${BOLD}          🔌 Leonardo AI Universal - USB Mode${COLOR_RESET}"
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
+    echo
+    echo -e "${GREEN}USB Location: ${LEONARDO_USB_MOUNT:-Detected}${COLOR_RESET}"
+    echo
+    echo -e "${CYAN}Main Menu:${COLOR_RESET}"
+    echo
+    echo "  1) 💬 Chat With AI              - Start AI conversation"
+    echo "  2) 🔧 System Management         - Configure Leonardo"
+    echo "  3) 📦 Model Management          - Download/manage AI models"
+    echo "  4) 💾 USB Management            - Format/prepare USB drives"
+    echo "  5) 🚀 Deployment Options        - Setup AI environments"
+    echo "  6) 📊 Dashboard                 - System overview"
+    echo "  7) 🌐 Web Interface             - Browser-based UI"
+    echo "  8) 📋 System Info               - Show system details"
+    echo "  9) ❓ Help                      - Show documentation"
+    echo "  0) 🚪 Exit                      - Exit Leonardo"
+    echo
+    echo -e "${DIM}────────────────────────────────────────────────────────────────${COLOR_RESET}"
+    echo
+}
+
+# Show main menu
+show_main_menu() {
+    # Check if USB deployment and show appropriate menu
+    if is_usb_deployment; then
+        show_usb_main_menu
+        return
+    fi
+    
+    # Original host menu
+    clear
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
+    echo -e "${BOLD}               🤖 Leonardo AI Universal v${LEONARDO_VERSION}${COLOR_RESET}"
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
+    echo
+    echo -e "${CYAN}Main Menu:${COLOR_RESET}"
+    echo
+    echo "  1) 🔧 System Management         - Configure Leonardo"
+    echo "  2) 📦 Model Management          - Download/manage AI models"
+    echo "  3) 💬 Chat With AI              - Start AI conversation"
+    echo "  4) 💾 USB Management            - Format/prepare USB drives"
+    echo "  5) 🚀 Deployment Options        - Setup AI environments"
+    echo "  6) 📊 Dashboard                 - System overview"
+    echo "  7) 🌐 Web Interface             - Browser-based UI"
+    echo "  8) 📋 System Info               - Show system details"
+    echo "  9) ❓ Help                      - Show documentation"
+    echo "  0) 🚪 Exit                      - Exit Leonardo"
+    echo
+    echo -e "${DIM}────────────────────────────────────────────────────────────────${COLOR_RESET}"
+    echo
+}
+
+# Process user choice
+process_choice() {
+    local choice="$1"
+    
+    # Handle choices differently for USB mode
+    if is_usb_deployment; then
+        case "$choice" in
+            1) handle_chat_command ;;
+            2) handle_system_menu ;;
+            3) handle_model_menu ;;
+            4) handle_usb_menu ;;
+            5) handle_deployment_menu ;;
+            6) handle_dashboard_command ;;
+            7) handle_web_command ;;
+            8) handle_info_command ;;
+            9) handle_help_command ;;
+            0|q|Q) return 1 ;;
+            *) echo -e "${RED}Invalid choice. Please try again.${COLOR_RESET}" ;;
         esac
-    done
+    else
+        # Original host mode choices
+        case "$choice" in
+            1) handle_system_menu ;;
+            2) handle_model_menu ;;
+            3) handle_chat_command ;;
+            4) handle_usb_menu ;;
+            5) handle_deployment_menu ;;
+            6) handle_dashboard_command ;;
+            7) handle_web_command ;;
+            8) handle_info_command ;;
+            9) handle_help_command ;;
+            0|q|Q) return 1 ;;
+            *) echo -e "${RED}Invalid choice. Please try again.${COLOR_RESET}" ;;
+        esac
+    fi
+    
+    return 0
 }
 
 # Run system tests
@@ -877,8 +860,8 @@ launch_web_interface() {
 # Exit handler
 handle_exit() {
     echo ""
-    echo "${COLOR_CYAN}Thank you for using Leonardo AI Universal!${COLOR_RESET}"
-    echo "${COLOR_DIM}Stay curious, stay creative.${COLOR_RESET}"
+    echo -e "${COLOR_CYAN}Thank you for using Leonardo AI Universal!${COLOR_RESET}"
+    echo -e "${COLOR_DIM}Stay curious, stay creative.${COLOR_RESET}"
     echo ""
     
     # Cleanup
@@ -1022,4 +1005,183 @@ show_about() {
     echo "  • Cross-platform compatibility"
     echo "  • Web interface"
     echo
+}
+
+# Deploy to USB interactively
+deploy_to_usb_interactive() {
+    # Source USB deployment if not already
+    if [[ -f "${LEONARDO_DIR}/src/deployment/usb_deploy.sh" ]]; then
+        source "${LEONARDO_DIR}/src/deployment/usb_deploy.sh"
+    else
+        echo -e "${RED}Error: USB deployment module not found${COLOR_RESET}"
+        return 1
+    fi
+    
+    # Run the USB deployment command
+    handle_deploy_usb_command
+}
+
+# Initialize Leonardo
+initialize_leonardo() {
+    log_message "INFO" "Initializing Leonardo AI Universal v${LEONARDO_VERSION}"
+    
+    # Check if we're already running from USB
+    local running_from_usb=false
+    local script_path="${BASH_SOURCE[0]:-$0}"
+    local real_path=$(readlink -f "$script_path" 2>/dev/null || realpath "$script_path" 2>/dev/null || echo "$script_path")
+    
+    if echo "$real_path" | grep -iE '/(Volumes|media|mnt|run/media|usb|removable)/' >/dev/null 2>&1; then
+        running_from_usb=true
+        export LEONARDO_USB_MOUNT="${real_path%/leonardo/*}"
+    fi
+    
+    # Check for deployment configuration
+    if [[ -f "${LEONARDO_DIR}/src/core/deployment_mode.sh" ]]; then
+        source "${LEONARDO_DIR}/src/core/deployment_mode.sh"
+    fi
+    
+    # If not already deployed to USB and no config exists, prompt for USB deployment
+    if ! load_deployment_config && [[ "$running_from_usb" != "true" ]]; then
+        clear
+        echo -e "${CYAN}${LEONARDO_BANNERS[0]}${COLOR_RESET}"
+        echo
+        echo -e "${YELLOW}Welcome to Leonardo AI Universal - AI on a Stick!${COLOR_RESET}"
+        echo
+        echo -e "${GREEN}Leonardo is designed to run entirely from a USB drive.${COLOR_RESET}"
+        echo "This provides:"
+        echo "  • Complete portability between computers"
+        echo "  • No installation on host systems"
+        echo "  • Privacy - your AI stays with you"
+        echo "  • Easy backup - just copy your USB"
+        echo
+        echo -e "${CYAN}Would you like to deploy Leonardo to a USB drive now?${COLOR_RESET}"
+        echo
+        echo "1) Yes, deploy to USB (recommended)"
+        echo "2) No, I'll run from current location"
+        echo
+        
+        local choice
+        read -p "Select option (1-2): " choice
+        
+        case "$choice" in
+            1)
+                echo
+                echo -e "${GREEN}Great! Let's set up your AI stick.${COLOR_RESET}"
+                echo
+                # Run USB deployment
+                deploy_to_usb_interactive
+                exit 0  # Exit after deployment
+                ;;
+            2)
+                echo
+                echo -e "${YELLOW}Running from current location.${COLOR_RESET}"
+                echo "Note: For the full Leonardo experience, consider USB deployment later."
+                echo "Run: leonardo deploy-usb"
+                echo
+                
+                # Still need to select deployment mode
+                local mode=$(select_deployment_mode)
+                configure_deployment "$mode"
+                ;;
+            *)
+                echo -e "${RED}Invalid choice. Defaulting to USB deployment prompt.${COLOR_RESET}"
+                deploy_to_usb_interactive
+                exit 0
+                ;;
+        esac
+    elif [[ "$running_from_usb" == "true" ]] && ! load_deployment_config; then
+        # Already on USB, just configure
+        echo -e "${GREEN}Detected Leonardo running from USB!${COLOR_RESET}"
+        echo
+        configure_deployment "usb"
+    fi
+    
+    # Create necessary directories
+    ensure_directory "$LEONARDO_BASE_DIR"
+    ensure_directory "$LEONARDO_CONFIG_DIR" 
+    ensure_directory "$LEONARDO_MODEL_DIR"
+    ensure_directory "$LEONARDO_LOG_DIR"
+    ensure_directory "$LEONARDO_TEMP_DIR"
+    
+    # Load configuration
+    load_config
+    
+    # Initialize components based on deployment mode
+    if [[ "${LEONARDO_USB_MODE:-false}" == "true" ]]; then
+        log_message "INFO" "Running in USB mode (${LEONARDO_DEPLOYMENT_MODE})"
+    fi
+    
+    # Check system requirements
+    check_requirements
+    
+    # Show welcome message
+    if [[ "$LEONARDO_QUIET" != "true" ]]; then
+        show_banner
+    fi
+    
+    log_message "INFO" "Leonardo initialized successfully"
+}
+
+# Handle help command
+handle_help_command() {
+    show_help
+    return 0
+}
+
+# Handle info command  
+handle_info_command() {
+    echo -e "\n${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
+    echo -e "${BOLD}               Leonardo AI Universal - System Info${COLOR_RESET}"
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}\n"
+    
+    echo -e "${GREEN}Version:${COLOR_RESET} $LEONARDO_VERSION ($LEONARDO_BUILD)"
+    echo -e "${GREEN}Location:${COLOR_RESET} ${LEONARDO_DIR:-Not set}"
+    
+    if is_usb_deployment; then
+        echo -e "${GREEN}Deployment:${COLOR_RESET} USB Mode"
+        echo -e "${GREEN}USB Mount:${COLOR_RESET} ${LEONARDO_USB_MOUNT:-Detected}"
+        echo -e "${GREEN}Model Directory:${COLOR_RESET} ${LEONARDO_MODEL_DIR:-Not set}"
+    else
+        echo -e "${GREEN}Deployment:${COLOR_RESET} Host Mode"
+    fi
+    
+    echo -e "${GREEN}Config Directory:${COLOR_RESET} ${LEONARDO_CONFIG_DIR:-Not set}"
+    echo -e "${GREEN}Data Directory:${COLOR_RESET} ${LEONARDO_DATA_DIR:-Not set}"
+    
+    # Check Ollama status
+    if command -v ollama >/dev/null 2>&1; then
+        echo -e "${GREEN}Ollama:${COLOR_RESET} Installed"
+        if pgrep -x "ollama" >/dev/null 2>&1; then
+            echo -e "${GREEN}Ollama Service:${COLOR_RESET} Running"
+        else
+            echo -e "${YELLOW}Ollama Service:${COLOR_RESET} Not running"
+        fi
+    else
+        echo -e "${YELLOW}Ollama:${COLOR_RESET} Not installed"
+    fi
+    
+    # Show model count
+    local model_count=0
+    if [[ -d "${LEONARDO_MODEL_DIR:-}" ]]; then
+        model_count=$(find "${LEONARDO_MODEL_DIR}" -name "*.gguf" 2>/dev/null | wc -l)
+    fi
+    echo -e "${GREEN}GGUF Models:${COLOR_RESET} $model_count installed"
+    
+    return 0
+}
+
+# Handle dashboard command
+handle_dashboard_command() {
+    if type show_dashboard >/dev/null 2>&1; then
+        show_dashboard
+    else
+        echo -e "${YELLOW}Dashboard not available${COLOR_RESET}"
+    fi
+    return 0
+}
+
+# Handle web command
+handle_web_command() {
+    echo -e "${YELLOW}Web interface coming soon!${COLOR_RESET}"
+    return 0
 }

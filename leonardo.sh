@@ -1335,28 +1335,53 @@ format_usb_device() {
                         # If immediate format fails, try a different approach
                         echo -e "${YELLOW}Initial format failed, trying alternative approach...${COLOR_RESET}"
                         
-                        # First, check what's using the device
+                        # First, aggressively unmount with force
+                        echo -e "${DIM}Force unmounting device...${COLOR_RESET}"
+                        echo -e "${YELLOW}Root privileges required for force unmount.${COLOR_RESET}"
+                        if sudo umount -f "$partition" 2>/dev/null; then
+                            echo -e "${GREEN}✓ Force unmount successful${COLOR_RESET}"
+                        else
+                            echo -e "${DIM}Force unmount didn't work, trying lazy unmount...${COLOR_RESET}"
+                            sudo umount -l "$partition" 2>/dev/null || true
+                        fi
+                        
+                        # Check what's still using the device
                         echo -e "${DIM}Checking what's using the device...${COLOR_RESET}"
                         local device_users=$(sudo lsof "$partition" 2>/dev/null || true)
                         if [[ -n "$device_users" ]]; then
                             echo -e "${YELLOW}Processes using device:${COLOR_RESET}"
                             echo "$device_users"
+                            
+                            # Try to kill processes using the device (carefully)
+                            echo -e "${DIM}Attempting to stop processes using the device...${COLOR_RESET}"
+                            local pids=$(sudo lsof -t "$partition" 2>/dev/null || true)
+                            if [[ -n "$pids" ]]; then
+                                for pid in $pids; do
+                                    # Skip critical system processes
+                                    local proc_name=$(ps -p "$pid" -o comm= 2>/dev/null || true)
+                                    if [[ "$proc_name" != "systemd" ]] && [[ "$proc_name" != "init" ]]; then
+                                        echo -e "${DIM}Stopping process $pid ($proc_name)...${COLOR_RESET}"
+                                        sudo kill -TERM "$pid" 2>/dev/null || true
+                                    fi
+                                done
+                                sleep 1
+                            fi
                         fi
                         
-                        # Try to eject the device properly first
+                        # Try to eject the device properly
                         echo -e "${DIM}Ejecting device properly...${COLOR_RESET}"
                         sudo eject "$partition" 2>/dev/null || true
                         sleep 2
                         
-                        # Now unmount with all methods
-                        sudo umount "$partition" 2>/dev/null || true
+                        # One more aggressive unmount attempt
+                        echo -e "${DIM}Final unmount attempt...${COLOR_RESET}"
                         sudo umount -f "$partition" 2>/dev/null || true
                         sudo umount -l "$partition" 2>/dev/null || true
                         
                         # Force a sync
                         sync
                         
-                        # Wait for device to settle (you mentioned hearing disconnect)
+                        # Wait for device to settle
                         echo -e "${DIM}Waiting for device to settle...${COLOR_RESET}"
                         sleep 3
                         
@@ -2743,6 +2768,61 @@ export -f show_progress_menu show_input_dialog show_filtered_list
 # Dependencies: colors.sh, logging.sh
 # ==============================================================================
 
+# ==============================================================================
+# UTILITY FUNCTIONS - Must be defined before use
+# ==============================================================================
+
+# Format duration from seconds
+format_duration() {
+    local seconds="$1"
+    local hours=$((seconds / 3600))
+    local minutes=$(((seconds % 3600) / 60))
+    local secs=$((seconds % 60))
+    
+    if [[ $hours -gt 0 ]]; then
+        printf "%02d:%02d:%02d" "$hours" "$minutes" "$secs"
+    elif [[ $minutes -gt 0 ]]; then
+        printf "%02d:%02d" "$minutes" "$secs"
+    else
+        printf "%ds" "$secs"
+    fi
+}
+
+# Format bytes for display
+format_bytes() {
+    local bytes="$1"
+    local units=("B" "KB" "MB" "GB" "TB")
+    local unit=0
+    
+    # Use bc for floating point math if available
+    if command -v bc >/dev/null 2>&1; then
+        local size=$bytes
+        while [[ $(echo "$size >= 1024" | bc 2>/dev/null) == "1" ]] && [[ $unit -lt 4 ]]; do
+            size=$(echo "scale=2; $size / 1024" | bc 2>/dev/null)
+            ((unit++))
+        done
+        
+        # Format with appropriate precision
+        if [[ $unit -eq 0 ]]; then
+            printf "%d %s" "$bytes" "${units[unit]}"
+        else
+            printf "%.2f %s" "$size" "${units[unit]}"
+        fi
+    else
+        # Fallback without bc
+        local size=$bytes
+        while [[ $size -ge 1024 ]] && [[ $unit -lt 4 ]]; do
+            size=$((size / 1024))
+            ((unit++))
+        done
+        printf "%d %s" "$size" "${units[unit]}"
+    fi
+}
+
+# ==============================================================================
+# PROGRESS BAR FUNCTIONS
+# ==============================================================================
+
 # Progress bar state
 declare -g PROGRESS_ACTIVE=0
 declare -g PROGRESS_PID=""
@@ -2875,7 +2955,7 @@ declare -a SPINNER_STYLES=(
     "▁▂▃▄▅▆▇█▇▆▅▄▃▂"                    # Building blocks
     "⣾⣽⣻⢿⡿⣟⣯⣷"                    # Braille blocks
     "←↖↑↗→↘↓↙"                          # Arrows
-    "|/-\\"                             # Classic
+    "|/-\"                             # Classic
     "◢◣◤◥"                              # Triangles
     "⬒⬔⬓⬕"                              # Diamond
     "⠁⠂⠄⡀⢀⠠⠐⠈"                    # Dots
@@ -2916,64 +2996,73 @@ stop_spinner() {
     printf "\r\033[K"  # Clear line
 }
 
-# Matrix-style progress
-show_matrix_progress() {
-    local message="$1"
-    local duration="${2:-5}"
-    local width="${3:-$(tput cols)}"
-    
-    # Matrix rain characters
-    local chars="ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ0123456789"
-    local drops=()
-    
-    # Initialize drops
-    for ((i=0; i<width; i++)); do
-        drops[i]=$((RANDOM % 20 - 10))
-    done
-    
-    # Save screen state
-    tput smcup
-    clear
-    
-    local start_time=$(date +%s)
-    while [[ $(($(date +%s) - start_time)) -lt $duration ]]; do
-        clear
-        
-        # Update and draw drops
-        for ((x=0; x<width; x++)); do
-            local y=${drops[x]}
-            if [[ $y -ge 0 ]]; then
-                # Draw the trail
-                for ((ty=0; ty<y && ty<20; ty++)); do
-                    tput cup $ty $x
-                    local brightness=$((255 - (y - ty) * 12))
-                    printf "\033[38;2;0;%d;0m%s\033[0m" \
-                        "$brightness" \
-                        "${chars:$((RANDOM % ${#chars})):1}"
-                done
-            fi
-            
-            # Move drop down
-            drops[x]=$((drops[x] + 1))
-            
-            # Reset drop if it goes off screen
-            if [[ ${drops[x]} -gt 25 ]]; then
-                drops[x]=$((RANDOM % 10 - 10))
-            fi
-        done
-        
-        # Display message in center
-        local msg_y=$(($(tput lines) / 2))
-        local msg_x=$(((width - ${#message}) / 2))
-        tput cup $msg_y $msg_x
-        echo -e "${BRIGHT}${GREEN}$message${RESET}"
-        
-        sleep 0.05
-    done
-    
-    # Restore screen
-    tput rmcup
-}
+# Matrix-style progress - DISABLED DUE TO SYNTAX ISSUES
+# show_matrix_progress() {
+#     local message="$1"
+#     local duration="${2:-5}"
+#     local width="${3:-$(tput cols)}"
+#     
+#     # Matrix rain characters
+#     local chars="ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ0123456789"
+#     local drops=()
+#     
+#     # Initialize drops
+#     for ((i=0; i<width; i++)); do
+#         drops[i]=$((RANDOM % 20 - 10))
+#     done
+#     
+#     # Save screen state
+#     tput smcup
+#     clear
+#     
+#     local start_time=$(date +%s)
+#     local end_time=$((start_time + duration))
+#     
+#     # Hide cursor
+#     tput civis
+#     
+#     while [[ $(date +%s) -lt $end_time ]]; do
+#         for ((x=0; x<width; x++)); do
+#             local y=${drops[x]}
+#             
+#             # Draw new character at bottom of trail
+#             if [[ $y -ge 0 && $y -lt 20 ]]; then
+#                 tput cup $y $x
+#                 echo -ne "${BRIGHT_GREEN}${chars:$((RANDOM % ${#chars})):1}${NC}"
+#                 
+#                 # Draw the trail
+#                 for ((ty=0; ty<y && ty<20; ty++)); do
+#                     tput cup $ty $x
+#                     local char_index=$((RANDOM % ${#chars}))
+#                     local char="${chars:$char_index:1}"
+#                     echo -ne "${GREEN}${char}${NC}"
+#                 done
+#             fi
+#             
+#             # Move drop down
+#             drops[x]=$((drops[x] + 1))
+#             
+#             # Reset drop if it goes off screen
+#             if [[ ${drops[x]} -gt 25 ]]; then
+#                 drops[x]=$((RANDOM % 10 - 10))
+#             fi
+#         done
+#         
+#         # Display message in center
+#         local msg_y=$((10))
+#         local msg_x=$(((width - ${#message}) / 2))
+#         tput cup $msg_y $msg_x
+#         echo -ne "${BOLD}${CYAN}${message}${NC}"
+#         
+#         sleep 0.05
+#     done
+#     
+#     # Show cursor
+#     tput cnorm
+#     
+#     # Restore screen
+#     tput rmcup
+# }
 
 # Download progress with speed and time
 show_download_progress() {
@@ -3025,7 +3114,7 @@ track_download_progress() {
             # Update progress bar
             printf "\r${CYAN}Downloading:${COLOR_RESET} "
             show_progress_bar "${percent%.*}" 100 30
-            printf " ${percent}%% | ${downloaded} | ${speed} | ETA: ${eta}  "
+            printf " %s%% \| %s \| ETA: %s  " "$percent" "$speed" "$eta"
         fi
     done
     
@@ -3071,8 +3160,19 @@ download_with_progress() {
         # Download with progress
         if curl -L $resume_flag -# -o "$output_file" "$url" 2>&1 | \
         while IFS= read -r line; do
-            if [[ "$line" =~ ^[[:space:]]*([0-9]+)\.?[0-9]*[[:space:]]+([0-9]+[kMG]?)[[:space:]]+([0-9]+)\.?[0-9]*[[:space:]]+([0-9]+[kMG]?/s)[[:space:]]+.*[[:space:]]+([0-9]+:[0-9]+:[0-9]+|[0-9]+:[0-9]+|[0-9]+s|--:--:--) ]]; then
-                local percent="${BASH_REMATCH[1]}"
+            # Match curl's progress bar format: ######################################################################## 100.0%
+            if [[ "$line" =~ ^[#[:space:]]+([0-9]+)\+[0-9]+[[:space:]]records ]]; then
+                local blocks="${BASH_REMATCH[1]}"
+                local percent=$((blocks * 100 / 100))
+                local copied=$((blocks * 1048576))
+                local copied_fmt=$(format_bytes "$copied")
+                
+                printf "\r"
+                show_progress_bar "$percent" 100 40
+                printf " %s%% \| %s/%s  " "$percent" "$copied_fmt" "$(format_bytes 104857600)"
+            elif [[ "$line" =~ ^[[:space:]]*([0-9]+)[[:space:]]+([0-9]+[kMG]?)[[:space:]]+([0-9]+)[%][[:space:]]+([0-9]+[kMG]?/s)[[:space:]]+.*[[:space:]]+([0-9]+:[0-9]+:[0-9]+|[0-9]+:[0-9]+|[0-9]+s|--:--:--) ]]; then
+                # Alternative format with more details
+                local percent="${BASH_REMATCH[3]}"
                 local downloaded="${BASH_REMATCH[2]}"
                 local speed="${BASH_REMATCH[4]}"
                 local eta="${BASH_REMATCH[5]}"
@@ -3080,7 +3180,7 @@ download_with_progress() {
                 # Update progress bar
                 printf "\r"
                 show_progress_bar "$percent" 100 40
-                printf " ${percent}%% | ${speed} | ETA: ${eta}  "
+                printf " %s%% \| %s \| ETA: %s  " "$percent" "$speed" "$eta"
             fi
         done; then
             printf "\r%-80s\r" " "
@@ -3134,7 +3234,7 @@ copy_with_progress() {
                 
                 printf "\r"
                 show_progress_bar "$percent" 100 40
-                printf " ${percent}%% | ${copied_fmt}/${total_size_fmt}  "
+                printf " %s%% \| %s/%s  " "$percent" "$copied_fmt" "$total_size_fmt"
             fi
         done
     ) &
@@ -3150,7 +3250,7 @@ copy_with_progress() {
             
             printf "\r"
             show_progress_bar "$percent" 100 40
-            printf " ${percent}%% | ${copied_fmt}/${total_size_fmt}  "
+            printf " %s%% \| %s/%s  " "$percent" "$copied_fmt" "$total_size_fmt"
         fi
         sleep 0.1
     done
@@ -3197,15 +3297,15 @@ copy_directory_with_progress() {
     # Copy with rsync and progress
     rsync -ah --info=progress2 "$source_dir/" "$dest_dir/" 2>&1 | \
     while IFS= read -r line; do
-        if [[ "$line" =~ ^[[:space:]]*([0-9,]+)[[:space:]]+([0-9]+)%[[:space:]]+([0-9.]+[kMG]B/s)[[:space:]]+([0-9:]+) ]]; then
-            local transferred="${BASH_REMATCH[1]//,/}"
-            local percent="${BASH_REMATCH[2]}"
-            local speed="${BASH_REMATCH[3]}"
-            local eta="${BASH_REMATCH[4]}"
+        if [[ "$line" =~ ^[[:space:]]*([0-9]+)[[:space:]]+([0-9]+[kMG]?)[[:space:]]+([0-9]+)[%][[:space:]]+([0-9]+[kMG]?/s)[[:space:]]+.*[[:space:]]+([0-9]+:[0-9]+:[0-9]+|[0-9]+:[0-9]+|[0-9]+s|--:--:--) ]]; then
+            local percent="${BASH_REMATCH[3]}"
+            local downloaded="${BASH_REMATCH[2]}"
+            local speed="${BASH_REMATCH[4]}"
+            local eta="${BASH_REMATCH[5]}"
             
             printf "\r"
             show_progress_bar "$percent" 100 40
-            printf " ${percent}%% | ${speed} | ETA: ${eta}  "
+            printf " %s%% \| %s \| ETA: %s  " "$percent" "$speed" "$eta"
         fi
     done
     
@@ -3266,40 +3366,6 @@ show_countdown() {
     show_status "done" "$message complete!"
 }
 
-# Format duration for display
-format_duration() {
-    local seconds="$1"
-    
-    if [[ $seconds -lt 60 ]]; then
-        echo "${seconds}s"
-    elif [[ $seconds -lt 3600 ]]; then
-        printf "%dm %ds" $((seconds / 60)) $((seconds % 60))
-    else
-        printf "%dh %dm" $((seconds / 3600)) $((seconds % 3600 / 60))
-    fi
-}
-
-# Format bytes for display
-format_bytes() {
-    local bytes="$1"
-    local units=("B" "KB" "MB" "GB" "TB")
-    local unit=0
-    
-    # Use bc for floating point math
-    local size=$bytes
-    while [[ $(echo "$size >= 1024" | bc 2>/dev/null) == "1" ]] && [[ $unit -lt 4 ]]; do
-        size=$(echo "scale=2; $size / 1024" | bc 2>/dev/null)
-        ((unit++))
-    done
-    
-    # Format with appropriate precision
-    if [[ $unit -eq 0 ]]; then
-        printf "%d %s" "$bytes" "${units[unit]}"
-    else
-        printf "%.2f %s" "$size" "${units[unit]}"
-    fi
-}
-
 # ASCII art progress animations
 show_ascii_progress() {
     local type="$1"
@@ -3349,7 +3415,7 @@ show_progress() {
 # Export progress functions
 export -f show_progress_bar show_multi_progress show_spinner stop_spinner
 export -f show_progress show_download_progress show_status show_countdown
-export -f format_duration format_bytes show_matrix_progress show_ascii_progress
+export -f format_duration format_bytes show_ascii_progress
 export -f track_download_progress download_with_progress copy_with_progress copy_directory_with_progress
 
 # ==== Component: src/ui/dashboard.sh ====
@@ -4576,6 +4642,11 @@ stop_web_server() {
 # Chat Wrapper - Provides location-aware chat interface
 # Part of Leonardo AI Universal
 
+# Check if Ollama is installed
+is_ollama_installed() {
+    command -v ollama >/dev/null 2>&1
+}
+
 # Ensure color variables are defined
 : "${GREEN:=\033[32m}"
 : "${CYAN:=\033[36m}"
@@ -4584,6 +4655,7 @@ stop_web_server() {
 : "${DIM:=\033[2m}"
 : "${BOLD:=\033[1m}"
 : "${COLOR_RESET:=\033[0m}"
+: "${BLUE:=\033[34m}"
 
 # Select Ollama instance
 select_ollama_instance() {
@@ -4611,14 +4683,50 @@ start_location_aware_chat() {
     local model="${1:-}"
     local preference="${2:-auto}"
     
+    # Try to detect USB mount if not set
+    if [[ -z "${LEONARDO_USB_MOUNT:-}" ]]; then
+        local script_path="${BASH_SOURCE[0]:-$0}"
+        local real_path=$(readlink -f "$script_path" 2>/dev/null || realpath "$script_path" 2>/dev/null || echo "$script_path")
+        
+        # Check if we're running from a USB location
+        if echo "$real_path" | grep -iE '/(media|mnt|run/media|Volumes)/' >/dev/null 2>&1; then
+            # Extract the mount point (up to leonardo directory)
+            if [[ "$real_path" =~ ^(/media/[^/]+/[^/]+)/.* ]] || \
+               [[ "$real_path" =~ ^(/mnt/[^/]+)/.* ]] || \
+               [[ "$real_path" =~ ^(/run/media/[^/]+/[^/]+)/.* ]] || \
+               [[ "$real_path" =~ ^(/Volumes/[^/]+)/.* ]]; then
+                export LEONARDO_USB_MOUNT="${BASH_REMATCH[1]}"
+                export LEONARDO_USB_MODE="true"
+                export LEONARDO_MODEL_DIR="${LEONARDO_USB_MOUNT}/leonardo/models"
+                export LEONARDO_BASE_DIR="${LEONARDO_USB_MOUNT}/leonardo"
+                echo -e "${GREEN}Auto-detected USB mount: ${LEONARDO_USB_MOUNT}${COLOR_RESET}" >&2
+            fi
+        fi
+    fi
+    
+    # Ensure model directory is set for USB mode
+    if [[ "${LEONARDO_USB_MODE:-}" == "true" ]] && [[ -z "${LEONARDO_MODEL_DIR:-}" ]]; then
+        export LEONARDO_MODEL_DIR="${LEONARDO_USB_MOUNT}/leonardo/models"
+        export LEONARDO_BASE_DIR="${LEONARDO_USB_MOUNT}/leonardo"
+    fi
+    
+    # Debug: Show USB detection
+    echo -e "${DIM}USB Mode: ${LEONARDO_USB_MODE:-false}${COLOR_RESET}" >&2
+    echo -e "${DIM}USB Mount: ${LEONARDO_USB_MOUNT:-not set}${COLOR_RESET}" >&2
+    echo -e "${DIM}Model Dir: ${LEONARDO_MODEL_DIR:-not set}${COLOR_RESET}" >&2
+    echo >&2
+    
     # For USB deployments without Ollama, use direct model access
     if [[ "${LEONARDO_USB_MODE:-}" == "true" ]] || [[ "$preference" == "usb" ]]; then
         # Check for GGUF models in USB
         local model_dir="${LEONARDO_MODEL_DIR:-${LEONARDO_BASE_DIR}/models}"
         if [[ -d "$model_dir" ]] && [[ -n "$(find "$model_dir" -name "*.gguf" 2>/dev/null | head -1)" ]]; then
             echo -e "${CYAN}USB Mode: Using local GGUF models${COLOR_RESET}"
-            # Fallback to simple chat interface for GGUF models
-            handle_gguf_chat "$model_dir"
+            # Select and use a GGUF model
+            local selected_model=$(select_gguf_model "$model_dir")
+            if [[ -n "$selected_model" ]]; then
+                start_gguf_chat_session "$selected_model"
+            fi
             return
         fi
     fi
@@ -4632,7 +4740,10 @@ start_location_aware_chat() {
         local model_dir="${LEONARDO_MODEL_DIR:-${LEONARDO_BASE_DIR}/models}"
         if [[ -d "$model_dir" ]] && [[ -n "$(find "$model_dir" -name "*.gguf" 2>/dev/null | head -1)" ]]; then
             echo -e "${YELLOW}Ollama not available, using local GGUF models${COLOR_RESET}"
-            handle_gguf_chat "$model_dir"
+            local selected_model=$(select_gguf_model "$model_dir")
+            if [[ -n "$selected_model" ]]; then
+                start_gguf_chat_session "$selected_model"
+            fi
             return
         fi
         
@@ -4645,28 +4756,123 @@ start_location_aware_chat() {
     if [[ -z "$model" ]]; then
         echo -e "\n${CYAN}Available Models:${COLOR_RESET}\n"
         
-        # List models from the selected endpoint
-        local models=$(curl -s "$endpoint/api/tags" | jq -r '.models[].name' 2>/dev/null)
+        # Build model list based on deployment mode
+        local all_models=()
         
-        if [[ -z "$models" ]]; then
-            echo -e "${RED}No models found on selected instance${COLOR_RESET}"
+        # Check deployment mode
+        if [[ "${LEONARDO_USB_ONLY:-false}" == "true" ]]; then
+            echo -e "${BLUE}USB-Only Mode: Using only USB-stored models${COLOR_RESET}" >&2
+            echo >&2
+            
+            # Only list models from USB
+            if [[ -n "${LEONARDO_USB_MOUNT:-}" ]] && [[ -d "${LEONARDO_USB_MOUNT}/leonardo/models" ]]; then
+                echo -e "${CYAN}Available models on USB:${COLOR_RESET}" >&2
+                echo >&2
+                
+                # Find GGUF models on USB
+                local usb_model_count=0
+                while IFS= read -r model_file; do
+                    if [[ -f "$model_file" ]]; then
+                        local model_name=$(basename "$model_file" .gguf)
+                        local model_size=$(du -h "$model_file" 2>/dev/null | cut -f1)
+                        all_models+=("${model_name}:gguf:[USB-ONLY] ${model_name} (${model_size})")
+                        ((usb_model_count++))
+                    fi
+                done < <(find "${LEONARDO_USB_MOUNT}/leonardo/models" -name "*.gguf" -type f 2>/dev/null | sort)
+                
+                if [[ $usb_model_count -eq 0 ]]; then
+                    echo -e "${YELLOW}No models found on USB. Please download models first.${COLOR_RESET}" >&2
+                    return 1
+                fi
+            else
+                echo -e "${RED}USB not mounted or models directory not found${COLOR_RESET}" >&2
+                return 1
+            fi
+        else
+            # Original mode - check all sources
+            # 1. Check Ollama models
+            if is_ollama_installed; then
+                local ollama_endpoint="http://localhost:11434"
+                local ollama_location="HOST"
+                
+                # Check if Ollama is running on USB
+                if [[ "${LEONARDO_USB_MODE:-false}" == "true" ]] && [[ -n "${LEONARDO_OLLAMA_HOST:-}" ]]; then
+                    ollama_endpoint="${LEONARDO_OLLAMA_HOST}"
+                    if [[ "$ollama_endpoint" == *":11435"* ]]; then
+                        ollama_location="USB"
+                    fi
+                fi
+                
+                echo -e "${CYAN}Checking Ollama models...${COLOR_RESET}" >&2
+                
+                # Get Ollama models with error handling
+                local ollama_models
+                if ollama_models=$(OLLAMA_HOST="$ollama_endpoint" ollama list 2>/dev/null | tail -n +2); then
+                    while IFS=$'\t' read -r name id size modified; do
+                        if [[ -n "$name" ]]; then
+                            local display_name="[${ollama_location}] ${name}"
+                            if [[ -n "$size" ]]; then
+                                display_name+=" (${size})"
+                            fi
+                            all_models+=("${name}:ollama:${display_name}")
+                        fi
+                    done <<< "$ollama_models"
+                fi
+            fi
+            
+            # 2. Check local GGUF models
+            # First check USB if in USB mode
+            if [[ "${LEONARDO_USB_MODE:-false}" == "true" ]] && [[ -n "${LEONARDO_USB_MOUNT:-}" ]]; then
+                local usb_model_dir="${LEONARDO_USB_MOUNT}/leonardo/models"
+                echo -e "${CYAN}Checking USB GGUF models...${COLOR_RESET}" >&2
+                
+                if [[ -d "$usb_model_dir" ]]; then
+                    while IFS= read -r model_file; do
+                        if [[ -f "$model_file" ]]; then
+                            local model_name=$(basename "$model_file" .gguf)
+                            local model_size=$(du -h "$model_file" 2>/dev/null | cut -f1)
+                            all_models+=("${model_name}:gguf:[USB] ${model_name} (${model_size})")
+                            echo -e "  Found: ${model_name} (${model_size})" >&2
+                        fi
+                    done < <(find "$usb_model_dir" -name "*.gguf" -type f 2>/dev/null | sort)
+                fi
+            fi
+            
+            # Then check host model directory if different
+            if [[ -d "$LEONARDO_MODEL_DIR" ]] && [[ "$LEONARDO_MODEL_DIR" != "${LEONARDO_USB_MOUNT}/leonardo/models" ]]; then
+                echo -e "${CYAN}Checking host GGUF models...${COLOR_RESET}" >&2
+                
+                while IFS= read -r model_file; do
+                    if [[ -f "$model_file" ]]; then
+                        local model_name=$(basename "$model_file" .gguf)
+                        local model_size=$(du -h "$model_file" 2>/dev/null | cut -f1)
+                        all_models+=("${model_name}:gguf:[HOST] ${model_name} (${model_size})")
+                    fi
+                done < <(find "$LEONARDO_MODEL_DIR" -name "*.gguf" -type f 2>/dev/null | sort)
+            fi
+        fi
+        
+        # List models
+        if [[ ${#all_models[@]} -eq 0 ]]; then
+            echo -e "${RED}No models found${COLOR_RESET}"
             return 1
         fi
         
-        # Show models with numbers
+        echo -e "\n${CYAN}Available Models:${COLOR_RESET}\n"
         local i=1
-        local model_array=()
-        while IFS= read -r m; do
-            echo -e "$i) $m"
-            model_array+=("$m")
+        for model in "${all_models[@]}"; do
+            local model_name=$(echo "$model" | cut -d: -f1)
+            local model_type=$(echo "$model" | cut -d: -f2)
+            local model_display=$(echo "$model" | cut -d: -f3-)
+            echo "  $i) $model_display"
             ((i++))
-        done <<< "$models"
+        done
         
         echo
         read -p "Select model (1-$((i-1))): " model_choice
         
         if [[ "$model_choice" =~ ^[0-9]+$ ]] && (( model_choice > 0 && model_choice < i )); then
-            model="${model_array[$((model_choice-1))]}"
+            model=$(echo "${all_models[$((model_choice-1))]}" | cut -d: -f1)
         else
             echo -e "${RED}Invalid selection${COLOR_RESET}"
             return 1
@@ -4728,8 +4934,8 @@ start_location_aware_chat() {
     echo -e "\n${GREEN}Chat session ended${COLOR_RESET}"
 }
 
-# Handle GGUF model chat (fallback when Ollama not available)
-handle_gguf_chat() {
+# Select a GGUF model from available models
+select_gguf_model() {
     local model_dir="$1"
     
     echo -e "\n${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
@@ -4743,7 +4949,8 @@ handle_gguf_chat() {
     
     while IFS= read -r -d '' model_file; do
         local model_name=$(basename "$model_file" .gguf)
-        echo "  $i) $model_name"
+        local model_size=$(du -h "$model_file" 2>/dev/null | cut -f1)
+        echo "  $i) $model_name ($model_size)"
         models+=("$model_file")
         ((i++))
     done < <(find "$model_dir" -name "*.gguf" -print0 2>/dev/null)
@@ -4762,25 +4969,73 @@ handle_gguf_chat() {
         return 1
     fi
     
-    local selected_model="${models[$((selection-1))]}"
-    local model_name=$(basename "$selected_model" .gguf)
+    echo "${models[$((selection-1))]}"
+}
+
+# Start a GGUF chat session
+start_gguf_chat_session() {
+    local model_file="$1"
+    local model_name=$(basename "$model_file" .gguf)
     
     echo -e "\n${GREEN}Selected: $model_name${COLOR_RESET}"
-    echo -e "${DIM}Model file: $selected_model${COLOR_RESET}"
+    echo -e "${DIM}Model file: $model_file${COLOR_RESET}"
     echo
-    echo -e "${YELLOW}Note: Chat interface requires llama.cpp or compatible runtime${COLOR_RESET}"
-    echo -e "${DIM}Without a runtime, models can only be managed, not used for chat${COLOR_RESET}"
+    
+    # Check if we can use Ollama with the GGUF model
+    if command -v ollama >/dev/null 2>&1; then
+        echo -e "${CYAN}Loading model into Ollama...${COLOR_RESET}"
+        # Create a temporary Modelfile for the GGUF
+        local temp_modelfile="/tmp/leonardo_modelfile_$$"
+        echo "FROM $model_file" > "$temp_modelfile"
+        
+        # Create the model in Ollama
+        local ollama_model_name="leonardo-${model_name,,}"
+        if ollama create "$ollama_model_name" -f "$temp_modelfile" 2>/dev/null; then
+            rm -f "$temp_modelfile"
+            echo -e "${GREEN}Model loaded successfully!${COLOR_RESET}"
+            # Start chat with the loaded model
+            start_location_aware_chat "$ollama_model_name" "local"
+            return
+        fi
+        rm -f "$temp_modelfile"
+    fi
+    
+    # Fallback to simple chat interface
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
+    echo -e "${BOLD}Chat with $model_name (Simulated)${COLOR_RESET}"
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
     echo
-    echo -e "${CYAN}To enable chat on macOS:${COLOR_RESET}"
-    echo "  1. Install Ollama: https://ollama.ai"
-    echo "  2. Or install llama.cpp: brew install llama.cpp"
+    echo -e "${YELLOW}Note: Full chat requires llama.cpp or Ollama runtime${COLOR_RESET}"
+    echo -e "${DIM}This is a demonstration interface${COLOR_RESET}"
     echo
+    echo -e "Type 'exit' to quit\n"
+    
+    # Simple chat loop for demonstration
+    while true; do
+        read -p "You: " user_input
+        if [[ "$user_input" =~ ^(exit|quit|bye)$ ]]; then
+            echo -e "\n${CYAN}Chat ended. Thank you!${COLOR_RESET}"
+            break
+        fi
+        
+        echo -e "\n${GREEN}$model_name:${COLOR_RESET} I'm a local GGUF model. To enable actual inference:"
+        echo "  - Install Ollama from https://ollama.ai"
+        echo "  - Or use llama.cpp for direct GGUF execution"
+        echo
+    done
+}
+
+# Handle GGUF model chat (legacy compatibility)
+handle_gguf_chat() {
+    local model_dir="$1"
+    local selected_model=$(select_gguf_model "$model_dir")
+    if [[ -n "$selected_model" ]]; then
+        start_gguf_chat_session "$selected_model"
+    fi
 }
 
 # Export functions
-export -f select_ollama_instance
-export -f start_location_aware_chat
-export -f handle_gguf_chat
+export -f start_location_aware_chat select_gguf_model start_gguf_chat_session handle_gguf_chat
 
 # ==== Component: src/security/audit.sh (STUB) ====
 # TODO: Implement src/security/audit.sh
@@ -5683,6 +5938,69 @@ download_model() {
     
     echo -e "${CYAN}Downloading model: $model_spec${COLOR_RESET}"
     
+    # Check if we're in USB deployment mode
+    if [[ "${LEONARDO_USB_MODE}" == "true" ]] && [[ -n "${LEONARDO_USB_MOUNT:-}" ]]; then
+        echo -e "${YELLOW}USB deployment mode - downloading to USB instead of host${COLOR_RESET}"
+        
+        # For USB mode, always download GGUF files directly
+        case "$provider" in
+            ollama)
+                echo "Converting Ollama model to GGUF download..."
+                # Try to find GGUF URL for this model
+                local model_id="${model_spec%:*}"
+                local variant="${model_spec#*:}"
+                
+                # Check if we have a registry entry
+                if [[ -f "${LEONARDO_DIR}/src/models/registry_loader.sh" ]]; then
+                    source "${LEONARDO_DIR}/src/models/registry_loader.sh"
+                fi
+                
+                local model_url=""
+                if [[ -n "${LEONARDO_GGUF_REGISTRY[${model_id}:${variant}]:-}" ]]; then
+                    model_url="${LEONARDO_GGUF_REGISTRY[${model_id}:${variant}]}"
+                else
+                    # Try common GGUF sources
+                    case "$model_id" in
+                        phi*) model_url="https://huggingface.co/microsoft/phi-2-gguf/resolve/main/phi-2.Q4_K_M.gguf" ;;
+                        llama2*) model_url="https://huggingface.co/TheBloke/Llama-2-7B-GGUF/resolve/main/llama-2-7b.Q4_K_M.gguf" ;;
+                        mistral*) model_url="https://huggingface.co/TheBloke/Mistral-7B-v0.1-GGUF/resolve/main/mistral-7b-v0.1.Q4_K_M.gguf" ;;
+                        qwen*) model_url="https://huggingface.co/Qwen/Qwen2.5-3B-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf" ;;
+                        *) 
+                            echo -e "${RED}No GGUF URL found for $model_id. Please use direct GGUF download.${COLOR_RESET}"
+                            return 1
+                            ;;
+                    esac
+                fi
+                
+                # Download to USB
+                local output_file="${LEONARDO_USB_MOUNT}/leonardo/models/${model_id}-${variant}.gguf"
+                ensure_directory "$(dirname "$output_file")"
+                
+                download_with_progress "$model_url" "$output_file" "Downloading ${model_id} to USB"
+                return $?
+                ;;
+            huggingface|gguf)
+                # Direct GGUF download to USB
+                local model_id="${model_spec%:*}"
+                local variant="${model_spec#*:}"
+                local output_file="${LEONARDO_USB_MOUNT}/leonardo/models/${model_id//\//-}-${variant}.gguf"
+                
+                ensure_directory "$(dirname "$output_file")"
+                
+                # Construct HuggingFace URL
+                local hf_url="https://huggingface.co/${model_id}/resolve/main/${variant}.gguf"
+                
+                download_with_progress "$hf_url" "$output_file" "Downloading to USB"
+                return $?
+                ;;
+            *)
+                echo -e "${RED}Provider $provider not supported in USB mode${COLOR_RESET}"
+                return 1
+                ;;
+        esac
+    fi
+    
+    # Original host-based download logic
     case "$provider" in
         ollama)
             if command_exists ollama; then
@@ -6989,8 +7307,29 @@ EOF
     cat > "$target_dir/start-leonardo" << 'EOF'
 #!/bin/bash
 # Leonardo AI Universal Launcher
-cd "$(dirname "$0")"
-./leonardo/leonardo.sh "$@"
+
+# Get the directory where this script is located
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Auto-detect USB mount point
+if [[ "$SCRIPT_DIR" =~ ^(/media/[^/]+/[^/]+)/.* ]] || \
+   [[ "$SCRIPT_DIR" =~ ^(/mnt/[^/]+)/.* ]] || \
+   [[ "$SCRIPT_DIR" =~ ^(/run/media/[^/]+/[^/]+)/.* ]] || \
+   [[ "$SCRIPT_DIR" =~ ^(/Volumes/[^/]+)/.* ]]; then
+    export LEONARDO_USB_MOUNT="${BASH_REMATCH[1]}"
+else
+    export LEONARDO_USB_MOUNT="$SCRIPT_DIR"
+fi
+
+# Set USB environment
+export LEONARDO_USB_MODE="true"
+export LEONARDO_DIR="${LEONARDO_USB_MOUNT}/leonardo"
+export LEONARDO_MODEL_DIR="${LEONARDO_USB_MOUNT}/leonardo/models"
+export LEONARDO_CONFIG_DIR="${LEONARDO_USB_MOUNT}/leonardo/config"
+
+# Launch Leonardo
+cd "$LEONARDO_DIR"
+exec ./leonardo.sh "$@"
 EOF
     chmod +x "$target_dir/start-leonardo" 2>/dev/null || true
     
@@ -7012,6 +7351,7 @@ EOF
 # Configure Leonardo for USB deployment
 configure_usb_leonardo() {
     local config_file="$LEONARDO_USB_MOUNT/leonardo/config/leonardo.conf"
+    local deployment_config="$LEONARDO_USB_MOUNT/leonardo/config/deployment.conf"
     
     # Create configuration
     cat > "$config_file" << EOF
@@ -7019,33 +7359,37 @@ configure_usb_leonardo() {
 # Generated: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
 
 # Deployment type
-LEONARDO_DEPLOYMENT_TYPE="usb"
+LEONARDO_USB_MODE=true
+LEONARDO_USB_MOUNT="$LEONARDO_USB_MOUNT"
+LEONARDO_MODEL_DIR="$LEONARDO_USB_MOUNT/leonardo/models"
+LEONARDO_CONFIG_DIR="$LEONARDO_USB_MOUNT/leonardo/config"
+LEONARDO_DATA_DIR="$LEONARDO_USB_MOUNT/leonardo/data"
 
-# USB-specific settings
+# Paths relative to USB mount
+LEONARDO_RELATIVE_PATH="/leonardo"
+LEONARDO_MODELS_RELATIVE="/leonardo/models"
+
+# USB optimizations
+LEONARDO_USB_CACHE_SIZE=512
+LEONARDO_USB_PREFETCH=true
+LEONARDO_USB_SYNC_INTERVAL=300
+
+# Privacy settings
+LEONARDO_NO_TELEMETRY=true
+LEONARDO_NO_HOST_ACCESS=false
+EOF
+
+    # Create deployment configuration
+    cat > "$deployment_config" << EOF
+# Leonardo Deployment Configuration
+# Mode: USB
+LEONARDO_DEPLOYMENT_MODE="usb"
 LEONARDO_USB_MODE="true"
-LEONARDO_PORTABLE_MODE="true"
-LEONARDO_NO_INSTALL="true"
-
-# Paths (relative to USB root)
-LEONARDO_BASE_DIR="\$(dirname "\$(readlink -f "\$0")")/leonardo"
-LEONARDO_MODEL_DIR="\$LEONARDO_BASE_DIR/models"
-LEONARDO_CACHE_DIR="\$LEONARDO_BASE_DIR/cache"
-LEONARDO_CONFIG_DIR="\$LEONARDO_BASE_DIR/config"
-LEONARDO_LOG_DIR="\$LEONARDO_BASE_DIR/logs"
-LEONARDO_DATA_DIR="\$LEONARDO_BASE_DIR/data"
-
-# Performance settings for USB
-LEONARDO_LOW_MEMORY_MODE="true"
-LEONARDO_CACHE_SIZE_MB="512"
-LEONARDO_MAX_THREADS="4"
-
-# Security settings
-LEONARDO_PARANOID_MODE="true"
-LEONARDO_NO_TELEMETRY="true"
-LEONARDO_CLEANUP_ON_EXIT="true"
+LEONARDO_USB_ONLY="false"
+LEONARDO_USB_MOUNT="$LEONARDO_USB_MOUNT"
 EOF
     
-    log_message "SUCCESS" "USB configuration created"
+    echo -e "${GREEN}✓ USB configuration created${COLOR_RESET}" >&2
 }
 
 # Deploy models to USB
@@ -7148,245 +7492,100 @@ download_model_to_usb() {
     # Set download target
     export LEONARDO_MODEL_DIR="$target_dir"
     
-    echo -e "${CYAN}Downloading ${model_id}:${variant}${COLOR_RESET}" >&2
-    
-    # Check if we have Ollama provider
-    if command_exists ollama; then
-        # Use Ollama to pull the model
-        echo "Using Ollama to download model..." >&2
-        
-        # First check if Ollama is running
-        if ! ollama list >/dev/null 2>&1; then
-            echo -e "${YELLOW}⚠ Ollama is not running. Starting Ollama service...${COLOR_RESET}" >&2
-            # Try to start Ollama in the background
-            ollama serve >/dev/null 2>&1 &
-            local ollama_pid=$!
-            sleep 3
-            
-            # Check if it started
-            if ! ollama list >/dev/null 2>&1; then
-                echo -e "${YELLOW}⚠ Could not start Ollama, falling back to direct download${COLOR_RESET}" >&2
-                kill $ollama_pid 2>/dev/null || true
-            fi
-        fi
-        
-        # Try to pull the model if Ollama is available
-        if ollama list >/dev/null 2>&1; then
-            # First pull the model with visual feedback
-            echo -e "${CYAN}Pulling model from Ollama...${COLOR_RESET}" >&2
-            echo -e "${DIM}This may take a few minutes depending on model size and connection speed${COLOR_RESET}" >&2
-            
-            # Run ollama pull and capture output
-            local temp_out="/tmp/ollama_pull_$$.log"
-            local download_done=false
-            
-            # Start the download in background
-            (ollama pull "${model_id}:${variant}" 2>&1 | tee "$temp_out") &
-            local download_pid=$!
-            
-            # Show spinner while downloading
-            local spin='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
-            local spin_i=0
-            local last_line=""
-            
-            while kill -0 $download_pid 2>/dev/null; do
-                # Read the last line from the log
-                if [[ -f "$temp_out" ]]; then
-                    local current_line=$(tail -n1 "$temp_out" 2>/dev/null | tr -d '\r\n')
-                    if [[ -n "$current_line" ]] && [[ "$current_line" != "$last_line" ]]; then
-                        last_line="$current_line"
-                        
-                        # Check for progress percentage
-                        if [[ "$current_line" =~ ([0-9]+)% ]] || [[ "$current_line" =~ pulling.*([0-9]+)% ]]; then
-                            local percent="${BASH_REMATCH[1]}"
-                            printf "\r${CYAN}Downloading:${COLOR_RESET} [%-40s] ${YELLOW}%3d%%${COLOR_RESET}" \
-                                   "$(printf '%*s' $((percent * 40 / 100)) | tr ' ' '=')" "$percent"
-                        elif [[ "$current_line" =~ "success" ]] || [[ "$current_line" =~ "up to date" ]]; then
-                            download_done=true
-                            break
-                        elif [[ "$current_line" =~ "error" ]]; then
-                            break
-                        else
-                            # Show current status with spinner
-                            local status_text=$(echo "$current_line" | sed 's/[[:space:]]*$//' | cut -c1-50)
-                            printf "\r${CYAN}Downloading:${COLOR_RESET} ${spin:spin_i:1} %s..." "$status_text"
-                            spin_i=$(( (spin_i + 1) % ${#spin} ))
-                        fi
-                    else
-                        # Just update spinner if no new content
-                        printf "\r${CYAN}Downloading:${COLOR_RESET} ${spin:spin_i:1} Waiting for Ollama..."
-                        spin_i=$(( (spin_i + 1) % ${#spin} ))
-                    fi
-                fi
-                sleep 0.1
-            done
-            
-            # Wait for the process to complete
-            wait $download_pid
-            local result=$?
-            
-            # Clean up
-            printf "\r%-80s\r" " "  # Clear line
-            rm -f "$temp_out"
-            
-            # Check if last line indicated success
-            if [[ "$last_line" =~ "success" ]] || [[ "$download_done" == "true" ]]; then
-                download_done=true
-                result=0
-            fi
-            
-            if [[ $result -eq 0 ]] && [[ "$download_done" == "true" ]]; then
-                echo -e "${GREEN}✓ Model downloaded to Ollama${COLOR_RESET}" >&2
-                
-                # Now export the model to USB
-                echo -e "${CYAN}Exporting model to USB...${COLOR_RESET}" >&2
-                
-                # Ollama stores models in ~/.ollama/models/blobs/
-                # We need to find the actual model file and copy it
-                local ollama_dir="${HOME}/.ollama/models"
-                
-                # First, create the modelfile
-                if ollama show "${model_id}:${variant}" --modelfile > "$target_dir/${model_id}-${variant}.modelfile" 2>/dev/null; then
-                    echo -e "${DIM}Created modelfile${COLOR_RESET}" >&2
-                fi
-                
-                # Try to find the model's manifest to locate the actual weights
-                echo -e "${DIM}Looking for model weights...${COLOR_RESET}" >&2
-                
-                # Get model info from Ollama
-                local model_info=$(ollama show "${model_id}:${variant}" 2>/dev/null)
-                
-                # For now, we'll note that the model is managed by Ollama
-                # and will need Ollama installed to use it
-                cat > "$target_dir/${model_id}-${variant}.info" <<EOF
-Model: ${model_id}:${variant}
-Type: Ollama-managed
-Date: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
-EOF
-
-                # Map the model to a direct download URL if available
-                local gguf_url=""
-                case "${model_id}:${variant}" in
-                    "phi:2.7b")
-                        gguf_url="https://huggingface.co/microsoft/phi-2/resolve/main/phi-2.Q4_K_M.gguf"
-                        ;;
-                    "llama2:7b")
-                        gguf_url="https://huggingface.co/TheBloke/Llama-2-7B-GGUF/resolve/main/llama-2-7b.Q4_K_M.gguf"
-                        ;;
-                    "mistral:7b")
-                        gguf_url="https://huggingface.co/TheBloke/Mistral-7B-v0.1-GGUF/resolve/main/mistral-7b-v0.1.Q4_K_M.gguf"
-                        ;;
-                    "llama3.2:1b")
-                        gguf_url="https://huggingface.co/lmstudio-community/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf"
-                        ;;
-                    "llama3.2:3b")
-                        gguf_url="https://huggingface.co/lmstudio-community/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf"
-                        ;;
-                    "qwen2.5:3b")
-                        gguf_url="https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf"
-                        ;;
-                    "gemma2:2b")
-                        gguf_url="https://huggingface.co/lmstudio-community/gemma-2-2b-it-GGUF/resolve/main/gemma-2-2b-it-Q4_K_M.gguf"
-                        ;;
-                    "codellama:7b")
-                        gguf_url="https://huggingface.co/TheBloke/CodeLlama-7B-Instruct-GGUF/resolve/main/codellama-7b-instruct.Q4_K_M.gguf"
-                        ;;
-                    "llama3.1:8b")
-                        gguf_url="https://huggingface.co/lmstudio-community/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf"
-                        ;;
-                    "llama2:13b")
-                        gguf_url="https://huggingface.co/TheBloke/Llama-2-13B-chat-GGUF/resolve/main/llama-2-13b-chat.Q4_K_M.gguf"
-                        ;;
-                    *)
-                        echo -e "${DIM}No direct download available for ${model_id}:${variant}${COLOR_RESET}" >&2
-                        ;;
-                esac
-
-                if [[ -n "$gguf_url" ]]; then
-                    local gguf_file="$target_dir/${model_id}-${variant}.gguf"
-                    
-                    # Use download_with_progress for better visual feedback
-                    if download_with_progress "$gguf_url" "$gguf_file" "Downloading GGUF for offline use"; then
-                        echo -e "${GREEN}✓ GGUF model downloaded for offline use${COLOR_RESET}" >&2
-                        
-                        # Update info file
-                        cat >> "$target_dir/${model_id}-${variant}.info" <<EOF
-
-GGUF File: ${model_id}-${variant}.gguf
-Size: $(du -h "$gguf_file" 2>/dev/null | cut -f1)
-Offline Ready: Yes
-EOF
-                    else
-                        echo -e "${YELLOW}⚠ GGUF download failed${COLOR_RESET}" >&2
-                        rm -f "$gguf_file" 2>/dev/null
-                    fi
-                else
-                    echo -e "${GREEN}✓ Model exported (Ollama format)${COLOR_RESET}" >&2
-                fi
-                
-                return 0
-            else
-                echo -e "${RED}✗ Ollama download failed${COLOR_RESET}" >&2
-                # Fall through to direct download
-            fi
-        fi
-    fi
-    
-    # Direct download from registry as fallback
     echo "Downloading from model registry..." >&2
     
-    # Debug output
-    echo -e "${DIM}DEBUG: Looking for model '${model_id}:${variant}' in registry${COLOR_RESET}" >&2
+    # Set LEONARDO_DIR if not already set
+    if [[ -z "${LEONARDO_DIR:-}" ]]; then
+        # Try to determine the Leonardo installation directory
+        if [[ -f "${LEONARDO_BASE_DIR}/src/models/registry_loader.sh" ]]; then
+            LEONARDO_DIR="${LEONARDO_BASE_DIR}"
+        elif [[ -f "${HOME}/.leonardo/src/models/registry_loader.sh" ]]; then
+            LEONARDO_DIR="${HOME}/.leonardo"
+        elif [[ -f "./src/models/registry_loader.sh" ]]; then
+            LEONARDO_DIR="$(pwd)"
+        else
+            # Fallback - assume we're in the Leonardo directory
+            LEONARDO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+        fi
+        export LEONARDO_DIR
+    fi
     
-    # Map common model names to HuggingFace URLs
+    # Load dynamic registry if available
+    if [[ -f "${LEONARDO_DIR}/src/models/registry_loader.sh" ]]; then
+        source "${LEONARDO_DIR}/src/models/registry_loader.sh"
+    fi
+    
+    # Check dynamic registry first
     local model_url=""
-    case "${model_id}:${variant}" in
-        "phi:2.7b")
-            model_url="https://huggingface.co/microsoft/phi-2/resolve/main/phi-2.Q4_K_M.gguf"
-            ;;
-        "llama2:7b")
-            model_url="https://huggingface.co/TheBloke/Llama-2-7B-GGUF/resolve/main/llama-2-7b.Q4_K_M.gguf"
-            ;;
-        "mistral:7b")
-            model_url="https://huggingface.co/TheBloke/Mistral-7B-v0.1-GGUF/resolve/main/mistral-7b-v0.1.Q4_K_M.gguf"
-            ;;
-        "llama3.2:1b")
-            model_url="https://huggingface.co/lmstudio-community/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf"
-            ;;
-        "llama3.2:3b")
-            model_url="https://huggingface.co/lmstudio-community/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf"
-            ;;
-        "qwen2.5:3b")
-            model_url="https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf"
-            ;;
-        "gemma2:2b")
-            model_url="https://huggingface.co/lmstudio-community/gemma-2-2b-it-GGUF/resolve/main/gemma-2-2b-it-Q4_K_M.gguf"
-            ;;
-        "codellama:7b")
-            model_url="https://huggingface.co/TheBloke/CodeLlama-7B-Instruct-GGUF/resolve/main/codellama-7b-instruct.Q4_K_M.gguf"
-            ;;
-        "llama3.1:8b")
-            model_url="https://huggingface.co/lmstudio-community/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf"
-            ;;
-        "llama2:13b")
-            model_url="https://huggingface.co/TheBloke/Llama-2-13B-chat-GGUF/resolve/main/llama-2-13b-chat.Q4_K_M.gguf"
-            ;;
-        *)
-            echo -e "${RED}✗ Model ${model_id}:${variant} not found in registry${COLOR_RESET}" >&2
-            echo -e "${YELLOW}Available models for direct download:${COLOR_RESET}" >&2
-            echo "  - phi:2.7b" >&2
-            echo "  - llama2:7b" >&2
-            echo "  - mistral:7b" >&2
-            echo "  - llama3.2:1b" >&2
-            echo "  - llama3.2:3b" >&2
-            echo "  - qwen2.5:3b" >&2
-            echo "  - gemma2:2b" >&2
-            echo "  - codellama:7b" >&2
-            echo "  - llama3.1:8b" >&2
-            echo "  - llama2:13b" >&2
-            return 1
-            ;;
-    esac
+    if [[ -n "${LEONARDO_GGUF_REGISTRY[${model_id}:${variant}]:-}" ]]; then
+        model_url="${LEONARDO_GGUF_REGISTRY[${model_id}:${variant}]}"
+        echo -e "${DIM}Found in dynamic registry${COLOR_RESET}" >&2
+    else
+        # Fallback to hardcoded registry
+        echo -e "${DIM}Checking hardcoded registry${COLOR_RESET}" >&2
+        
+        case "${model_id}:${variant}" in
+            "phi:2.7b")
+                model_url="https://huggingface.co/microsoft/phi-2/resolve/main/phi-2.Q4_K_M.gguf"
+                ;;
+            "llama2:7b")
+                model_url="https://huggingface.co/TheBloke/Llama-2-7B-GGUF/resolve/main/llama-2-7b.Q4_K_M.gguf"
+                ;;
+            "mistral:7b")
+                model_url="https://huggingface.co/TheBloke/Mistral-7B-v0.1-GGUF/resolve/main/mistral-7b-v0.1.Q4_K_M.gguf"
+                ;;
+            "llama3.2:1b")
+                model_url="https://huggingface.co/lmstudio-community/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf"
+                ;;
+            "llama3.2:3b")
+                model_url="https://huggingface.co/lmstudio-community/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf"
+                ;;
+            "qwen2.5:3b")
+                model_url="https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf"
+                ;;
+            "gemma2:2b")
+                model_url="https://huggingface.co/lmstudio-community/gemma-2-2b-it-GGUF/resolve/main/gemma-2-2b-it-Q4_K_M.gguf"
+                ;;
+            "codellama:7b")
+                model_url="https://huggingface.co/TheBloke/CodeLlama-7B-Instruct-GGUF/resolve/main/codellama-7b-instruct.Q4_K_M.gguf"
+                ;;
+            "llama3.1:8b")
+                model_url="https://huggingface.co/lmstudio-community/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf"
+                ;;
+            "llama2:13b")
+                model_url="https://huggingface.co/TheBloke/Llama-2-13B-chat-GGUF/resolve/main/llama-2-13b-chat.Q4_K_M.gguf"
+                ;;
+        esac
+    fi
+    
+    if [[ -z "$model_url" ]]; then
+        echo -e "${RED}✗ Model ${model_id}:${variant} not found in registry${COLOR_RESET}" >&2
+        
+        # Show available models from both registries
+        echo -e "${YELLOW}Available models:${COLOR_RESET}" >&2
+        
+        # Dynamic registry models
+        if [[ ${#LEONARDO_GGUF_REGISTRY[@]} -gt 0 ]]; then
+            echo -e "${DIM}From dynamic registry:${COLOR_RESET}" >&2
+            for model in "${!LEONARDO_GGUF_REGISTRY[@]}"; do
+                echo "  - $model" >&2
+            done | sort
+        fi
+        
+        # Hardcoded models
+        echo -e "${DIM}From hardcoded registry:${COLOR_RESET}" >&2
+        echo "  - phi:2.7b" >&2
+        echo "  - llama2:7b" >&2
+        echo "  - mistral:7b" >&2
+        echo "  - llama3.2:1b" >&2
+        echo "  - llama3.2:3b" >&2
+        echo "  - qwen2.5:3b" >&2
+        echo "  - gemma2:2b" >&2
+        echo "  - codellama:7b" >&2
+        echo "  - llama3.1:8b" >&2
+        echo "  - llama2:13b" >&2
+        return 1
+    fi
     
     local output_file="$target_dir/${model_id}-${variant}.gguf"
     
@@ -10547,97 +10746,22 @@ main() {
     # Main interactive menu
     local keep_running=true
     while [[ "$keep_running" == "true" ]]; do
-        clear
-        show_banner
+        # Show appropriate menu
+        show_main_menu
         
-        # Show system status
-        echo -e "\n${DIM}System Status: $(format_system_status)${COLOR_RESET}\n"
+        # Read user choice
+        read -p "Enter your choice: " choice
         
-        # Build menu options dynamically
-        local menu_options=()
-        
-        # Always show deployment option first for MVP
-        menu_options+=("🚀 Deploy to USB")
-        
-        # Show chat option if models are installed
-        if check_installed_models; then
-            menu_options+=("💬 Chat with AI")
-        fi
-        
-        # System management options
-        menu_options+=("📦 Model Manager")
-        menu_options+=("🔧 System Utilities")
-        menu_options+=("📊 System Dashboard")
-        menu_options+=("⚙️  Settings")
-        menu_options+=("📖 Help")
-        menu_options+=("🚪 Exit")
-        
-        local selection
-        selection=$(show_menu "Leonardo AI Universal - Main Menu" "${menu_options[@]}")
-        local menu_exit_code=$?
-        
-        # If show_menu returned error (user pressed q), exit
-        if [[ $menu_exit_code -ne 0 ]]; then
+        # Process the choice
+        if ! process_choice "$choice"; then
             keep_running=false
-            continue
         fi
         
-        case "$selection" in
-            "🚀 Deploy to USB")
-                if [[ "$LEONARDO_DEBUG" == "true" ]] || [[ -n "${DEBUG:-}" ]]; then
-                    echo "DEBUG: Calling deploy_to_usb" >&2
-                fi
-                deploy_to_usb
-                # Don't exit on failure, just return to menu
-                ;;
-            "💬 Chat with AI")
-                if [[ "$LEONARDO_DEBUG" == "true" ]] || [[ -n "${DEBUG:-}" ]]; then
-                    echo "DEBUG: Calling handle_chat_command" >&2
-                fi
-                handle_chat_command
-                ;;
-            "📦 Model Manager")
-                if [[ "$LEONARDO_DEBUG" == "true" ]] || [[ -n "${DEBUG:-}" ]]; then
-                    echo "DEBUG: Calling handle_model_command menu" >&2
-                fi
-                handle_model_command "menu"
-                ;;
-            "🔧 System Utilities")
-                if [[ "$LEONARDO_DEBUG" == "true" ]] || [[ -n "${DEBUG:-}" ]]; then
-                    echo "DEBUG: Calling system_utilities_menu" >&2
-                fi
-                system_utilities_menu
-                ;;
-            "📊 System Dashboard")
-                if [[ "$LEONARDO_DEBUG" == "true" ]] || [[ -n "${DEBUG:-}" ]]; then
-                    echo "DEBUG: Calling show_dashboard" >&2
-                fi
-                show_dashboard
-                pause
-                ;;
-            "⚙️  Settings")
-                if [[ "$LEONARDO_DEBUG" == "true" ]] || [[ -n "${DEBUG:-}" ]]; then
-                    echo "DEBUG: Calling settings_menu" >&2
-                fi
-                settings_menu
-                ;;
-            "📖 Help")
-                if [[ "$LEONARDO_DEBUG" == "true" ]] || [[ -n "${DEBUG:-}" ]]; then
-                    echo "DEBUG: Calling show_help" >&2
-                fi
-                show_help
-                pause
-                ;;
-            "🚪 Exit"|"")
-                handle_exit
-                keep_running=false
-                ;;
-            *)
-                if [[ "$LEONARDO_DEBUG" == "true" ]] || [[ -n "${DEBUG:-}" ]]; then
-                    echo "DEBUG: Unknown selection: '$selection'" >&2
-                fi
-                ;;
-        esac
+        # Pause before returning to menu (unless exiting)
+        if [[ "$keep_running" == "true" ]]; then
+            echo
+            read -p "Press Enter to continue..."
+        fi
     done
 }
 
@@ -11074,60 +11198,118 @@ handle_deployment_command() {
     esac
 }
 
-# Settings menu
-settings_menu() {
-    while true; do
-        # Clear screen properly
-        echo -e "\033[H\033[2J" >/dev/tty
-        
-        echo -e "${CYAN}Settings & Preferences${COLOR_RESET}"
-        echo ""
-        
-        show_menu "Settings" \
-            "Toggle Debug Mode" \
-            "Configure Model Path" \
-            "Network Settings" \
-            "Security Options" \
-            "Back to Main Menu"
-        
-        case "$MENU_SELECTION" in
-            "Toggle Debug Mode")
-                if [[ "$LEONARDO_DEBUG" == "true" ]]; then
-                    LEONARDO_DEBUG=false
-                    echo -e "\n${GREEN}Debug mode disabled${COLOR_RESET}"
-                else
-                    LEONARDO_DEBUG=true
-                    echo -e "\n${GREEN}Debug mode enabled${COLOR_RESET}"
-                fi
-                echo -e "\n${DIM}Press Enter to continue...${COLOR_RESET}"
-                read -r
-                ;;
-            "Configure Model Path")
-                echo -e "\n${CYAN}Current model path: ${LEONARDO_MODELS_DIR}${COLOR_RESET}"
-                echo -n "Enter new path (or press Enter to keep current): "
-                read -r new_path
-                if [[ -n "$new_path" ]]; then
-                    export LEONARDO_MODELS_DIR="$new_path"
-                    echo -e "${GREEN}Model path updated!${COLOR_RESET}"
-                fi
-                echo -e "\n${DIM}Press Enter to continue...${COLOR_RESET}"
-                read -r
-                ;;
-            "Network Settings")
-                echo -e "\n${YELLOW}Network configuration coming soon!${COLOR_RESET}"
-                echo -e "\n${DIM}Press Enter to continue...${COLOR_RESET}"
-                read -r
-                ;;
-            "Security Options")
-                echo -e "\n${YELLOW}Security options coming soon!${COLOR_RESET}"
-                echo -e "\n${DIM}Press Enter to continue...${COLOR_RESET}"
-                read -r
-                ;;
-            "Back to Main Menu")
-                break
-                ;;
+# Function to check if running from USB
+is_usb_deployment() {
+    # Check environment variable first
+    if [[ "${LEONARDO_USB_MODE:-}" == "true" ]]; then
+        return 0
+    fi
+    
+    # Check if script path indicates USB location
+    local script_path="${BASH_SOURCE[0]:-$0}"
+    local real_path=$(readlink -f "$script_path" 2>/dev/null || realpath "$script_path" 2>/dev/null || echo "$script_path")
+    
+    if echo "$real_path" | grep -iE '/(media|mnt|run/media|Volumes)/[^/]+/(leonardo|LEONARDO)' >/dev/null; then
+        return 0
+    fi
+    
+    return 1
+}
+
+# Show USB-specific main menu
+show_usb_main_menu() {
+    clear
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
+    echo -e "${BOLD}          🔌 Leonardo AI Universal - USB Mode${COLOR_RESET}"
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
+    echo
+    echo -e "${GREEN}USB Location: ${LEONARDO_USB_MOUNT:-Detected}${COLOR_RESET}"
+    echo
+    echo -e "${CYAN}Main Menu:${COLOR_RESET}"
+    echo
+    echo "  1) 💬 Chat With AI              - Start AI conversation"
+    echo "  2) 🔧 System Management         - Configure Leonardo"
+    echo "  3) 📦 Model Management          - Download/manage AI models"
+    echo "  4) 💾 USB Management            - Format/prepare USB drives"
+    echo "  5) 🚀 Deployment Options        - Setup AI environments"
+    echo "  6) 📊 Dashboard                 - System overview"
+    echo "  7) 🌐 Web Interface             - Browser-based UI"
+    echo "  8) 📋 System Info               - Show system details"
+    echo "  9) ❓ Help                      - Show documentation"
+    echo "  0) 🚪 Exit                      - Exit Leonardo"
+    echo
+    echo -e "${DIM}────────────────────────────────────────────────────────────────${COLOR_RESET}"
+    echo
+}
+
+# Show main menu
+show_main_menu() {
+    # Check if USB deployment and show appropriate menu
+    if is_usb_deployment; then
+        show_usb_main_menu
+        return
+    fi
+    
+    # Original host menu
+    clear
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
+    echo -e "${BOLD}               🤖 Leonardo AI Universal v${LEONARDO_VERSION}${COLOR_RESET}"
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
+    echo
+    echo -e "${CYAN}Main Menu:${COLOR_RESET}"
+    echo
+    echo "  1) 🔧 System Management         - Configure Leonardo"
+    echo "  2) 📦 Model Management          - Download/manage AI models"
+    echo "  3) 💬 Chat With AI              - Start AI conversation"
+    echo "  4) 💾 USB Management            - Format/prepare USB drives"
+    echo "  5) 🚀 Deployment Options        - Setup AI environments"
+    echo "  6) 📊 Dashboard                 - System overview"
+    echo "  7) 🌐 Web Interface             - Browser-based UI"
+    echo "  8) 📋 System Info               - Show system details"
+    echo "  9) ❓ Help                      - Show documentation"
+    echo "  0) 🚪 Exit                      - Exit Leonardo"
+    echo
+    echo -e "${DIM}────────────────────────────────────────────────────────────────${COLOR_RESET}"
+    echo
+}
+
+# Process user choice
+process_choice() {
+    local choice="$1"
+    
+    # Handle choices differently for USB mode
+    if is_usb_deployment; then
+        case "$choice" in
+            1) handle_chat_command ;;
+            2) handle_system_menu ;;
+            3) handle_model_menu ;;
+            4) handle_usb_menu ;;
+            5) handle_deployment_menu ;;
+            6) handle_dashboard_command ;;
+            7) handle_web_command ;;
+            8) handle_info_command ;;
+            9) handle_help_command ;;
+            0|q|Q) return 1 ;;
+            *) echo -e "${RED}Invalid choice. Please try again.${COLOR_RESET}" ;;
         esac
-    done
+    else
+        # Original host mode choices
+        case "$choice" in
+            1) handle_system_menu ;;
+            2) handle_model_menu ;;
+            3) handle_chat_command ;;
+            4) handle_usb_menu ;;
+            5) handle_deployment_menu ;;
+            6) handle_dashboard_command ;;
+            7) handle_web_command ;;
+            8) handle_info_command ;;
+            9) handle_help_command ;;
+            0|q|Q) return 1 ;;
+            *) echo -e "${RED}Invalid choice. Please try again.${COLOR_RESET}" ;;
+        esac
+    fi
+    
+    return 0
 }
 
 # Run system tests
@@ -11270,8 +11452,8 @@ launch_web_interface() {
 # Exit handler
 handle_exit() {
     echo ""
-    echo "${COLOR_CYAN}Thank you for using Leonardo AI Universal!${COLOR_RESET}"
-    echo "${COLOR_DIM}Stay curious, stay creative.${COLOR_RESET}"
+    echo -e "${COLOR_CYAN}Thank you for using Leonardo AI Universal!${COLOR_RESET}"
+    echo -e "${COLOR_DIM}Stay curious, stay creative.${COLOR_RESET}"
     echo ""
     
     # Cleanup
@@ -11415,6 +11597,185 @@ show_about() {
     echo "  • Cross-platform compatibility"
     echo "  • Web interface"
     echo
+}
+
+# Deploy to USB interactively
+deploy_to_usb_interactive() {
+    # Source USB deployment if not already
+    if [[ -f "${LEONARDO_DIR}/src/deployment/usb_deploy.sh" ]]; then
+        source "${LEONARDO_DIR}/src/deployment/usb_deploy.sh"
+    else
+        echo -e "${RED}Error: USB deployment module not found${COLOR_RESET}"
+        return 1
+    fi
+    
+    # Run the USB deployment command
+    handle_deploy_usb_command
+}
+
+# Initialize Leonardo
+initialize_leonardo() {
+    log_message "INFO" "Initializing Leonardo AI Universal v${LEONARDO_VERSION}"
+    
+    # Check if we're already running from USB
+    local running_from_usb=false
+    local script_path="${BASH_SOURCE[0]:-$0}"
+    local real_path=$(readlink -f "$script_path" 2>/dev/null || realpath "$script_path" 2>/dev/null || echo "$script_path")
+    
+    if echo "$real_path" | grep -iE '/(Volumes|media|mnt|run/media|usb|removable)/' >/dev/null 2>&1; then
+        running_from_usb=true
+        export LEONARDO_USB_MOUNT="${real_path%/leonardo/*}"
+    fi
+    
+    # Check for deployment configuration
+    if [[ -f "${LEONARDO_DIR}/src/core/deployment_mode.sh" ]]; then
+        source "${LEONARDO_DIR}/src/core/deployment_mode.sh"
+    fi
+    
+    # If not already deployed to USB and no config exists, prompt for USB deployment
+    if ! load_deployment_config && [[ "$running_from_usb" != "true" ]]; then
+        clear
+        echo -e "${CYAN}${LEONARDO_BANNERS[0]}${COLOR_RESET}"
+        echo
+        echo -e "${YELLOW}Welcome to Leonardo AI Universal - AI on a Stick!${COLOR_RESET}"
+        echo
+        echo -e "${GREEN}Leonardo is designed to run entirely from a USB drive.${COLOR_RESET}"
+        echo "This provides:"
+        echo "  • Complete portability between computers"
+        echo "  • No installation on host systems"
+        echo "  • Privacy - your AI stays with you"
+        echo "  • Easy backup - just copy your USB"
+        echo
+        echo -e "${CYAN}Would you like to deploy Leonardo to a USB drive now?${COLOR_RESET}"
+        echo
+        echo "1) Yes, deploy to USB (recommended)"
+        echo "2) No, I'll run from current location"
+        echo
+        
+        local choice
+        read -p "Select option (1-2): " choice
+        
+        case "$choice" in
+            1)
+                echo
+                echo -e "${GREEN}Great! Let's set up your AI stick.${COLOR_RESET}"
+                echo
+                # Run USB deployment
+                deploy_to_usb_interactive
+                exit 0  # Exit after deployment
+                ;;
+            2)
+                echo
+                echo -e "${YELLOW}Running from current location.${COLOR_RESET}"
+                echo "Note: For the full Leonardo experience, consider USB deployment later."
+                echo "Run: leonardo deploy-usb"
+                echo
+                
+                # Still need to select deployment mode
+                local mode=$(select_deployment_mode)
+                configure_deployment "$mode"
+                ;;
+            *)
+                echo -e "${RED}Invalid choice. Defaulting to USB deployment prompt.${COLOR_RESET}"
+                deploy_to_usb_interactive
+                exit 0
+                ;;
+        esac
+    elif [[ "$running_from_usb" == "true" ]] && ! load_deployment_config; then
+        # Already on USB, just configure
+        echo -e "${GREEN}Detected Leonardo running from USB!${COLOR_RESET}"
+        echo
+        configure_deployment "usb"
+    fi
+    
+    # Create necessary directories
+    ensure_directory "$LEONARDO_BASE_DIR"
+    ensure_directory "$LEONARDO_CONFIG_DIR" 
+    ensure_directory "$LEONARDO_MODEL_DIR"
+    ensure_directory "$LEONARDO_LOG_DIR"
+    ensure_directory "$LEONARDO_TEMP_DIR"
+    
+    # Load configuration
+    load_config
+    
+    # Initialize components based on deployment mode
+    if [[ "${LEONARDO_USB_MODE:-false}" == "true" ]]; then
+        log_message "INFO" "Running in USB mode (${LEONARDO_DEPLOYMENT_MODE})"
+    fi
+    
+    # Check system requirements
+    check_requirements
+    
+    # Show welcome message
+    if [[ "$LEONARDO_QUIET" != "true" ]]; then
+        show_banner
+    fi
+    
+    log_message "INFO" "Leonardo initialized successfully"
+}
+
+# Handle help command
+handle_help_command() {
+    show_help
+    return 0
+}
+
+# Handle info command  
+handle_info_command() {
+    echo -e "\n${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
+    echo -e "${BOLD}               Leonardo AI Universal - System Info${COLOR_RESET}"
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}\n"
+    
+    echo -e "${GREEN}Version:${COLOR_RESET} $LEONARDO_VERSION ($LEONARDO_BUILD)"
+    echo -e "${GREEN}Location:${COLOR_RESET} ${LEONARDO_DIR:-Not set}"
+    
+    if is_usb_deployment; then
+        echo -e "${GREEN}Deployment:${COLOR_RESET} USB Mode"
+        echo -e "${GREEN}USB Mount:${COLOR_RESET} ${LEONARDO_USB_MOUNT:-Detected}"
+        echo -e "${GREEN}Model Directory:${COLOR_RESET} ${LEONARDO_MODEL_DIR:-Not set}"
+    else
+        echo -e "${GREEN}Deployment:${COLOR_RESET} Host Mode"
+    fi
+    
+    echo -e "${GREEN}Config Directory:${COLOR_RESET} ${LEONARDO_CONFIG_DIR:-Not set}"
+    echo -e "${GREEN}Data Directory:${COLOR_RESET} ${LEONARDO_DATA_DIR:-Not set}"
+    
+    # Check Ollama status
+    if command -v ollama >/dev/null 2>&1; then
+        echo -e "${GREEN}Ollama:${COLOR_RESET} Installed"
+        if pgrep -x "ollama" >/dev/null 2>&1; then
+            echo -e "${GREEN}Ollama Service:${COLOR_RESET} Running"
+        else
+            echo -e "${YELLOW}Ollama Service:${COLOR_RESET} Not running"
+        fi
+    else
+        echo -e "${YELLOW}Ollama:${COLOR_RESET} Not installed"
+    fi
+    
+    # Show model count
+    local model_count=0
+    if [[ -d "${LEONARDO_MODEL_DIR:-}" ]]; then
+        model_count=$(find "${LEONARDO_MODEL_DIR}" -name "*.gguf" 2>/dev/null | wc -l)
+    fi
+    echo -e "${GREEN}GGUF Models:${COLOR_RESET} $model_count installed"
+    
+    return 0
+}
+
+# Handle dashboard command
+handle_dashboard_command() {
+    if type show_dashboard >/dev/null 2>&1; then
+        show_dashboard
+    else
+        echo -e "${YELLOW}Dashboard not available${COLOR_RESET}"
+    fi
+    return 0
+}
+
+# Handle web command
+handle_web_command() {
+    echo -e "${YELLOW}Web interface coming soon!${COLOR_RESET}"
+    return 0
 }
 
 # Call main function with all arguments

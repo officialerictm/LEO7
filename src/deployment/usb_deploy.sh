@@ -369,8 +369,29 @@ EOF
     cat > "$target_dir/start-leonardo" << 'EOF'
 #!/bin/bash
 # Leonardo AI Universal Launcher
-cd "$(dirname "$0")"
-./leonardo/leonardo.sh "$@"
+
+# Get the directory where this script is located
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Auto-detect USB mount point
+if [[ "$SCRIPT_DIR" =~ ^(/media/[^/]+/[^/]+)/.* ]] || \
+   [[ "$SCRIPT_DIR" =~ ^(/mnt/[^/]+)/.* ]] || \
+   [[ "$SCRIPT_DIR" =~ ^(/run/media/[^/]+/[^/]+)/.* ]] || \
+   [[ "$SCRIPT_DIR" =~ ^(/Volumes/[^/]+)/.* ]]; then
+    export LEONARDO_USB_MOUNT="${BASH_REMATCH[1]}"
+else
+    export LEONARDO_USB_MOUNT="$SCRIPT_DIR"
+fi
+
+# Set USB environment
+export LEONARDO_USB_MODE="true"
+export LEONARDO_DIR="${LEONARDO_USB_MOUNT}/leonardo"
+export LEONARDO_MODEL_DIR="${LEONARDO_USB_MOUNT}/leonardo/models"
+export LEONARDO_CONFIG_DIR="${LEONARDO_USB_MOUNT}/leonardo/config"
+
+# Launch Leonardo
+cd "$LEONARDO_DIR"
+exec ./leonardo.sh "$@"
 EOF
     chmod +x "$target_dir/start-leonardo" 2>/dev/null || true
     
@@ -392,6 +413,7 @@ EOF
 # Configure Leonardo for USB deployment
 configure_usb_leonardo() {
     local config_file="$LEONARDO_USB_MOUNT/leonardo/config/leonardo.conf"
+    local deployment_config="$LEONARDO_USB_MOUNT/leonardo/config/deployment.conf"
     
     # Create configuration
     cat > "$config_file" << EOF
@@ -399,33 +421,37 @@ configure_usb_leonardo() {
 # Generated: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
 
 # Deployment type
-LEONARDO_DEPLOYMENT_TYPE="usb"
+LEONARDO_USB_MODE=true
+LEONARDO_USB_MOUNT="$LEONARDO_USB_MOUNT"
+LEONARDO_MODEL_DIR="$LEONARDO_USB_MOUNT/leonardo/models"
+LEONARDO_CONFIG_DIR="$LEONARDO_USB_MOUNT/leonardo/config"
+LEONARDO_DATA_DIR="$LEONARDO_USB_MOUNT/leonardo/data"
 
-# USB-specific settings
+# Paths relative to USB mount
+LEONARDO_RELATIVE_PATH="/leonardo"
+LEONARDO_MODELS_RELATIVE="/leonardo/models"
+
+# USB optimizations
+LEONARDO_USB_CACHE_SIZE=512
+LEONARDO_USB_PREFETCH=true
+LEONARDO_USB_SYNC_INTERVAL=300
+
+# Privacy settings
+LEONARDO_NO_TELEMETRY=true
+LEONARDO_NO_HOST_ACCESS=false
+EOF
+
+    # Create deployment configuration
+    cat > "$deployment_config" << EOF
+# Leonardo Deployment Configuration
+# Mode: USB
+LEONARDO_DEPLOYMENT_MODE="usb"
 LEONARDO_USB_MODE="true"
-LEONARDO_PORTABLE_MODE="true"
-LEONARDO_NO_INSTALL="true"
-
-# Paths (relative to USB root)
-LEONARDO_BASE_DIR="\$(dirname "\$(readlink -f "\$0")")/leonardo"
-LEONARDO_MODEL_DIR="\$LEONARDO_BASE_DIR/models"
-LEONARDO_CACHE_DIR="\$LEONARDO_BASE_DIR/cache"
-LEONARDO_CONFIG_DIR="\$LEONARDO_BASE_DIR/config"
-LEONARDO_LOG_DIR="\$LEONARDO_BASE_DIR/logs"
-LEONARDO_DATA_DIR="\$LEONARDO_BASE_DIR/data"
-
-# Performance settings for USB
-LEONARDO_LOW_MEMORY_MODE="true"
-LEONARDO_CACHE_SIZE_MB="512"
-LEONARDO_MAX_THREADS="4"
-
-# Security settings
-LEONARDO_PARANOID_MODE="true"
-LEONARDO_NO_TELEMETRY="true"
-LEONARDO_CLEANUP_ON_EXIT="true"
+LEONARDO_USB_ONLY="false"
+LEONARDO_USB_MOUNT="$LEONARDO_USB_MOUNT"
 EOF
     
-    log_message "SUCCESS" "USB configuration created"
+    echo -e "${GREEN}✓ USB configuration created${COLOR_RESET}" >&2
 }
 
 # Deploy models to USB
@@ -528,245 +554,100 @@ download_model_to_usb() {
     # Set download target
     export LEONARDO_MODEL_DIR="$target_dir"
     
-    echo -e "${CYAN}Downloading ${model_id}:${variant}${COLOR_RESET}" >&2
-    
-    # Check if we have Ollama provider
-    if command_exists ollama; then
-        # Use Ollama to pull the model
-        echo "Using Ollama to download model..." >&2
-        
-        # First check if Ollama is running
-        if ! ollama list >/dev/null 2>&1; then
-            echo -e "${YELLOW}⚠ Ollama is not running. Starting Ollama service...${COLOR_RESET}" >&2
-            # Try to start Ollama in the background
-            ollama serve >/dev/null 2>&1 &
-            local ollama_pid=$!
-            sleep 3
-            
-            # Check if it started
-            if ! ollama list >/dev/null 2>&1; then
-                echo -e "${YELLOW}⚠ Could not start Ollama, falling back to direct download${COLOR_RESET}" >&2
-                kill $ollama_pid 2>/dev/null || true
-            fi
-        fi
-        
-        # Try to pull the model if Ollama is available
-        if ollama list >/dev/null 2>&1; then
-            # First pull the model with visual feedback
-            echo -e "${CYAN}Pulling model from Ollama...${COLOR_RESET}" >&2
-            echo -e "${DIM}This may take a few minutes depending on model size and connection speed${COLOR_RESET}" >&2
-            
-            # Run ollama pull and capture output
-            local temp_out="/tmp/ollama_pull_$$.log"
-            local download_done=false
-            
-            # Start the download in background
-            (ollama pull "${model_id}:${variant}" 2>&1 | tee "$temp_out") &
-            local download_pid=$!
-            
-            # Show spinner while downloading
-            local spin='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
-            local spin_i=0
-            local last_line=""
-            
-            while kill -0 $download_pid 2>/dev/null; do
-                # Read the last line from the log
-                if [[ -f "$temp_out" ]]; then
-                    local current_line=$(tail -n1 "$temp_out" 2>/dev/null | tr -d '\r\n')
-                    if [[ -n "$current_line" ]] && [[ "$current_line" != "$last_line" ]]; then
-                        last_line="$current_line"
-                        
-                        # Check for progress percentage
-                        if [[ "$current_line" =~ ([0-9]+)% ]] || [[ "$current_line" =~ pulling.*([0-9]+)% ]]; then
-                            local percent="${BASH_REMATCH[1]}"
-                            printf "\r${CYAN}Downloading:${COLOR_RESET} [%-40s] ${YELLOW}%3d%%${COLOR_RESET}" \
-                                   "$(printf '%*s' $((percent * 40 / 100)) | tr ' ' '=')" "$percent"
-                        elif [[ "$current_line" =~ "success" ]] || [[ "$current_line" =~ "up to date" ]]; then
-                            download_done=true
-                            break
-                        elif [[ "$current_line" =~ "error" ]]; then
-                            break
-                        else
-                            # Show current status with spinner
-                            local status_text=$(echo "$current_line" | sed 's/[[:space:]]*$//' | cut -c1-50)
-                            printf "\r${CYAN}Downloading:${COLOR_RESET} ${spin:spin_i:1} %s..." "$status_text"
-                            spin_i=$(( (spin_i + 1) % ${#spin} ))
-                        fi
-                    else
-                        # Just update spinner if no new content
-                        printf "\r${CYAN}Downloading:${COLOR_RESET} ${spin:spin_i:1} Waiting for Ollama..."
-                        spin_i=$(( (spin_i + 1) % ${#spin} ))
-                    fi
-                fi
-                sleep 0.1
-            done
-            
-            # Wait for the process to complete
-            wait $download_pid
-            local result=$?
-            
-            # Clean up
-            printf "\r%-80s\r" " "  # Clear line
-            rm -f "$temp_out"
-            
-            # Check if last line indicated success
-            if [[ "$last_line" =~ "success" ]] || [[ "$download_done" == "true" ]]; then
-                download_done=true
-                result=0
-            fi
-            
-            if [[ $result -eq 0 ]] && [[ "$download_done" == "true" ]]; then
-                echo -e "${GREEN}✓ Model downloaded to Ollama${COLOR_RESET}" >&2
-                
-                # Now export the model to USB
-                echo -e "${CYAN}Exporting model to USB...${COLOR_RESET}" >&2
-                
-                # Ollama stores models in ~/.ollama/models/blobs/
-                # We need to find the actual model file and copy it
-                local ollama_dir="${HOME}/.ollama/models"
-                
-                # First, create the modelfile
-                if ollama show "${model_id}:${variant}" --modelfile > "$target_dir/${model_id}-${variant}.modelfile" 2>/dev/null; then
-                    echo -e "${DIM}Created modelfile${COLOR_RESET}" >&2
-                fi
-                
-                # Try to find the model's manifest to locate the actual weights
-                echo -e "${DIM}Looking for model weights...${COLOR_RESET}" >&2
-                
-                # Get model info from Ollama
-                local model_info=$(ollama show "${model_id}:${variant}" 2>/dev/null)
-                
-                # For now, we'll note that the model is managed by Ollama
-                # and will need Ollama installed to use it
-                cat > "$target_dir/${model_id}-${variant}.info" <<EOF
-Model: ${model_id}:${variant}
-Type: Ollama-managed
-Date: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
-EOF
-
-                # Map the model to a direct download URL if available
-                local gguf_url=""
-                case "${model_id}:${variant}" in
-                    "phi:2.7b")
-                        gguf_url="https://huggingface.co/microsoft/phi-2/resolve/main/phi-2.Q4_K_M.gguf"
-                        ;;
-                    "llama2:7b")
-                        gguf_url="https://huggingface.co/TheBloke/Llama-2-7B-GGUF/resolve/main/llama-2-7b.Q4_K_M.gguf"
-                        ;;
-                    "mistral:7b")
-                        gguf_url="https://huggingface.co/TheBloke/Mistral-7B-v0.1-GGUF/resolve/main/mistral-7b-v0.1.Q4_K_M.gguf"
-                        ;;
-                    "llama3.2:1b")
-                        gguf_url="https://huggingface.co/lmstudio-community/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf"
-                        ;;
-                    "llama3.2:3b")
-                        gguf_url="https://huggingface.co/lmstudio-community/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf"
-                        ;;
-                    "qwen2.5:3b")
-                        gguf_url="https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf"
-                        ;;
-                    "gemma2:2b")
-                        gguf_url="https://huggingface.co/lmstudio-community/gemma-2-2b-it-GGUF/resolve/main/gemma-2-2b-it-Q4_K_M.gguf"
-                        ;;
-                    "codellama:7b")
-                        gguf_url="https://huggingface.co/TheBloke/CodeLlama-7B-Instruct-GGUF/resolve/main/codellama-7b-instruct.Q4_K_M.gguf"
-                        ;;
-                    "llama3.1:8b")
-                        gguf_url="https://huggingface.co/lmstudio-community/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf"
-                        ;;
-                    "llama2:13b")
-                        gguf_url="https://huggingface.co/TheBloke/Llama-2-13B-chat-GGUF/resolve/main/llama-2-13b-chat.Q4_K_M.gguf"
-                        ;;
-                    *)
-                        echo -e "${DIM}No direct download available for ${model_id}:${variant}${COLOR_RESET}" >&2
-                        ;;
-                esac
-
-                if [[ -n "$gguf_url" ]]; then
-                    local gguf_file="$target_dir/${model_id}-${variant}.gguf"
-                    
-                    # Use download_with_progress for better visual feedback
-                    if download_with_progress "$gguf_url" "$gguf_file" "Downloading GGUF for offline use"; then
-                        echo -e "${GREEN}✓ GGUF model downloaded for offline use${COLOR_RESET}" >&2
-                        
-                        # Update info file
-                        cat >> "$target_dir/${model_id}-${variant}.info" <<EOF
-
-GGUF File: ${model_id}-${variant}.gguf
-Size: $(du -h "$gguf_file" 2>/dev/null | cut -f1)
-Offline Ready: Yes
-EOF
-                    else
-                        echo -e "${YELLOW}⚠ GGUF download failed${COLOR_RESET}" >&2
-                        rm -f "$gguf_file" 2>/dev/null
-                    fi
-                else
-                    echo -e "${GREEN}✓ Model exported (Ollama format)${COLOR_RESET}" >&2
-                fi
-                
-                return 0
-            else
-                echo -e "${RED}✗ Ollama download failed${COLOR_RESET}" >&2
-                # Fall through to direct download
-            fi
-        fi
-    fi
-    
-    # Direct download from registry as fallback
     echo "Downloading from model registry..." >&2
     
-    # Debug output
-    echo -e "${DIM}DEBUG: Looking for model '${model_id}:${variant}' in registry${COLOR_RESET}" >&2
+    # Set LEONARDO_DIR if not already set
+    if [[ -z "${LEONARDO_DIR:-}" ]]; then
+        # Try to determine the Leonardo installation directory
+        if [[ -f "${LEONARDO_BASE_DIR}/src/models/registry_loader.sh" ]]; then
+            LEONARDO_DIR="${LEONARDO_BASE_DIR}"
+        elif [[ -f "${HOME}/.leonardo/src/models/registry_loader.sh" ]]; then
+            LEONARDO_DIR="${HOME}/.leonardo"
+        elif [[ -f "./src/models/registry_loader.sh" ]]; then
+            LEONARDO_DIR="$(pwd)"
+        else
+            # Fallback - assume we're in the Leonardo directory
+            LEONARDO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+        fi
+        export LEONARDO_DIR
+    fi
     
-    # Map common model names to HuggingFace URLs
+    # Load dynamic registry if available
+    if [[ -f "${LEONARDO_DIR}/src/models/registry_loader.sh" ]]; then
+        source "${LEONARDO_DIR}/src/models/registry_loader.sh"
+    fi
+    
+    # Check dynamic registry first
     local model_url=""
-    case "${model_id}:${variant}" in
-        "phi:2.7b")
-            model_url="https://huggingface.co/microsoft/phi-2/resolve/main/phi-2.Q4_K_M.gguf"
-            ;;
-        "llama2:7b")
-            model_url="https://huggingface.co/TheBloke/Llama-2-7B-GGUF/resolve/main/llama-2-7b.Q4_K_M.gguf"
-            ;;
-        "mistral:7b")
-            model_url="https://huggingface.co/TheBloke/Mistral-7B-v0.1-GGUF/resolve/main/mistral-7b-v0.1.Q4_K_M.gguf"
-            ;;
-        "llama3.2:1b")
-            model_url="https://huggingface.co/lmstudio-community/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf"
-            ;;
-        "llama3.2:3b")
-            model_url="https://huggingface.co/lmstudio-community/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf"
-            ;;
-        "qwen2.5:3b")
-            model_url="https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf"
-            ;;
-        "gemma2:2b")
-            model_url="https://huggingface.co/lmstudio-community/gemma-2-2b-it-GGUF/resolve/main/gemma-2-2b-it-Q4_K_M.gguf"
-            ;;
-        "codellama:7b")
-            model_url="https://huggingface.co/TheBloke/CodeLlama-7B-Instruct-GGUF/resolve/main/codellama-7b-instruct.Q4_K_M.gguf"
-            ;;
-        "llama3.1:8b")
-            model_url="https://huggingface.co/lmstudio-community/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf"
-            ;;
-        "llama2:13b")
-            model_url="https://huggingface.co/TheBloke/Llama-2-13B-chat-GGUF/resolve/main/llama-2-13b-chat.Q4_K_M.gguf"
-            ;;
-        *)
-            echo -e "${RED}✗ Model ${model_id}:${variant} not found in registry${COLOR_RESET}" >&2
-            echo -e "${YELLOW}Available models for direct download:${COLOR_RESET}" >&2
-            echo "  - phi:2.7b" >&2
-            echo "  - llama2:7b" >&2
-            echo "  - mistral:7b" >&2
-            echo "  - llama3.2:1b" >&2
-            echo "  - llama3.2:3b" >&2
-            echo "  - qwen2.5:3b" >&2
-            echo "  - gemma2:2b" >&2
-            echo "  - codellama:7b" >&2
-            echo "  - llama3.1:8b" >&2
-            echo "  - llama2:13b" >&2
-            return 1
-            ;;
-    esac
+    if [[ -n "${LEONARDO_GGUF_REGISTRY[${model_id}:${variant}]:-}" ]]; then
+        model_url="${LEONARDO_GGUF_REGISTRY[${model_id}:${variant}]}"
+        echo -e "${DIM}Found in dynamic registry${COLOR_RESET}" >&2
+    else
+        # Fallback to hardcoded registry
+        echo -e "${DIM}Checking hardcoded registry${COLOR_RESET}" >&2
+        
+        case "${model_id}:${variant}" in
+            "phi:2.7b")
+                model_url="https://huggingface.co/microsoft/phi-2/resolve/main/phi-2.Q4_K_M.gguf"
+                ;;
+            "llama2:7b")
+                model_url="https://huggingface.co/TheBloke/Llama-2-7B-GGUF/resolve/main/llama-2-7b.Q4_K_M.gguf"
+                ;;
+            "mistral:7b")
+                model_url="https://huggingface.co/TheBloke/Mistral-7B-v0.1-GGUF/resolve/main/mistral-7b-v0.1.Q4_K_M.gguf"
+                ;;
+            "llama3.2:1b")
+                model_url="https://huggingface.co/lmstudio-community/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf"
+                ;;
+            "llama3.2:3b")
+                model_url="https://huggingface.co/lmstudio-community/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf"
+                ;;
+            "qwen2.5:3b")
+                model_url="https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf"
+                ;;
+            "gemma2:2b")
+                model_url="https://huggingface.co/lmstudio-community/gemma-2-2b-it-GGUF/resolve/main/gemma-2-2b-it-Q4_K_M.gguf"
+                ;;
+            "codellama:7b")
+                model_url="https://huggingface.co/TheBloke/CodeLlama-7B-Instruct-GGUF/resolve/main/codellama-7b-instruct.Q4_K_M.gguf"
+                ;;
+            "llama3.1:8b")
+                model_url="https://huggingface.co/lmstudio-community/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf"
+                ;;
+            "llama2:13b")
+                model_url="https://huggingface.co/TheBloke/Llama-2-13B-chat-GGUF/resolve/main/llama-2-13b-chat.Q4_K_M.gguf"
+                ;;
+        esac
+    fi
+    
+    if [[ -z "$model_url" ]]; then
+        echo -e "${RED}✗ Model ${model_id}:${variant} not found in registry${COLOR_RESET}" >&2
+        
+        # Show available models from both registries
+        echo -e "${YELLOW}Available models:${COLOR_RESET}" >&2
+        
+        # Dynamic registry models
+        if [[ ${#LEONARDO_GGUF_REGISTRY[@]} -gt 0 ]]; then
+            echo -e "${DIM}From dynamic registry:${COLOR_RESET}" >&2
+            for model in "${!LEONARDO_GGUF_REGISTRY[@]}"; do
+                echo "  - $model" >&2
+            done | sort
+        fi
+        
+        # Hardcoded models
+        echo -e "${DIM}From hardcoded registry:${COLOR_RESET}" >&2
+        echo "  - phi:2.7b" >&2
+        echo "  - llama2:7b" >&2
+        echo "  - mistral:7b" >&2
+        echo "  - llama3.2:1b" >&2
+        echo "  - llama3.2:3b" >&2
+        echo "  - qwen2.5:3b" >&2
+        echo "  - gemma2:2b" >&2
+        echo "  - codellama:7b" >&2
+        echo "  - llama3.1:8b" >&2
+        echo "  - llama2:13b" >&2
+        return 1
+    fi
     
     local output_file="$target_dir/${model_id}-${variant}.gguf"
     

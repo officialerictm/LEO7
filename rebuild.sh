@@ -1,6 +1,6 @@
 #!/bin/bash
-
-echo "Rebuilding Leonardo..."
 cd "$(dirname "$0")"
+rm -f leonardo.sh
+echo "Rebuilding Leonardo..."
 bash assembly/build-simple.sh
-echo "Done!"
+echo "Done. Test with: ./leonardo.sh"
