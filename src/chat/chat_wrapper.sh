@@ -240,97 +240,105 @@ start_location_aware_chat() {
         fi
     fi
     
-    # Start chat with location prefix in prompt
-    echo -e "\n${GREEN}Starting chat with $model...${COLOR_RESET}"
-    echo -e "${DIM}Endpoint: $endpoint${COLOR_RESET}\n"
-    
-    # Export endpoint for ollama CLI
-    export OLLAMA_HOST="$endpoint"
-    
-    # Create custom prompt with location prefix
-    local location_prefix=$(get_chat_location_prefix "$endpoint" "$model")
-    
-    # Start interactive chat
-    echo -e "${CYAN}═══════════════════════════════════════════════════════${COLOR_RESET}"
-    echo -e "${BOLD}Leonardo AI Chat${COLOR_RESET} - ${DIM}Type 'exit' or Ctrl+C to quit${COLOR_RESET}"
-    echo -e "${CYAN}═══════════════════════════════════════════════════════${COLOR_RESET}\n"
-    
-    while true; do
-        # Show custom prompt with location
-        echo -ne "${BOLD}${location_prefix}${COLOR_RESET} > "
-        read -r user_input
+    # Check if we should use USB-only inference
+    if [[ "${LEONARDO_USB_MODE:-false}" == "true" ]] && [[ "${LEONARDO_USB_STEALTH:-false}" == "true" ]]; then
+        # Source USB inference module if available
+        local usb_inference_path="${LEONARDO_BASE_DIR:-$HOME/.leonardo}/src/chat/usb_inference.sh"
+        if [[ -f "$usb_inference_path" ]]; then
+            source "$usb_inference_path"
+        fi
         
-        # Check for exit
-        if [[ "$user_input" == "exit" ]] || [[ "$user_input" == "quit" ]]; then
+        # Try portable inference first
+        if command -v handle_usb_inference >/dev/null 2>&1; then
+            echo -e "${CYAN}Using portable USB inference engine (stealth mode)${COLOR_RESET}"
+            handle_usb_inference "$model"
+            return
+        fi
+    fi
+    
+    # Try to load into Ollama first
+    if command -v ollama >/dev/null 2>&1; then
+        echo -e "${CYAN}Loading model into Ollama...${COLOR_RESET}"
+        # Create a temporary Modelfile for the GGUF
+        local temp_modelfile="/tmp/leonardo_modelfile_$$"
+        echo "FROM $model" > "$temp_modelfile"
+        
+        # Create the model in Ollama
+        local ollama_model_name="leonardo-${model,,}"
+        if ollama create "$ollama_model_name" -f "$temp_modelfile" 2>/dev/null; then
+            rm -f "$temp_modelfile"
+            echo -e "${GREEN}Model loaded successfully!${COLOR_RESET}"
+            # Start chat with the loaded model
+            start_location_aware_chat "$ollama_model_name" "local"
+            return
+        fi
+        rm -f "$temp_modelfile"
+    fi
+    
+    # Fallback to simple chat interface
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
+    echo -e "${BOLD}Chat with $model (Simulated)${COLOR_RESET}"
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
+    echo
+    echo -e "${YELLOW}Note: Full chat requires llama.cpp or Ollama runtime${COLOR_RESET}"
+    echo -e "${DIM}This is a demonstration interface${COLOR_RESET}"
+    echo
+    echo -e "Type 'exit' to quit\n"
+    
+    # Simple chat loop for demonstration
+    while true; do
+        read -p "You: " user_input
+        if [[ "$user_input" =~ ^(exit|quit|bye)$ ]]; then
+            echo -e "\n${CYAN}Chat ended. Thank you!${COLOR_RESET}"
             break
         fi
         
-        # Skip empty input
-        if [[ -z "$user_input" ]]; then
-            continue
-        fi
-        
-        # Send to ollama
-        echo -e "\n${DIM}Thinking...${COLOR_RESET}\n"
-        
-        # Use ollama run for interactive chat
-        if command -v ollama >/dev/null 2>&1; then
-            ollama run "$model" "$user_input"
-        else
-            # Fallback to API if ollama CLI not available
-            local response=$(curl -s "$endpoint/api/generate" \
-                -d "{\"model\": \"$model\", \"prompt\": \"$user_input\", \"stream\": false}" \
-                | jq -r '.response' 2>/dev/null)
-            
-            if [[ -n "$response" ]]; then
-                echo -e "$response"
-            else
-                echo -e "${RED}Error: Failed to get response${COLOR_RESET}"
-            fi
-        fi
-        
+        echo -e "\n${GREEN}$model:${COLOR_RESET} I'm a local GGUF model. To enable actual inference:"
+        echo "  - Install Ollama from https://ollama.ai"
+        echo "  - Or use llama.cpp for direct GGUF execution"
         echo
     done
-    
-    echo -e "\n${GREEN}Chat session ended${COLOR_RESET}"
 }
 
 # Select a GGUF model from available models
 select_gguf_model() {
     local model_dir="$1"
     
-    echo -e "\n${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
-    echo -e "${BOLD}               🤖 Leonardo AI Chat - Local Models${COLOR_RESET}"
-    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
+    echo -e "\n${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}" >&2
+    echo -e "${BOLD}               🤖 Leonardo AI Chat - Local Models${COLOR_RESET}" >&2
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}" >&2
     
     # List available GGUF models
-    echo -e "\n${CYAN}Available GGUF Models:${COLOR_RESET}\n"
+    echo -e "\n${CYAN}Available GGUF Models:${COLOR_RESET}\n" >&2
     local models=()
     local i=1
     
     while IFS= read -r -d '' model_file; do
-        local model_name=$(basename "$model_file" .gguf)
-        local model_size=$(du -h "$model_file" 2>/dev/null | cut -f1)
-        echo "  $i) $model_name ($model_size)"
-        models+=("$model_file")
-        ((i++))
+        if [[ -f "$model_file" ]]; then
+            local model_name=$(basename "$model_file" .gguf)
+            local model_size=$(du -h "$model_file" 2>/dev/null | cut -f1)
+            echo "  $i) $model_name ($model_size)" >&2
+            models+=("$model_file")
+            ((i++))
+        fi
     done < <(find "$model_dir" -name "*.gguf" -print0 2>/dev/null)
     
     if [[ ${#models[@]} -eq 0 ]]; then
-        echo -e "${RED}No GGUF models found in $model_dir${COLOR_RESET}"
+        echo -e "${RED}No GGUF models found in $model_dir${COLOR_RESET}" >&2
         return 1
     fi
     
     # Select model
-    echo
+    echo >&2
     read -p "Select model (1-${#models[@]}): " selection
     
     if [[ ! "$selection" =~ ^[0-9]+$ ]] || [[ $selection -lt 1 ]] || [[ $selection -gt ${#models[@]} ]]; then
-        echo -e "${RED}Invalid selection${COLOR_RESET}"
+        echo -e "${RED}Invalid selection${COLOR_RESET}" >&2
         return 1
     fi
     
-    echo "${models[$((selection-1))]}"
+    # Return the selected model path (ensure clean output)
+    printf "%s" "${models[$((selection-1))]}"
 }
 
 # Start a GGUF chat session
@@ -341,6 +349,37 @@ start_gguf_chat_session() {
     echo -e "\n${GREEN}Selected: $model_name${COLOR_RESET}"
     echo -e "${DIM}Model file: $model_file${COLOR_RESET}"
     echo
+    
+    # Check if we should use USB-only inference (stealth mode)
+    if [[ "${LEONARDO_USB_MODE:-false}" == "true" ]] || [[ -n "${LEONARDO_USB_MOUNT:-}" ]]; then
+        # Source USB inference module if not already loaded
+        if ! command -v handle_usb_inference >/dev/null 2>&1; then
+            local usb_inference_path
+            # Try multiple locations for the USB inference module
+            for path in \
+                "${LEONARDO_BASE_DIR:-}/src/chat/usb_inference.sh" \
+                "${LEONARDO_USB_MOUNT:-}/leonardo/src/chat/usb_inference.sh" \
+                "$(dirname "${BASH_SOURCE[0]}")/usb_inference.sh" \
+                "./src/chat/usb_inference.sh"
+            do
+                if [[ -f "$path" ]]; then
+                    usb_inference_path="$path"
+                    break
+                fi
+            done
+            
+            if [[ -f "$usb_inference_path" ]]; then
+                source "$usb_inference_path"
+            fi
+        fi
+        
+        # Try portable inference first
+        if command -v handle_usb_inference >/dev/null 2>&1; then
+            echo -e "${CYAN}Using portable USB inference engine (stealth mode)${COLOR_RESET}"
+            handle_usb_inference "$model_file"
+            return
+        fi
+    fi
     
     # Check if we can use Ollama with the GGUF model
     if command -v ollama >/dev/null 2>&1; then

@@ -58,6 +58,7 @@ COMPONENTS=(
     
     # Chat features
     "src/chat/chat_wrapper.sh"
+    "src/chat/usb_inference.sh"
     
     # Security (stubs for now)
     "src/security/audit.sh"
