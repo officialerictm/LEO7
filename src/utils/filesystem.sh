@@ -1,12 +1,9 @@
 #!/usr/bin/env bash
-# ==============================================================================
-# Leonardo AI Universal - File System Utilities
-# ==============================================================================
-# Description: File system operations, USB detection, and disk management
+# =======================================================================# Leonardo AI Universal - File System Utilities
+# =======================================================================# Description: File system operations, USB detection, and disk management
 # Version: 7.0.0
 # Dependencies: logging.sh, colors.sh, validation.sh
-# ==============================================================================
-
+# =======================================================================
 # Create directory with proper permissions
 create_directory() {
     local dir="$1"
@@ -226,6 +223,7 @@ format_usb_device() {
                         fi
                         
                         # Check what's still using the device
+                        # First, check what's using the device
                         echo -e "${DIM}Checking what's using the device...${COLOR_RESET}"
                         local device_users=$(sudo lsof "$partition" 2>/dev/null || true)
                         if [[ -n "$device_users" ]]; then
@@ -249,12 +247,17 @@ format_usb_device() {
                         fi
                         
                         # Try to eject the device properly
+                        fi
+                        
+                        # Try to eject the device properly first
                         echo -e "${DIM}Ejecting device properly...${COLOR_RESET}"
                         sudo eject "$partition" 2>/dev/null || true
                         sleep 2
                         
                         # One more aggressive unmount attempt
                         echo -e "${DIM}Final unmount attempt...${COLOR_RESET}"
+                        # Now unmount with all methods
+                        sudo umount "$partition" 2>/dev/null || true
                         sudo umount -f "$partition" 2>/dev/null || true
                         sudo umount -l "$partition" 2>/dev/null || true
                         
@@ -262,6 +265,7 @@ format_usb_device() {
                         sync
                         
                         # Wait for device to settle
+                        # Wait for device to settle (you mentioned hearing disconnect)
                         echo -e "${DIM}Waiting for device to settle...${COLOR_RESET}"
                         sleep 3
                         

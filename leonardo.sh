@@ -10,14 +10,11 @@ fi
 
 
 # ==== Component: src/core/header.sh ====
-# ==============================================================================
-# Leonardo AI Universal - Core Header
-# ==============================================================================
-# Description: Script header and metadata initialization
+# =======================================================================# Leonardo AI Universal - Core Header
+# =======================================================================# Description: Script header and metadata initialization
 # Version: 7.0.0
 # Dependencies: none
-# ==============================================================================
-
+# =======================================================================
 # Ensure TERM is set for terminal operations
 if [[ -z "$TERM" ]]; then
     export TERM=xterm
@@ -95,14 +92,11 @@ if [[ "$LEONARDO_QUIET" != "true" ]] && [[ "$LEONARDO_DEBUG" == "true" ]]; then
 fi
 
 # ==== Component: src/core/config.sh ====
-# ==============================================================================
-# Leonardo AI Universal - Configuration
-# ==============================================================================
-# Description: Global configuration and constants
+# =======================================================================# Leonardo AI Universal - Configuration
+# =======================================================================# Description: Global configuration and constants
 # Version: 7.0.0
 # Dependencies: header.sh, termfix.sh
-# ==============================================================================
-
+# =======================================================================
 # Version and metadata (from header, but available globally)
 readonly LEONARDO_CONFIG_VERSION="7.0.0"
 
@@ -235,14 +229,11 @@ export LEONARDO_DESCRIPTION="Portable AI deployment system with integrated model
 export LEONARDO_CONFIG_LOADED=true
 
 # ==== Component: src/utils/logging.sh ====
-# ==============================================================================
-# Leonardo AI Universal - Logging System
-# ==============================================================================
-# Description: Centralized logging with levels, colors, and file output
+# =======================================================================# Leonardo AI Universal - Logging System
+# =======================================================================# Description: Centralized logging with levels, colors, and file output
 # Version: 7.0.0
 # Dependencies: colors.sh
-# ==============================================================================
-
+# =======================================================================
 # Log levels
 readonly LOG_LEVEL_DEBUG=0
 readonly LOG_LEVEL_INFO=1
@@ -447,14 +438,11 @@ export -f log_debug log_info log_warn log_error log_fatal log_success
 init_logging
 
 # ==== Component: src/utils/colors.sh ====
-# ==============================================================================
-# Leonardo AI Universal - Color Definitions
-# ==============================================================================
-# Description: Terminal color codes and styling utilities
+# =======================================================================# Leonardo AI Universal - Color Definitions
+# =======================================================================# Description: Terminal color codes and styling utilities
 # Version: 7.0.0
 # Dependencies: none
-# ==============================================================================
-
+# =======================================================================
 # Check if colors should be disabled
 if [[ "$LEONARDO_NO_COLOR" == "true" ]] || [[ ! -t 1 ]]; then
     # No colors - define empty variables
@@ -703,14 +691,11 @@ export BOX_DOUBLE_TOP_RIGHT BOX_DOUBLE_BOTTOM_LEFT BOX_DOUBLE_BOTTOM_RIGHT
 export COLOR_RESET COLOR_BLACK COLOR_RED COLOR_GREEN COLOR_YELLOW COLOR_BLUE COLOR_MAGENTA COLOR_CYAN COLOR_WHITE COLOR_DIM
 
 # ==== Component: src/utils/validation.sh ====
-# ==============================================================================
-# Leonardo AI Universal - Input Validation
-# ==============================================================================
-# Description: Input validation and sanitization utilities
+# =======================================================================# Leonardo AI Universal - Input Validation
+# =======================================================================# Description: Input validation and sanitization utilities
 # Version: 7.0.0
 # Dependencies: logging.sh, colors.sh
-# ==============================================================================
-
+# =======================================================================
 # Check if a command exists
 command_exists() {
     command -v "$1" >/dev/null 2>&1
@@ -1119,14 +1104,11 @@ export -f check_system_requirements
 export -f command_exists
 
 # ==== Component: src/utils/filesystem.sh ====
-# ==============================================================================
-# Leonardo AI Universal - File System Utilities
-# ==============================================================================
-# Description: File system operations, USB detection, and disk management
+# =======================================================================# Leonardo AI Universal - File System Utilities
+# =======================================================================# Description: File system operations, USB detection, and disk management
 # Version: 7.0.0
 # Dependencies: logging.sh, colors.sh, validation.sh
-# ==============================================================================
-
+# =======================================================================
 # Create directory with proper permissions
 create_directory() {
     local dir="$1"
@@ -1346,6 +1328,7 @@ format_usb_device() {
                         fi
                         
                         # Check what's still using the device
+                        # First, check what's using the device
                         echo -e "${DIM}Checking what's using the device...${COLOR_RESET}"
                         local device_users=$(sudo lsof "$partition" 2>/dev/null || true)
                         if [[ -n "$device_users" ]]; then
@@ -1369,12 +1352,17 @@ format_usb_device() {
                         fi
                         
                         # Try to eject the device properly
+                        fi
+                        
+                        # Try to eject the device properly first
                         echo -e "${DIM}Ejecting device properly...${COLOR_RESET}"
                         sudo eject "$partition" 2>/dev/null || true
                         sleep 2
                         
                         # One more aggressive unmount attempt
                         echo -e "${DIM}Final unmount attempt...${COLOR_RESET}"
+                        # Now unmount with all methods
+                        sudo umount "$partition" 2>/dev/null || true
                         sudo umount -f "$partition" 2>/dev/null || true
                         sudo umount -l "$partition" 2>/dev/null || true
                         
@@ -1382,6 +1370,7 @@ format_usb_device() {
                         sync
                         
                         # Wait for device to settle
+                        # Wait for device to settle (you mentioned hearing disconnect)
                         echo -e "${DIM}Waiting for device to settle...${COLOR_RESET}"
                         sleep 3
                         
@@ -1730,14 +1719,11 @@ export -f safe_delete get_file_checksum create_temp_dir
 export -f create_directory ensure_directory
 
 # ==== Component: src/utils/network.sh ====
-# ==============================================================================
-# Leonardo AI Universal - Network Utilities
-# ==============================================================================
-# Description: Network operations, downloads, and connectivity checks
+# =======================================================================# Leonardo AI Universal - Network Utilities
+# =======================================================================# Description: Network operations, downloads, and connectivity checks
 # Version: 7.0.0
 # Dependencies: logging.sh, colors.sh, validation.sh
-# ==============================================================================
-
+# =======================================================================
 # Check internet connectivity
 check_connectivity() {
     local timeout="${1:-5}"
@@ -2302,14 +2288,11 @@ export -f format_system_status
 export -f get_chat_location_prefix
 
 # ==== Component: src/ui/menu.sh ====
-# ==============================================================================
-# Leonardo AI Universal - Menu System
-# ==============================================================================
-# Description: Interactive menu navigation and selection
+# =======================================================================# Leonardo AI Universal - Menu System
+# =======================================================================# Description: Interactive menu navigation and selection
 # Version: 7.0.0
 # Dependencies: colors.sh, logging.sh, validation.sh
-# ==============================================================================
-
+# =======================================================================
 # Menu state tracking
 declare -g MENU_SELECTION=""
 declare -g MENU_POSITION=1
@@ -2760,18 +2743,13 @@ export -f show_menu confirm_menu confirm_action show_checklist show_radio_menu
 export -f show_progress_menu show_input_dialog show_filtered_list
 
 # ==== Component: src/ui/progress.sh ====
-# ==============================================================================
-# Leonardo AI Universal - Progress Display Components
-# ==============================================================================
-# Description: Progress bars, spinners, and status displays
+# =======================================================================# Leonardo AI Universal - Progress Display Components
+# =======================================================================# Description: Progress bars, spinners, and status displays
 # Version: 7.0.0
 # Dependencies: colors.sh, logging.sh
-# ==============================================================================
-
-# ==============================================================================
-# UTILITY FUNCTIONS - Must be defined before use
-# ==============================================================================
-
+# =======================================================================
+# =======================================================================# UTILITY FUNCTIONS - Must be defined before use
+# =======================================================================
 # Format duration from seconds
 format_duration() {
     local seconds="$1"
@@ -2819,10 +2797,8 @@ format_bytes() {
     fi
 }
 
-# ==============================================================================
-# PROGRESS BAR FUNCTIONS
-# ==============================================================================
-
+# =======================================================================# PROGRESS BAR FUNCTIONS
+# =======================================================================
 # Progress bar state
 declare -g PROGRESS_ACTIVE=0
 declare -g PROGRESS_PID=""
@@ -3419,14 +3395,11 @@ export -f format_duration format_bytes show_ascii_progress
 export -f track_download_progress download_with_progress copy_with_progress copy_directory_with_progress
 
 # ==== Component: src/ui/dashboard.sh ====
-# ==============================================================================
-# Leonardo AI Universal - Dashboard Display
-# ==============================================================================
-# Description: Interactive dashboard and system status displays
+# =======================================================================# Leonardo AI Universal - Dashboard Display
+# =======================================================================# Description: Interactive dashboard and system status displays
 # Version: 7.0.0
 # Dependencies: colors.sh, logging.sh, filesystem.sh
-# ==============================================================================
-
+# =======================================================================
 # Dashboard state
 declare -g DASHBOARD_ACTIVE=0
 declare -g DASHBOARD_REFRESH_RATE=1
@@ -3806,14 +3779,11 @@ show_health_check() {
 export -f show_dashboard show_mini_dashboard show_health_check
 
 # ==== Component: src/ui/web.sh ====
-# ==============================================================================
-# Leonardo AI Universal - Web UI Foundation
-# ==============================================================================
-# Description: Web server and browser-based UI components
+# =======================================================================# Leonardo AI Universal - Web UI Foundation
+# =======================================================================# Description: Web server and browser-based UI components
 # Version: 7.0.0
 # Dependencies: colors.sh, logging.sh, network.sh
-# ==============================================================================
-
+# =======================================================================
 # Web server configuration
 LEONARDO_WEB_PORT="${LEONARDO_WEB_PORT:-7777}"
 LEONARDO_WEB_HOST="${LEONARDO_WEB_HOST:-0.0.0.0}"
@@ -4415,13 +4385,10 @@ handle_api_request() {
 export -f start_web_ui stop_web_ui generate_web_ui_files
 
 # ==== Component: src/ui/web_server.sh ====
-# ==============================================================================
-# Leonardo AI Universal - Web Server
-# ==============================================================================
-# Description: Simple web server for Leonardo's web interface
+# =======================================================================# Leonardo AI Universal - Web Server
+# =======================================================================# Description: Simple web server for Leonardo's web interface
 # Version: 7.0.0
-# ==============================================================================
-
+# =======================================================================
 # Start the web server
 start_web_server() {
     local port="${1:-8080}"
@@ -5301,13 +5268,10 @@ export -f check_portable_inference setup_portable_inference run_gguf_inference r
 # TODO: Implement src/security/encryption.sh
 
 # ==== Component: src/models/model_database.sh ====
-# ==============================================================================
-# Leonardo AI Universal - Model Database
-# ==============================================================================
-# Description: Curated list of AI models for easy discovery and download
+# =======================================================================# Leonardo AI Universal - Model Database
+# =======================================================================# Description: Curated list of AI models for easy discovery and download
 # Version: 7.0.0
-# ==============================================================================
-
+# =======================================================================
 # Model database format: "id|name|size|quantization|license|description"
 declare -a MODEL_DATABASE=(
     # Llama Models
@@ -5476,14 +5440,11 @@ suggest_models() {
 }
 
 # ==== Component: src/models/registry.sh ====
-# ==============================================================================
-# Leonardo AI Universal - Model Registry
-# ==============================================================================
-# Description: AI model registry and metadata management
+# =======================================================================# Leonardo AI Universal - Model Registry
+# =======================================================================# Description: AI model registry and metadata management
 # Version: 7.0.0
 # Dependencies: colors.sh, logging.sh, network.sh, validation.sh
-# ==============================================================================
-
+# =======================================================================
 # Model registry data structure
 declare -A LEONARDO_MODEL_REGISTRY
 declare -A LEONARDO_MODEL_METADATA
@@ -6459,14 +6420,11 @@ export -f get_model_info
 export -f update_model_registry
 
 # ==== Component: src/models/selector.sh ====
-# ==============================================================================
-# Leonardo AI Universal - Model Selector
-# ==============================================================================
-# Description: Interactive model selection and configuration interface
+# =======================================================================# Leonardo AI Universal - Model Selector
+# =======================================================================# Description: Interactive model selection and configuration interface
 # Version: 7.0.0
 # Dependencies: colors.sh, logging.sh, menu.sh, progress.sh, registry.sh, manager.sh
-# ==============================================================================
-
+# =======================================================================
 # Model selector state
 LEONARDO_SELECTED_MODEL=""
 LEONARDO_MODEL_PREFERENCES=()
@@ -6874,14 +6832,11 @@ export -f interactive_model_selector custom_model_selection compare_models
 export -f configure_model_preferences quick_install_model
 
 # ==== Component: src/models/cli.sh ====
-# ==============================================================================
-# Leonardo AI Universal - Model CLI
-# ==============================================================================
-# Description: Command-line interface for model management
+# =======================================================================# Leonardo AI Universal - Model CLI
+# =======================================================================# Description: Command-line interface for model management
 # Version: 7.0.0
 # Dependencies: all model modules, colors.sh, logging.sh
-# ==============================================================================
-
+# =======================================================================
 # Model CLI help
 model_cli_help() {
     cat << EOF
@@ -7191,14 +7146,11 @@ export -f handle_model_command
 # TODO: Implement src/deployment/deployment.sh
 
 # ==== Component: src/deployment/usb_deploy.sh ====
-# ==============================================================================
-# Leonardo AI Universal - USB Deployment Module
-# ==============================================================================
-# Description: Deploy Leonardo and AI models to USB drives
+# =======================================================================# Leonardo AI Universal - USB Deployment Module
+# =======================================================================# Description: Deploy Leonardo and AI models to USB drives
 # Version: 7.0.0
 # Dependencies: colors.sh, logging.sh, usb/*.sh, models/*.sh, checksum.sh
-# ==============================================================================
-
+# =======================================================================
 # USB deployment configuration
 USB_DEPLOY_MIN_SPACE_GB=8
 USB_DEPLOY_RECOMMENDED_SPACE_GB=32
@@ -7573,13 +7525,6 @@ if [[ "$SCRIPT_DIR" =~ ^(/media/[^/]+/[^/]+)/.* ]] || \
     export LEONARDO_USB_MOUNT="${BASH_REMATCH[1]}"
 else
     export LEONARDO_USB_MOUNT="$SCRIPT_DIR"
-fi
-
-# Set USB environment
-export LEONARDO_USB_MODE="true"
-export LEONARDO_DIR="${LEONARDO_USB_MOUNT}/leonardo"
-export LEONARDO_MODEL_DIR="${LEONARDO_USB_MOUNT}/leonardo/models"
-export LEONARDO_CONFIG_DIR="${LEONARDO_USB_MOUNT}/leonardo/config"
 
 # Launch Leonardo
 cd "$LEONARDO_DIR"
@@ -7764,10 +7709,223 @@ download_model_to_usb() {
         export LEONARDO_DIR
     fi
     
+    # Debug output
+    echo -e "${DIM}DEBUG: Looking for model '${model_id}:${variant}' in registry${COLOR_RESET}" >&2
+    
+    # Check dynamic registry first
+    local model_url=""
+    
     # Load dynamic registry if available
     if [[ -f "${LEONARDO_DIR}/src/models/registry_loader.sh" ]]; then
         source "${LEONARDO_DIR}/src/models/registry_loader.sh"
     fi
+    # Direct download from registry as fallback
+    echo "Downloading from model registry..." >&2
+    
+    # Debug output
+    echo -e "${DIM}DEBUG: Looking for model '${model_id}:${variant}' in registry${COLOR_RESET}" >&2
+    
+    # Check dynamic registry first
+    local model_url=""
+    
+    # Check if we have Ollama provider
+    if command_exists ollama; then
+        # Use Ollama to pull the model
+        echo "Using Ollama to download model..." >&2
+        
+        # First check if Ollama is running
+        if ! ollama list >/dev/null 2>&1; then
+            echo -e "${YELLOW}⚠ Ollama is not running. Starting Ollama service...${COLOR_RESET}" >&2
+            # Try to start Ollama in the background
+            ollama serve >/dev/null 2>&1 &
+            local ollama_pid=$!
+            sleep 3
+            
+            # Check if it started
+            if ! ollama list >/dev/null 2>&1; then
+                echo -e "${YELLOW}⚠ Could not start Ollama, falling back to direct download${COLOR_RESET}" >&2
+                kill $ollama_pid 2>/dev/null || true
+            fi
+        fi
+        
+        # Try to pull the model if Ollama is available
+        if ollama list >/dev/null 2>&1; then
+            # First pull the model with progress
+            echo -e "${CYAN}Pulling model from Ollama...${COLOR_RESET}" >&2
+            
+            # Use a simpler progress display that works better with Ollama's output
+            local last_percent=0
+            if ollama pull "${model_id}:${variant}" 2>&1 | \
+            while IFS= read -r line; do
+                # Debug: show what we're getting from ollama
+                # echo "DEBUG: $line" >&2
+                
+                # Parse different Ollama output formats
+                if [[ "$line" =~ ([0-9]+)% ]]; then
+                    local percent="${BASH_REMATCH[1]}"
+                    
+                    # Only update if percentage changed
+                    if [[ "$percent" != "$last_percent" ]]; then
+                        last_percent="$percent"
+                        printf "\r${CYAN}Downloading:${COLOR_RESET} ["
+                        
+                        # Draw progress bar
+                        local filled=$((percent * 40 / 100))
+                        local empty=$((40 - filled))
+                        printf "%${filled}s" | tr ' ' '='
+                        printf "%${empty}s" | tr ' ' ' '
+                        printf "] ${YELLOW}${percent}%%${COLOR_RESET}  "
+                    fi
+                elif [[ "$line" =~ "success" ]] || [[ "$line" =~ "up to date" ]]; then
+                    printf "\r%-80s\r" " "
+                    echo -e "${GREEN}✓ Model downloaded to Ollama${COLOR_RESET}" >&2
+                    break
+                elif [[ "$line" =~ "error" ]]; then
+                    printf "\r%-80s\r" " "
+                    echo -e "${RED}✗ Download failed: $line${COLOR_RESET}" >&2
+                    return 1
+                fi
+            done; then
+                # Now export the model to USB
+                echo -e "${CYAN}Exporting model to USB...${COLOR_RESET}" >&2
+                
+                # Ollama stores models in ~/.ollama/models/blobs/
+                # We need to find the actual model file and copy it
+                local ollama_dir="${HOME}/.ollama/models"
+                
+                # First, create the modelfile
+                if ollama show "${model_id}:${variant}" --modelfile > "$target_dir/${model_id}-${variant}.modelfile" 2>/dev/null; then
+                    echo -e "${DIM}Created modelfile${COLOR_RESET}" >&2
+                fi
+                
+                # Try to find the model's manifest to locate the actual weights
+                echo -e "${DIM}Looking for model weights...${COLOR_RESET}" >&2
+                
+                # Get model info from Ollama
+                local model_info=$(ollama show "${model_id}:${variant}" 2>/dev/null)
+                
+                # For now, we'll note that the model is managed by Ollama
+                # and will need Ollama installed to use it
+                cat > "$target_dir/${model_id}-${variant}.info" <<EOF
+Model: ${model_id}:${variant}
+Type: Ollama-managed
+Date: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+EOF
+
+                # Map the model to a direct download URL if available
+                local gguf_url=""
+                case "${model_id}:${variant}" in
+                    "phi:2.7b")
+                        gguf_url="https://huggingface.co/microsoft/phi-2/resolve/main/phi-2.Q4_K_M.gguf"
+                        ;;
+                    "llama2:7b")
+                        gguf_url="https://huggingface.co/TheBloke/Llama-2-7B-GGUF/resolve/main/llama-2-7b.Q4_K_M.gguf"
+                        ;;
+                    "mistral:7b")
+                        gguf_url="https://huggingface.co/TheBloke/Mistral-7B-v0.1-GGUF/resolve/main/mistral-7b-v0.1.Q4_K_M.gguf"
+                        ;;
+                    "llama3.2:1b")
+                        gguf_url="https://huggingface.co/lmstudio-community/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf"
+                        ;;
+                    "llama3.2:3b")
+                        gguf_url="https://huggingface.co/lmstudio-community/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf"
+                        ;;
+                    "qwen2.5:3b")
+                        gguf_url="https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf"
+                        ;;
+                    "gemma2:2b")
+                        gguf_url="https://huggingface.co/lmstudio-community/gemma-2-2b-it-GGUF/resolve/main/gemma-2-2b-it-Q4_K_M.gguf"
+                        ;;
+                    "codellama:7b")
+                        gguf_url="https://huggingface.co/TheBloke/CodeLlama-7B-Instruct-GGUF/resolve/main/codellama-7b-instruct.Q4_K_M.gguf"
+                        ;;
+                    "llama3.1:8b")
+                        gguf_url="https://huggingface.co/lmstudio-community/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf"
+                        ;;
+                    "llama2:13b")
+                        gguf_url="https://huggingface.co/TheBloke/Llama-2-13B-chat-GGUF/resolve/main/llama-2-13b-chat.Q4_K_M.gguf"
+                        ;;
+                    *)
+                        echo -e "${DIM}No direct download available for ${model_id}:${variant}${COLOR_RESET}" >&2
+                        ;;
+                esac
+
+                if [[ -n "$gguf_url" ]]; then
+                    local gguf_file="$target_dir/${model_id}-${variant}.gguf"
+                    echo -e "${CYAN}Downloading GGUF for offline use...${COLOR_RESET}" >&2
+                    
+                    # Download with proper progress bar
+                    if command -v curl >/dev/null 2>&1; then
+                        # Use curl with progress bar
+                        if curl -L --progress-bar "$gguf_url" -o "$gguf_file"; then
+                            echo -e "${GREEN}✓ GGUF model downloaded for offline use${COLOR_RESET}" >&2
+                        else
+                            echo -e "${YELLOW}⚠ GGUF download failed${COLOR_RESET}" >&2
+                            rm -f "$gguf_file" 2>/dev/null
+                        fi
+                    elif command -v wget >/dev/null 2>&1; then
+                        # Use wget with custom progress parsing
+                        echo -e "${DIM}Downloading from: $gguf_url${COLOR_RESET}" >&2
+                        local last_percent=0
+                        if wget -O "$gguf_file" "$gguf_url" 2>&1 | \
+                            while IFS= read -r line; do
+                                if [[ "$line" =~ ([0-9]+)% ]]; then
+                                    local percent="${BASH_REMATCH[1]}"
+                                    if [[ "$percent" != "$last_percent" ]]; then
+                                        last_percent=$percent
+                                        printf "\r${CYAN}Progress:${COLOR_RESET} ["
+                                        local filled=$((percent * 40 / 100))
+                                        local empty=$((40 - filled))
+                                        printf "%${filled}s" | tr ' ' '='
+                                        printf "%${empty}s" | tr ' ' ' '
+                                        printf "] ${YELLOW}${percent}%%${COLOR_RESET}  "
+                                    fi
+                                fi
+                            done; then
+                            printf "\r%-80s\r" " "
+                            echo -e "${GREEN}✓ GGUF model downloaded for offline use${COLOR_RESET}" >&2
+                        else
+                            echo -e "${YELLOW}⚠ GGUF download failed${COLOR_RESET}" >&2
+                            rm -f "$gguf_file" 2>/dev/null
+                        fi
+                    else
+                        echo -e "${RED}Error: Neither curl nor wget is available${COLOR_RESET}" >&2
+                    fi
+                    
+                    # Verify the download and update info file
+                    if [[ -f "$gguf_file" ]]; then
+                        local file_size=$(du -h "$gguf_file" | cut -f1)
+                        echo -e "${DIM}GGUF file size: $file_size${COLOR_RESET}" >&2
+                        
+                        # Update info file
+                        cat >> "$target_dir/${model_id}-${variant}.info" <<EOF
+
+GGUF File: ${model_id}-${variant}.gguf
+Size: $file_size
+Offline Ready: Yes
+EOF
+                    else
+                        echo -e "${DIM}No GGUF file downloaded${COLOR_RESET}" >&2
+                    fi
+                else
+                    echo -e "${GREEN}✓ Model exported (Ollama format)${COLOR_RESET}" >&2
+                fi
+                
+                return 0
+            fi
+        fi
+        export LEONARDO_DIR
+    fi
+    
+    # Load dynamic registry if available
+    if [[ -f "${LEONARDO_DIR}/src/models/registry_loader.sh" ]]; then
+        source "${LEONARDO_DIR}/src/models/registry_loader.sh"
+    fi
+    # Direct download from registry as fallback
+    echo "Downloading from model registry..." >&2
+    
+    # Debug output
+    echo -e "${DIM}DEBUG: Looking for model '${model_id}:${variant}' in registry${COLOR_RESET}" >&2
     
     # Check dynamic registry first
     local model_url=""
@@ -7840,6 +7998,49 @@ download_model_to_usb() {
         echo "  - llama2:13b" >&2
         return 1
     fi
+    case "${model_id}:${variant}" in
+        "phi:2.7b")
+            model_url="https://huggingface.co/microsoft/phi-2/resolve/main/phi-2.Q4_K_M.gguf"
+            ;;
+        "llama2:7b")
+            model_url="https://huggingface.co/TheBloke/Llama-2-7B-GGUF/resolve/main/llama-2-7b.Q4_K_M.gguf"
+            ;;
+        "mistral:7b")
+            model_url="https://huggingface.co/TheBloke/Mistral-7B-v0.1-GGUF/resolve/main/mistral-7b-v0.1.Q4_K_M.gguf"
+            ;;
+        "llama3.2:1b")
+            model_url="https://huggingface.co/lmstudio-community/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf"
+            ;;
+        "llama3.2:3b")
+            model_url="https://huggingface.co/lmstudio-community/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf"
+            ;;
+        "gemma2:2b")
+            model_url="https://huggingface.co/lmstudio-community/gemma-2-2b-it-GGUF/resolve/main/gemma-2-2b-it-Q4_K_M.gguf"
+            ;;
+        "codellama:7b")
+            model_url="https://huggingface.co/TheBloke/CodeLlama-7B-Instruct-GGUF/resolve/main/codellama-7b-instruct.Q4_K_M.gguf"
+            ;;
+        "llama3.1:8b")
+            model_url="https://huggingface.co/lmstudio-community/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf"
+            ;;
+        "llama2:13b")
+            model_url="https://huggingface.co/TheBloke/Llama-2-13B-chat-GGUF/resolve/main/llama-2-13b-chat.Q4_K_M.gguf"
+            ;;
+        *)
+            echo -e "${RED}✗ Model ${model_id}:${variant} not found in registry${COLOR_RESET}" >&2
+            echo -e "${YELLOW}Available models for direct download:${COLOR_RESET}" >&2
+            echo "  - phi:2.7b" >&2
+            echo "  - llama2:7b" >&2
+            echo "  - mistral:7b" >&2
+            echo "  - llama3.2:1b" >&2
+            echo "  - llama3.2:3b" >&2
+            echo "  - gemma2:2b" >&2
+            echo "  - codellama:7b" >&2
+            echo "  - llama3.1:8b" >&2
+            echo "  - llama2:13b" >&2
+            return 1
+            ;;
+    esac
     
     local output_file="$target_dir/${model_id}-${variant}.gguf"
     
@@ -8124,14 +8325,11 @@ get_device_size_mb() {
 }
 
 # ==== Component: src/deployment/cli.sh ====
-# ==============================================================================
-# Leonardo AI Universal - Deployment CLI Module
-# ==============================================================================
-# Description: Command-line interface for deployment operations
+# =======================================================================# Leonardo AI Universal - Deployment CLI Module
+# =======================================================================# Description: Command-line interface for deployment operations
 # Version: 7.0.0
 # Dependencies: colors.sh, logging.sh, usb_deploy.sh, local_deploy.sh
-# ==============================================================================
-
+# =======================================================================
 # Main deployment CLI handler
 deployment_cli() {
     local command="${1:-help}"
@@ -8383,14 +8581,11 @@ export -f deployment_cli deployment_usb_command deployment_local_command
 export -f deployment_status_command deployment_verify_command
 
 # ==== Component: src/usb/detector.sh ====
-# ==============================================================================
-# Leonardo AI Universal - USB Detection Module
-# ==============================================================================
-# Description: Detect and identify USB drives across platforms
+# =======================================================================# Leonardo AI Universal - USB Detection Module
+# =======================================================================# Description: Detect and identify USB drives across platforms
 # Version: 7.0.0
 # Dependencies: colors.sh, logging.sh, filesystem.sh
-# ==============================================================================
-
+# =======================================================================
 # Detect platform
 detect_platform() {
     case "$(uname -s)" in
@@ -8905,14 +9100,11 @@ export -f is_leonardo_usb
 export -f list_usb_drives test_usb_write_speed
 
 # ==== Component: src/usb/manager.sh ====
-# ==============================================================================
-# Leonardo AI Universal - USB Management Module
-# ==============================================================================
-# Description: Manage USB drive lifecycle and operations
+# =======================================================================# Leonardo AI Universal - USB Management Module
+# =======================================================================# Description: Manage USB drive lifecycle and operations
 # Version: 7.0.0
 # Dependencies: colors.sh, logging.sh, filesystem.sh, validation.sh, detector.sh
-# ==============================================================================
-
+# =======================================================================
 # USB manager state
 declare -g LEONARDO_USB_DEVICE=""
 declare -g LEONARDO_USB_MOUNT=""
@@ -8953,6 +9145,11 @@ init_usb_device() {
     case "$platform" in
         "macos")
             LEONARDO_USB_MOUNT=$(diskutil info "$device" 2>/dev/null | grep "Mount Point:" | cut -d: -f2- | xargs)
+            if [[ -z "$LEONARDO_USB_MOUNT" || "$LEONARDO_USB_MOUNT" =~ [Nn]ot\ mounted ]]; then
+                local part="$device"
+                [[ ! "$device" =~ s[0-9]+$ ]] && part="${device}s1"
+                LEONARDO_USB_MOUNT=$(diskutil info "$part" 2>/dev/null | grep "Mount Point:" | cut -d: -f2- | xargs)
+            fi
             ;;
         "linux")
             # Try the device first
@@ -9210,14 +9407,29 @@ mount_usb_drive() {
     
     case "$platform" in
         "macos")
-            # macOS auto-mounts, but we can force it
-            if ! diskutil mount "$device" >/dev/null 2>&1; then
-                log_message "ERROR" "Failed to mount device"
-                return 1
-            fi
-            
-            # Get actual mount point
+            # Check if already mounted (partition or disk)
             LEONARDO_USB_MOUNT=$(diskutil info "$device" 2>/dev/null | grep "Mount Point:" | cut -d: -f2- | xargs)
+            if [[ -z "$LEONARDO_USB_MOUNT" || "$LEONARDO_USB_MOUNT" =~ [Nn]ot\ mounted ]]; then
+                if ! diskutil mountDisk "$device" >/dev/null 2>&1; then
+            # Check if already mounted
+            LEONARDO_USB_MOUNT=$(diskutil info "$device" 2>/dev/null | grep "Mount Point:" | cut -d: -f2- | xargs)
+            if [[ -z "$LEONARDO_USB_MOUNT" || "$LEONARDO_USB_MOUNT" == "not mounted" ]]; then
+                # Try mounting the whole disk first
+                if ! diskutil mountDisk "$device" >/dev/null 2>&1; then
+                    # Fallback to first partition (diskXs1)
+                    local part="${device}s1"
+                    if ! diskutil mount "$part" >/dev/null 2>&1; then
+                        log_message "ERROR" "Failed to mount device"
+                        return 1
+                    fi
+                    LEONARDO_USB_MOUNT=$(diskutil info "$part" 2>/dev/null | grep "Mount Point:" | cut -d: -f2- | xargs)
+                else
+                    local part="$device"
+                    [[ ! "$device" =~ s[0-9]+$ ]] && part="${device}s1"
+                    LEONARDO_USB_MOUNT=$(diskutil info "$part" 2>/dev/null | grep "Mount Point:" | cut -d: -f2- | xargs)
+                    LEONARDO_USB_MOUNT=$(diskutil info "$device" 2>/dev/null | grep "Mount Point:" | cut -d: -f2- | xargs)
+                fi
+            fi
             export LEONARDO_USB_MOUNT
             ;;
         "linux")
@@ -9300,7 +9512,7 @@ unmount_usb_drive() {
     
     case "$platform" in
         "macos")
-            if diskutil unmount "$device" >/dev/null 2>&1; then
+            if diskutil unmountDisk "$device" >/dev/null 2>&1 || diskutil unmount "${device}s1" >/dev/null 2>&1; then
                 log_message "INFO" "USB drive unmounted"
                 return 0
             fi
@@ -9661,14 +9873,11 @@ export -f create_leonardo_structure install_leonardo_to_usb
 export -f backup_usb_data restore_usb_data check_usb_free_space clean_usb_temp
 
 # ==== Component: src/usb/health.sh ====
-# ==============================================================================
-# Leonardo AI Universal - USB Health Monitoring Module
-# ==============================================================================
-# Description: Monitor USB drive health, write cycles, and performance
+# =======================================================================# Leonardo AI Universal - USB Health Monitoring Module
+# =======================================================================# Description: Monitor USB drive health, write cycles, and performance
 # Version: 7.0.0
 # Dependencies: colors.sh, logging.sh, filesystem.sh, detector.sh
-# ==============================================================================
-
+# =======================================================================
 # Health check thresholds
 readonly USB_HEALTH_WRITE_CYCLE_WARNING=10000
 readonly USB_HEALTH_WRITE_CYCLE_CRITICAL=50000
@@ -10164,14 +10373,11 @@ export -f generate_health_report monitor_usb_health stop_health_monitoring
 export -f analyze_health_trends
 
 # ==== Component: src/usb/cli.sh ====
-# ==============================================================================
-# Leonardo AI Universal - USB CLI Module
-# ==============================================================================
-# Description: Command-line interface for USB operations
+# =======================================================================# Leonardo AI Universal - USB CLI Module
+# =======================================================================# Description: Command-line interface for USB operations
 # Version: 7.0.0
 # Dependencies: colors.sh, logging.sh, detector.sh, manager.sh, health.sh
-# ==============================================================================
-
+# =======================================================================
 # USB CLI help
 usb_cli_help() {
     cat << EOF
@@ -10845,14 +11051,11 @@ export -f usb_cli_health usb_cli_monitor usb_cli_backup usb_cli_restore
 export -f usb_cli_clean usb_cli_test register_usb_commands
 
 # ==== Component: src/core/main.sh ====
-# ==============================================================================
-# Leonardo AI Universal - Main Application Entry Point
-# ==============================================================================
-# Description: Main application logic and orchestration
+# =======================================================================# Leonardo AI Universal - Main Application Entry Point
+# =======================================================================# Description: Main application logic and orchestration
 # Version: 7.0.0
 # Dependencies: all components
-# ==============================================================================
-
+# =======================================================================
 # Show application banner
 show_banner() {
     echo -e "${COLOR_CYAN}╭─────────────────────────────────────╮${COLOR_RESET}"
@@ -11768,6 +11971,221 @@ is_usb_deployment() {
     return 1
 }
 
+# Get list of available models for chat
+get_chat_models() {
+    local models=()
+    
+    # Get Ollama models
+    if command_exists ollama; then
+        while IFS= read -r line; do
+            if [[ -n "$line" && ! "$line" =~ ^NAME ]]; then
+                local model_name=$(echo "$line" | awk '{print $1}')
+                models+=("$model_name")
+            fi
+        done < <(ollama list 2>/dev/null)
+    fi
+    
+    # Get local GGUF models
+    if [[ -d "$LEONARDO_MODEL_DIR" ]]; then
+        for model_file in "$LEONARDO_MODEL_DIR"/*.gguf; do
+            if [[ -f "$model_file" ]]; then
+                local model_name=$(basename "$model_file" .gguf)
+                models+=("$model_name")
+            fi
+        done
+    fi
+    
+    printf '%s\n' "${models[@]}"
+}
+
+# Handle chat command
+handle_chat_command() {
+    # Get available models  
+    local models=()
+    
+    # Check USB mode - only show USB models when running from USB
+    if is_usb_deployment; then
+        # Only check for models on USB
+        if [[ -d "$LEONARDO_MODEL_DIR" ]]; then
+            while IFS= read -r -d '' model_file; do
+                local model_name=$(basename "$model_file" .gguf | sed 's/-[0-9]*B-.*$//')
+                models+=("usb:$model_name")
+            done < <(find "$LEONARDO_MODEL_DIR" -name "*.gguf" -print0 2>/dev/null)
+        fi
+    else
+        # Normal mode - check Ollama first
+        if command_exists ollama; then
+            mapfile -t models < <(ollama list 2>/dev/null | tail -n +2 | awk '{print $1}')
+        fi
+        
+        # Check for local models in LEONARDO_MODEL_DIR
+        if [[ -d "$LEONARDO_MODEL_DIR" ]]; then
+            while IFS= read -r -d '' model_file; do
+                models+=("local:$(basename "$model_file")")
+            done < <(find "$LEONARDO_MODEL_DIR" -name "*.gguf" -print0 2>/dev/null)
+        fi
+    fi
+    
+    if [[ ${#models[@]} -eq 0 ]]; then
+        echo -e "${RED}No AI models installed!${COLOR_RESET}"
+        echo -e "${YELLOW}Install a model first using Model Manager.${COLOR_RESET}"
+        pause
+        return
+    fi
+    
+    # Select model if multiple available
+    local selected_model
+    if [[ ${#models[@]} -eq 1 ]]; then
+        selected_model="${models[0]}"
+    else
+        selected_model=$(show_menu "Select AI Model" "${models[@]}") || return
+    fi
+    
+    # Launch chat interface
+    start_chat_interface "$selected_model"
+}
+
+# Start chat interface with selected model
+start_chat_interface() {
+    local model="$1"
+    
+    clear
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
+    echo -e "${BOLD}               🤖 Leonardo AI Chat - $model${COLOR_RESET}"
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
+    echo
+    echo -e "${DIM}Type 'exit' or 'quit' to end the chat session${COLOR_RESET}"
+    echo -e "${DIM}Type 'clear' to clear the conversation${COLOR_RESET}"
+    echo
+    
+    if [[ "$model" == ollama:* ]] && command_exists ollama; then
+        # Use Ollama for chat
+        local model_name="${model#ollama:}"
+        ollama run "$model_name"
+    elif [[ "$model" == local:* ]] || [[ "$model" == usb:* ]]; then
+        # Use llama.cpp for local/USB models
+        local model_prefix="${model%%:*}"
+        local model_name="${model#*:}"
+        
+        # Find the actual GGUF file
+        local model_file=""
+        if [[ -d "$LEONARDO_MODEL_DIR" ]]; then
+            # Look for exact match first
+            model_file=$(find "$LEONARDO_MODEL_DIR" -name "${model_name}.gguf" -print -quit 2>/dev/null)
+            
+            # If not found, look for pattern match
+            if [[ -z "$model_file" ]]; then
+                model_file=$(find "$LEONARDO_MODEL_DIR" -name "${model_name}*.gguf" -print -quit 2>/dev/null)
+            fi
+        fi
+        
+        if [[ -n "$model_file" ]] && [[ -f "$model_file" ]]; then
+            # Check if we have llama.cpp server
+            if command -v llama-server &>/dev/null; then
+                echo -e "${CYAN}Starting local inference server...${COLOR_RESET}"
+                
+                # Start llama.cpp server
+                local server_port=8080
+                llama-server -m "$model_file" -c 2048 --port $server_port --host 127.0.0.1 &
+                local server_pid=$!
+                
+                # Wait for server to start
+                sleep 3
+                
+                # Simple chat loop using curl
+                echo -e "${GREEN}Chat ready! Server running on port $server_port${COLOR_RESET}"
+                echo
+                
+                while true; do
+                    read -p "You: " user_input
+                    
+                    if [[ "$user_input" == "exit" ]] || [[ "$user_input" == "quit" ]]; then
+                        break
+                    elif [[ "$user_input" == "clear" ]]; then
+                        clear
+                        continue
+                    fi
+                    
+                    echo -n "AI: "
+                    # Send request to llama.cpp server
+                    curl -s -X POST http://127.0.0.1:$server_port/completion \
+                        -H "Content-Type: application/json" \
+                        -d "{\"prompt\": \"User: $user_input\nAssistant:\", \"n_predict\": 256}" | \
+                        jq -r '.content' 2>/dev/null || echo "Error: Could not get response"
+                    echo
+                done
+                
+                # Stop server
+                kill $server_pid 2>/dev/null
+                
+            else
+                echo -e "${YELLOW}llama.cpp server not found!${COLOR_RESET}"
+                echo
+                
+                # Check for Python fallback
+                if command -v python3 &>/dev/null; then
+                    echo -e "${CYAN}Trying Python-based chat interface...${COLOR_RESET}"
+                    
+                    # Create a simple Python chat script
+                    local python_chat_script="/tmp/leonardo_chat_$$.py"
+                    cat > "$python_chat_script" << 'EOF'
+#!/usr/bin/env python3
+import sys
+import os
+
+print("Simple Leonardo Chat Interface (Python fallback)")
+print("=" * 50)
+print("Note: This is a basic interface. For better performance,")
+print("install llama.cpp: https://github.com/ggerganov/llama.cpp")
+print()
+print("Model file:", sys.argv[1])
+print()
+print("Type 'exit' or 'quit' to end the chat")
+print("=" * 50)
+print()
+
+# Simple echo bot for demonstration
+# In a real implementation, this would load and run the GGUF model
+while True:
+    try:
+        user_input = input("You: ")
+        if user_input.lower() in ['exit', 'quit']:
+            break
+        print("AI: I'm a placeholder response. To enable real AI responses,")
+        print("    please install llama.cpp or use Ollama models instead.")
+        print()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        break
+EOF
+                    
+                    python3 "$python_chat_script" "$model_file"
+                    rm -f "$python_chat_script"
+                else
+                    echo -e "${DIM}To enable chat, install llama.cpp:${COLOR_RESET}"
+                    echo -e "  git clone https://github.com/ggerganov/llama.cpp"
+                    echo -e "  cd llama.cpp && make"
+                    echo -e "  sudo make install"
+                    echo
+                    echo -e "${DIM}Model file: $model_file${COLOR_RESET}"
+                    pause
+                fi
+            fi
+        else
+            echo -e "${RED}Model file not found for: $model_name${COLOR_RESET}"
+            pause
+        fi
+    else
+        # Direct Ollama model without prefix
+        if command_exists ollama; then
+            ollama run "$model"
+        else
+            echo -e "${RED}Ollama not available for model: $model${COLOR_RESET}"
+            pause
+        fi
+    fi
+}
+
 # Check if any models are installed
 check_installed_models() {
     # For USB deployment, always show chat option
@@ -12151,10 +12569,8 @@ handle_info_command() {
     read -r
 }
 
-# ==============================================================================
-# MENU HANDLER FUNCTIONS
-# ==============================================================================
-
+# =======================================================================# MENU HANDLER FUNCTIONS
+# =======================================================================
 # Handle system management menu
 handle_system_menu() {
     echo -e "\n${CYAN}🔧 System Management${COLOR_RESET}"

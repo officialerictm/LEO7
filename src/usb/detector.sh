@@ -436,6 +436,11 @@ test_usb_write_speed() {
     case "$platform" in
         "macos")
             mount_point=$(diskutil info "$device" 2>/dev/null | grep "Mount Point:" | cut -d: -f2- | xargs)
+            if [[ -z "$mount_point" || "$mount_point" =~ [Nn]ot\ mounted ]]; then
+                local part="$device"
+                [[ ! "$device" =~ s[0-9]+$ ]] && part="${device}s1"
+                mount_point=$(diskutil info "$part" 2>/dev/null | grep "Mount Point:" | cut -d: -f2- | xargs)
+            fi
             ;;
         "linux")
             mount_point=$(lsblk -no MOUNTPOINT "$device" 2>/dev/null | head -1)
@@ -488,6 +493,11 @@ is_leonardo_usb() {
     case "$platform" in
         "macos")
             mount_point=$(diskutil info "$device" 2>/dev/null | grep "Mount Point:" | cut -d: -f2- | xargs)
+            if [[ -z "$mount_point" || "$mount_point" =~ [Nn]ot\ mounted ]]; then
+                local part="$device"
+                [[ ! "$device" =~ s[0-9]+$ ]] && part="${device}s1"
+                mount_point=$(diskutil info "$part" 2>/dev/null | grep "Mount Point:" | cut -d: -f2- | xargs)
+            fi
             ;;
         "linux")
             mount_point=$(lsblk -no MOUNTPOINT "$device" 2>/dev/null | grep -v "^$" | head -1)

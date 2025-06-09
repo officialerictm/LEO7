@@ -1,12 +1,9 @@
 #!/usr/bin/env bash
-# ==============================================================================
-# Leonardo AI Universal - USB Deployment Module
-# ==============================================================================
-# Description: Deploy Leonardo and AI models to USB drives
+# =======================================================================# Leonardo AI Universal - USB Deployment Module
+# =======================================================================# Description: Deploy Leonardo and AI models to USB drives
 # Version: 7.0.0
 # Dependencies: colors.sh, logging.sh, usb/*.sh, models/*.sh, checksum.sh
-# ==============================================================================
-
+# =======================================================================
 # USB deployment configuration
 USB_DEPLOY_MIN_SPACE_GB=8
 USB_DEPLOY_RECOMMENDED_SPACE_GB=32
@@ -392,6 +389,8 @@ export LEONARDO_CONFIG_DIR="${LEONARDO_USB_MOUNT}/leonardo/config"
 # Launch Leonardo
 cd "$LEONARDO_DIR"
 exec ./leonardo.sh "$@"
+cd "$(dirname "$0")"
+./leonardo/leonardo.sh "$@"
 EOF
     chmod +x "$target_dir/start-leonardo" 2>/dev/null || true
     
@@ -568,6 +567,193 @@ download_model_to_usb() {
         else
             # Fallback - assume we're in the Leonardo directory
             LEONARDO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+    echo -e "${CYAN}Downloading ${model_id}:${variant}${COLOR_RESET}" >&2
+    
+    # Check if we have Ollama provider
+    if command_exists ollama; then
+        # Use Ollama to pull the model
+        echo "Using Ollama to download model..." >&2
+        
+        # First check if Ollama is running
+        if ! ollama list >/dev/null 2>&1; then
+            echo -e "${YELLOW}⚠ Ollama is not running. Starting Ollama service...${COLOR_RESET}" >&2
+            # Try to start Ollama in the background
+            ollama serve >/dev/null 2>&1 &
+            local ollama_pid=$!
+            sleep 3
+            
+            # Check if it started
+            if ! ollama list >/dev/null 2>&1; then
+                echo -e "${YELLOW}⚠ Could not start Ollama, falling back to direct download${COLOR_RESET}" >&2
+                kill $ollama_pid 2>/dev/null || true
+            fi
+        fi
+        
+        # Try to pull the model if Ollama is available
+        if ollama list >/dev/null 2>&1; then
+            # First pull the model with progress
+            echo -e "${CYAN}Pulling model from Ollama...${COLOR_RESET}" >&2
+            
+            # Use a simpler progress display that works better with Ollama's output
+            local last_percent=0
+            if ollama pull "${model_id}:${variant}" 2>&1 | \
+            while IFS= read -r line; do
+                # Debug: show what we're getting from ollama
+                # echo "DEBUG: $line" >&2
+                
+                # Parse different Ollama output formats
+                if [[ "$line" =~ ([0-9]+)% ]]; then
+                    local percent="${BASH_REMATCH[1]}"
+                    
+                    # Only update if percentage changed
+                    if [[ "$percent" != "$last_percent" ]]; then
+                        last_percent="$percent"
+                        printf "\r${CYAN}Downloading:${COLOR_RESET} ["
+                        
+                        # Draw progress bar
+                        local filled=$((percent * 40 / 100))
+                        local empty=$((40 - filled))
+                        printf "%${filled}s" | tr ' ' '='
+                        printf "%${empty}s" | tr ' ' ' '
+                        printf "] ${YELLOW}${percent}%%${COLOR_RESET}  "
+                    fi
+                elif [[ "$line" =~ "success" ]] || [[ "$line" =~ "up to date" ]]; then
+                    printf "\r%-80s\r" " "
+                    echo -e "${GREEN}✓ Model downloaded to Ollama${COLOR_RESET}" >&2
+                    break
+                elif [[ "$line" =~ "error" ]]; then
+                    printf "\r%-80s\r" " "
+                    echo -e "${RED}✗ Download failed: $line${COLOR_RESET}" >&2
+                    return 1
+                fi
+            done; then
+                # Now export the model to USB
+                echo -e "${CYAN}Exporting model to USB...${COLOR_RESET}" >&2
+                
+                # Ollama stores models in ~/.ollama/models/blobs/
+                # We need to find the actual model file and copy it
+                local ollama_dir="${HOME}/.ollama/models"
+                
+                # First, create the modelfile
+                if ollama show "${model_id}:${variant}" --modelfile > "$target_dir/${model_id}-${variant}.modelfile" 2>/dev/null; then
+                    echo -e "${DIM}Created modelfile${COLOR_RESET}" >&2
+                fi
+                
+                # Try to find the model's manifest to locate the actual weights
+                echo -e "${DIM}Looking for model weights...${COLOR_RESET}" >&2
+                
+                # Get model info from Ollama
+                local model_info=$(ollama show "${model_id}:${variant}" 2>/dev/null)
+                
+                # For now, we'll note that the model is managed by Ollama
+                # and will need Ollama installed to use it
+                cat > "$target_dir/${model_id}-${variant}.info" <<EOF
+Model: ${model_id}:${variant}
+Type: Ollama-managed
+Date: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+EOF
+
+                # Map the model to a direct download URL if available
+                local gguf_url=""
+                case "${model_id}:${variant}" in
+                    "phi:2.7b")
+                        gguf_url="https://huggingface.co/microsoft/phi-2/resolve/main/phi-2.Q4_K_M.gguf"
+                        ;;
+                    "llama2:7b")
+                        gguf_url="https://huggingface.co/TheBloke/Llama-2-7B-GGUF/resolve/main/llama-2-7b.Q4_K_M.gguf"
+                        ;;
+                    "mistral:7b")
+                        gguf_url="https://huggingface.co/TheBloke/Mistral-7B-v0.1-GGUF/resolve/main/mistral-7b-v0.1.Q4_K_M.gguf"
+                        ;;
+                    "llama3.2:1b")
+                        gguf_url="https://huggingface.co/lmstudio-community/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf"
+                        ;;
+                    "llama3.2:3b")
+                        gguf_url="https://huggingface.co/lmstudio-community/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf"
+                        ;;
+                    "qwen2.5:3b")
+                        gguf_url="https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf"
+                        ;;
+                    "gemma2:2b")
+                        gguf_url="https://huggingface.co/lmstudio-community/gemma-2-2b-it-GGUF/resolve/main/gemma-2-2b-it-Q4_K_M.gguf"
+                        ;;
+                    "codellama:7b")
+                        gguf_url="https://huggingface.co/TheBloke/CodeLlama-7B-Instruct-GGUF/resolve/main/codellama-7b-instruct.Q4_K_M.gguf"
+                        ;;
+                    "llama3.1:8b")
+                        gguf_url="https://huggingface.co/lmstudio-community/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf"
+                        ;;
+                    "llama2:13b")
+                        gguf_url="https://huggingface.co/TheBloke/Llama-2-13B-chat-GGUF/resolve/main/llama-2-13b-chat.Q4_K_M.gguf"
+                        ;;
+                    *)
+                        echo -e "${DIM}No direct download available for ${model_id}:${variant}${COLOR_RESET}" >&2
+                        ;;
+                esac
+
+                if [[ -n "$gguf_url" ]]; then
+                    local gguf_file="$target_dir/${model_id}-${variant}.gguf"
+                    echo -e "${CYAN}Downloading GGUF for offline use...${COLOR_RESET}" >&2
+                    
+                    # Download with proper progress bar
+                    if command -v curl >/dev/null 2>&1; then
+                        # Use curl with progress bar
+                        if curl -L --progress-bar "$gguf_url" -o "$gguf_file"; then
+                            echo -e "${GREEN}✓ GGUF model downloaded for offline use${COLOR_RESET}" >&2
+                        else
+                            echo -e "${YELLOW}⚠ GGUF download failed${COLOR_RESET}" >&2
+                            rm -f "$gguf_file" 2>/dev/null
+                        fi
+                    elif command -v wget >/dev/null 2>&1; then
+                        # Use wget with custom progress parsing
+                        echo -e "${DIM}Downloading from: $gguf_url${COLOR_RESET}" >&2
+                        local last_percent=0
+                        if wget -O "$gguf_file" "$gguf_url" 2>&1 | \
+                            while IFS= read -r line; do
+                                if [[ "$line" =~ ([0-9]+)% ]]; then
+                                    local percent="${BASH_REMATCH[1]}"
+                                    if [[ "$percent" != "$last_percent" ]]; then
+                                        last_percent=$percent
+                                        printf "\r${CYAN}Progress:${COLOR_RESET} ["
+                                        local filled=$((percent * 40 / 100))
+                                        local empty=$((40 - filled))
+                                        printf "%${filled}s" | tr ' ' '='
+                                        printf "%${empty}s" | tr ' ' ' '
+                                        printf "] ${YELLOW}${percent}%%${COLOR_RESET}  "
+                                    fi
+                                fi
+                            done; then
+                            printf "\r%-80s\r" " "
+                            echo -e "${GREEN}✓ GGUF model downloaded for offline use${COLOR_RESET}" >&2
+                        else
+                            echo -e "${YELLOW}⚠ GGUF download failed${COLOR_RESET}" >&2
+                            rm -f "$gguf_file" 2>/dev/null
+                        fi
+                    else
+                        echo -e "${RED}Error: Neither curl nor wget is available${COLOR_RESET}" >&2
+                    fi
+                    
+                    # Verify the download and update info file
+                    if [[ -f "$gguf_file" ]]; then
+                        local file_size=$(du -h "$gguf_file" | cut -f1)
+                        echo -e "${DIM}GGUF file size: $file_size${COLOR_RESET}" >&2
+                        
+                        # Update info file
+                        cat >> "$target_dir/${model_id}-${variant}.info" <<EOF
+
+GGUF File: ${model_id}-${variant}.gguf
+Size: $file_size
+Offline Ready: Yes
+EOF
+                    else
+                        echo -e "${DIM}No GGUF file downloaded${COLOR_RESET}" >&2
+                    fi
+                else
+                    echo -e "${GREEN}✓ Model exported (Ollama format)${COLOR_RESET}" >&2
+                fi
+                
+                return 0
+            fi
         fi
         export LEONARDO_DIR
     fi
@@ -576,6 +762,11 @@ download_model_to_usb() {
     if [[ -f "${LEONARDO_DIR}/src/models/registry_loader.sh" ]]; then
         source "${LEONARDO_DIR}/src/models/registry_loader.sh"
     fi
+    # Direct download from registry as fallback
+    echo "Downloading from model registry..." >&2
+    
+    # Debug output
+    echo -e "${DIM}DEBUG: Looking for model '${model_id}:${variant}' in registry${COLOR_RESET}" >&2
     
     # Check dynamic registry first
     local model_url=""
@@ -648,6 +839,49 @@ download_model_to_usb() {
         echo "  - llama2:13b" >&2
         return 1
     fi
+    case "${model_id}:${variant}" in
+        "phi:2.7b")
+            model_url="https://huggingface.co/microsoft/phi-2/resolve/main/phi-2.Q4_K_M.gguf"
+            ;;
+        "llama2:7b")
+            model_url="https://huggingface.co/TheBloke/Llama-2-7B-GGUF/resolve/main/llama-2-7b.Q4_K_M.gguf"
+            ;;
+        "mistral:7b")
+            model_url="https://huggingface.co/TheBloke/Mistral-7B-v0.1-GGUF/resolve/main/mistral-7b-v0.1.Q4_K_M.gguf"
+            ;;
+        "llama3.2:1b")
+            model_url="https://huggingface.co/lmstudio-community/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf"
+            ;;
+        "llama3.2:3b")
+            model_url="https://huggingface.co/lmstudio-community/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf"
+            ;;
+        "gemma2:2b")
+            model_url="https://huggingface.co/lmstudio-community/gemma-2-2b-it-GGUF/resolve/main/gemma-2-2b-it-Q4_K_M.gguf"
+            ;;
+        "codellama:7b")
+            model_url="https://huggingface.co/TheBloke/CodeLlama-7B-Instruct-GGUF/resolve/main/codellama-7b-instruct.Q4_K_M.gguf"
+            ;;
+        "llama3.1:8b")
+            model_url="https://huggingface.co/lmstudio-community/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf"
+            ;;
+        "llama2:13b")
+            model_url="https://huggingface.co/TheBloke/Llama-2-13B-chat-GGUF/resolve/main/llama-2-13b-chat.Q4_K_M.gguf"
+            ;;
+        *)
+            echo -e "${RED}✗ Model ${model_id}:${variant} not found in registry${COLOR_RESET}" >&2
+            echo -e "${YELLOW}Available models for direct download:${COLOR_RESET}" >&2
+            echo "  - phi:2.7b" >&2
+            echo "  - llama2:7b" >&2
+            echo "  - mistral:7b" >&2
+            echo "  - llama3.2:1b" >&2
+            echo "  - llama3.2:3b" >&2
+            echo "  - gemma2:2b" >&2
+            echo "  - codellama:7b" >&2
+            echo "  - llama3.1:8b" >&2
+            echo "  - llama2:13b" >&2
+            return 1
+            ;;
+    esac
     
     local output_file="$target_dir/${model_id}-${variant}.gguf"
     
