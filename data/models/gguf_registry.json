@@ -1,0 +1,76 @@
+{
+  "models": {
+    "phi:2.7b": {
+      "url": "https://huggingface.co/microsoft/phi-2/resolve/main/phi-2.Q4_K_M.gguf",
+      "size": "2GB",
+      "description": "Microsoft Phi-2 model, optimized for code and reasoning"
+    },
+    "llama2:7b": {
+      "url": "https://huggingface.co/TheBloke/Llama-2-7B-GGUF/resolve/main/llama-2-7b.Q4_K_M.gguf",
+      "size": "4GB",
+      "description": "Meta's Llama 2 7B model"
+    },
+    "mistral:7b": {
+      "url": "https://huggingface.co/TheBloke/Mistral-7B-v0.1-GGUF/resolve/main/mistral-7b-v0.1.Q4_K_M.gguf",
+      "size": "4GB",
+      "description": "Mistral AI's 7B model"
+    },
+    "llama3.2:1b": {
+      "url": "https://huggingface.co/lmstudio-community/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf",
+      "size": "1GB",
+      "description": "Meta's Llama 3.2 1B model"
+    },
+    "llama3.2:3b": {
+      "url": "https://huggingface.co/lmstudio-community/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+      "size": "2GB",
+      "description": "Meta's Llama 3.2 3B model"
+    },
+    "qwen2.5:3b": {
+      "url": "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf",
+      "size": "2GB",
+      "description": "Alibaba's Qwen 2.5 3B model"
+    },
+    "gemma2:2b": {
+      "url": "https://huggingface.co/lmstudio-community/gemma-2-2b-it-GGUF/resolve/main/gemma-2-2b-it-Q4_K_M.gguf",
+      "size": "2GB",
+      "description": "Google's Gemma 2 2B model"
+    },
+    "codellama:7b": {
+      "url": "https://huggingface.co/TheBloke/CodeLlama-7B-Instruct-GGUF/resolve/main/codellama-7b-instruct.Q4_K_M.gguf",
+      "size": "4GB",
+      "description": "Meta's Code Llama 7B model"
+    },
+    "llama3.1:8b": {
+      "url": "https://huggingface.co/lmstudio-community/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
+      "size": "5GB",
+      "description": "Meta's Llama 3.1 8B model"
+    },
+    "llama2:13b": {
+      "url": "https://huggingface.co/TheBloke/Llama-2-13B-chat-GGUF/resolve/main/llama-2-13b-chat.Q4_K_M.gguf",
+      "size": "8GB",
+      "description": "Meta's Llama 2 13B model"
+    },
+    "tinyllama:1.1b": {
+      "url": "https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
+      "size": "700MB",
+      "description": "TinyLlama 1.1B - Ultra-lightweight model"
+    },
+    "orca-mini:3b": {
+      "url": "https://huggingface.co/TheBloke/orca_mini_3B-GGUF/resolve/main/orca_mini_3b.q4_k_m.gguf",
+      "size": "2GB",
+      "description": "Orca Mini 3B - Efficient instruction-following model"
+    },
+    "stablelm-zephyr:3b": {
+      "url": "https://huggingface.co/TheBloke/stablelm-zephyr-3b-GGUF/resolve/main/stablelm-zephyr-3b.Q4_K_M.gguf",
+      "size": "2GB",
+      "description": "Stability AI's StableLM Zephyr 3B"
+    },
+    "deepseek-coder:6.7b": {
+      "url": "https://huggingface.co/TheBloke/deepseek-coder-6.7B-instruct-GGUF/resolve/main/deepseek-coder-6.7b-instruct.Q4_K_M.gguf",
+      "size": "4GB",
+      "description": "DeepSeek Coder 6.7B - Specialized for coding"
+    }
+  },
+  "last_updated": "2025-01-06",
+  "version": "1.0"
+}

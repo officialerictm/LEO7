@@ -1,12 +1,9 @@
 #!/usr/bin/env bash
-# ==============================================================================
-# Leonardo AI Universal - Main Application Entry Point
-# ==============================================================================
-# Description: Main application logic and orchestration
+# =======================================================================# Leonardo AI Universal - Main Application Entry Point
+# =======================================================================# Description: Main application logic and orchestration
 # Version: 7.0.0
 # Dependencies: all components
-# ==============================================================================
-
+# =======================================================================
 # Show application banner
 show_banner() {
     echo -e "${COLOR_CYAN}╭─────────────────────────────────────╮${COLOR_RESET}"
@@ -154,118 +151,22 @@ main() {
     # Main interactive menu
     local keep_running=true
     while [[ "$keep_running" == "true" ]]; do
-        clear
-        show_banner
+        # Show appropriate menu
+        show_main_menu
         
-        # Build menu options dynamically
-        local menu_options=()
+        # Read user choice
+        read -p "Enter your choice: " choice
         
-        # Always show deployment option first for MVP
-        menu_options+=("🚀 Deploy to USB")
-        
-        # Show chat option if models are installed
-        if check_installed_models; then
-            menu_options+=("💬 Chat with AI")
-        fi
-        
-        # System management options
-        menu_options+=("📦 Model Manager")
-        menu_options+=("🔧 System Utilities")
-        menu_options+=("📊 System Dashboard")
-        menu_options+=("⚙️  Settings")
-        menu_options+=("📖 Help")
-        menu_options+=("🚪 Exit")
-        
-        local selection
-        selection=$(show_menu "Leonardo AI Universal - Main Menu" "${menu_options[@]}")
-        local menu_exit_code=$?
-        
-        # Debug: Show menu exit code and selection
-        echo -e "${YELLOW}DEBUG: Menu exit code: $menu_exit_code${COLOR_RESET}" >&2
-        echo -e "${YELLOW}DEBUG: Raw selection: '$selection'${COLOR_RESET}" >&2
-        sleep 2
-        
-        # If show_menu returned error (user pressed q), exit
-        if [[ $menu_exit_code -ne 0 ]]; then
+        # Process the choice
+        if ! process_choice "$choice"; then
             keep_running=false
-            continue
         fi
         
-        # Debug: Show what was selected
-        if [[ "$LEONARDO_DEBUG" == "true" ]] || [[ -n "${DEBUG:-}" ]]; then
-            echo "DEBUG: Selected: '$selection'" >&2
-            sleep 1
+        # Pause before returning to menu (unless exiting)
+        if [[ "$keep_running" == "true" ]]; then
+            echo
+            read -p "Press Enter to continue..."
         fi
-        
-        # Extra debug: Show hex dump of selection to see any hidden characters
-        echo -e "${YELLOW}DEBUG: Hex dump of selection:${COLOR_RESET}" >&2
-        echo -n "$selection" | od -An -tx1 >&2
-        echo -e "${YELLOW}DEBUG: Length: ${#selection}${COLOR_RESET}" >&2
-        
-        # Test exact match
-        if [[ "$selection" == "🚀 Deploy to USB" ]]; then
-            echo -e "${GREEN}DEBUG: Exact match found!${COLOR_RESET}" >&2
-        else
-            echo -e "${RED}DEBUG: No exact match${COLOR_RESET}" >&2
-        fi
-        sleep 2
-        
-        case "$selection" in
-            "🚀 Deploy to USB")
-                if [[ "$LEONARDO_DEBUG" == "true" ]] || [[ -n "${DEBUG:-}" ]]; then
-                    echo "DEBUG: Calling deploy_to_usb" >&2
-                fi
-                deploy_to_usb
-                # Don't exit on failure, just return to menu
-                ;;
-            "💬 Chat with AI")
-                if [[ "$LEONARDO_DEBUG" == "true" ]] || [[ -n "${DEBUG:-}" ]]; then
-                    echo "DEBUG: Calling handle_chat_command" >&2
-                fi
-                handle_chat_command
-                ;;
-            "📦 Model Manager")
-                if [[ "$LEONARDO_DEBUG" == "true" ]] || [[ -n "${DEBUG:-}" ]]; then
-                    echo "DEBUG: Calling handle_model_command menu" >&2
-                fi
-                handle_model_command "menu"
-                ;;
-            "🔧 System Utilities")
-                if [[ "$LEONARDO_DEBUG" == "true" ]] || [[ -n "${DEBUG:-}" ]]; then
-                    echo "DEBUG: Calling system_utilities_menu" >&2
-                fi
-                system_utilities_menu
-                ;;
-            "📊 System Dashboard")
-                if [[ "$LEONARDO_DEBUG" == "true" ]] || [[ -n "${DEBUG:-}" ]]; then
-                    echo "DEBUG: Calling show_dashboard" >&2
-                fi
-                show_dashboard
-                pause
-                ;;
-            "⚙️  Settings")
-                if [[ "$LEONARDO_DEBUG" == "true" ]] || [[ -n "${DEBUG:-}" ]]; then
-                    echo "DEBUG: Calling settings_menu" >&2
-                fi
-                settings_menu
-                ;;
-            "📖 Help")
-                if [[ "$LEONARDO_DEBUG" == "true" ]] || [[ -n "${DEBUG:-}" ]]; then
-                    echo "DEBUG: Calling show_help" >&2
-                fi
-                show_help
-                pause
-                ;;
-            "🚪 Exit"|"")
-                handle_exit
-                keep_running=false
-                ;;
-            *)
-                if [[ "$LEONARDO_DEBUG" == "true" ]] || [[ -n "${DEBUG:-}" ]]; then
-                    echo "DEBUG: Unknown selection: '$selection'" >&2
-                fi
-                ;;
-        esac
     done
 }
 
@@ -522,7 +423,23 @@ usb_management_menu() {
                 read -r
                 ;;
             "Deploy Leonardo to USB")
-                select_and_deploy_usb
+                echo -e "\n${CYAN}Select USB device for deployment:${COLOR_RESET}"
+                if command -v usb_cli >/dev/null 2>&1; then
+                    # Show USB devices
+                    usb_cli list
+                    echo ""
+                    echo -n "Enter device path (e.g., /dev/sdc): "
+                    read -r device
+                    if [[ -n "$device" ]]; then
+                        handle_deployment_command "usb" "$device"
+                    else
+                        echo -e "${RED}No device selected${COLOR_RESET}"
+                    fi
+                else
+                    echo -e "${RED}USB CLI not available${COLOR_RESET}"
+                fi
+                echo -e "\n${DIM}Press Enter to continue...${COLOR_RESET}"
+                read -r
                 ;;
             "Check USB Health")
                 echo -e "\n${CYAN}USB Health Check${COLOR_RESET}"
@@ -702,60 +619,118 @@ handle_deployment_command() {
     esac
 }
 
-# Settings menu
-settings_menu() {
-    while true; do
-        # Clear screen properly
-        echo -e "\033[H\033[2J" >/dev/tty
-        
-        echo -e "${CYAN}Settings & Preferences${COLOR_RESET}"
-        echo ""
-        
-        show_menu "Settings" \
-            "Toggle Debug Mode" \
-            "Configure Model Path" \
-            "Network Settings" \
-            "Security Options" \
-            "Back to Main Menu"
-        
-        case "$MENU_SELECTION" in
-            "Toggle Debug Mode")
-                if [[ "$LEONARDO_DEBUG" == "true" ]]; then
-                    LEONARDO_DEBUG=false
-                    echo -e "\n${GREEN}Debug mode disabled${COLOR_RESET}"
-                else
-                    LEONARDO_DEBUG=true
-                    echo -e "\n${GREEN}Debug mode enabled${COLOR_RESET}"
-                fi
-                echo -e "\n${DIM}Press Enter to continue...${COLOR_RESET}"
-                read -r
-                ;;
-            "Configure Model Path")
-                echo -e "\n${CYAN}Current model path: ${LEONARDO_MODELS_DIR}${COLOR_RESET}"
-                echo -n "Enter new path (or press Enter to keep current): "
-                read -r new_path
-                if [[ -n "$new_path" ]]; then
-                    export LEONARDO_MODELS_DIR="$new_path"
-                    echo -e "${GREEN}Model path updated!${COLOR_RESET}"
-                fi
-                echo -e "\n${DIM}Press Enter to continue...${COLOR_RESET}"
-                read -r
-                ;;
-            "Network Settings")
-                echo -e "\n${YELLOW}Network configuration coming soon!${COLOR_RESET}"
-                echo -e "\n${DIM}Press Enter to continue...${COLOR_RESET}"
-                read -r
-                ;;
-            "Security Options")
-                echo -e "\n${YELLOW}Security options coming soon!${COLOR_RESET}"
-                echo -e "\n${DIM}Press Enter to continue...${COLOR_RESET}"
-                read -r
-                ;;
-            "Back to Main Menu")
-                break
-                ;;
+# Function to check if running from USB
+is_usb_deployment() {
+    # Check environment variable first
+    if [[ "${LEONARDO_USB_MODE:-}" == "true" ]]; then
+        return 0
+    fi
+    
+    # Check if script path indicates USB location
+    local script_path="${BASH_SOURCE[0]:-$0}"
+    local real_path=$(readlink -f "$script_path" 2>/dev/null || realpath "$script_path" 2>/dev/null || echo "$script_path")
+    
+    if echo "$real_path" | grep -iE '/(media|mnt|run/media|Volumes)/[^/]+/(leonardo|LEONARDO)' >/dev/null 2>&1; then
+        return 0
+    fi
+    
+    return 1
+}
+
+# Show USB-specific main menu
+show_usb_main_menu() {
+    clear
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
+    echo -e "${BOLD}          🔌 Leonardo AI Universal - USB Mode${COLOR_RESET}"
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
+    echo
+    echo -e "${GREEN}USB Location: ${LEONARDO_USB_MOUNT:-Detected}${COLOR_RESET}"
+    echo
+    echo -e "${CYAN}Main Menu:${COLOR_RESET}"
+    echo
+    echo "  1) 💬 Chat With AI              - Start AI conversation"
+    echo "  2) 🔧 System Management         - Configure Leonardo"
+    echo "  3) 📦 Model Management          - Download/manage AI models"
+    echo "  4) 💾 USB Management            - Format/prepare USB drives"
+    echo "  5) 🚀 Deployment Options        - Setup AI environments"
+    echo "  6) 📊 Dashboard                 - System overview"
+    echo "  7) 🌐 Web Interface             - Browser-based UI"
+    echo "  8) 📋 System Info               - Show system details"
+    echo "  9) ❓ Help                      - Show documentation"
+    echo "  0) 🚪 Exit                      - Exit Leonardo"
+    echo
+    echo -e "${DIM}────────────────────────────────────────────────────────────────${COLOR_RESET}"
+    echo
+}
+
+# Show main menu
+show_main_menu() {
+    # Check if USB deployment and show appropriate menu
+    if is_usb_deployment; then
+        show_usb_main_menu
+        return
+    fi
+    
+    # Original host menu
+    clear
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
+    echo -e "${BOLD}               🤖 Leonardo AI Universal v${LEONARDO_VERSION}${COLOR_RESET}"
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
+    echo
+    echo -e "${CYAN}Main Menu:${COLOR_RESET}"
+    echo
+    echo "  1) 🔧 System Management         - Configure Leonardo"
+    echo "  2) 📦 Model Management          - Download/manage AI models"
+    echo "  3) 💬 Chat With AI              - Start AI conversation"
+    echo "  4) 💾 USB Management            - Format/prepare USB drives"
+    echo "  5) 🚀 Deployment Options        - Setup AI environments"
+    echo "  6) 📊 Dashboard                 - System overview"
+    echo "  7) 🌐 Web Interface             - Browser-based UI"
+    echo "  8) 📋 System Info               - Show system details"
+    echo "  9) ❓ Help                      - Show documentation"
+    echo "  0) 🚪 Exit                      - Exit Leonardo"
+    echo
+    echo -e "${DIM}────────────────────────────────────────────────────────────────${COLOR_RESET}"
+    echo
+}
+
+# Process user choice
+process_choice() {
+    local choice="$1"
+    
+    # Handle choices differently for USB mode
+    if is_usb_deployment; then
+        case "$choice" in
+            1) handle_chat_command ;;
+            2) handle_system_menu ;;
+            3) handle_model_menu ;;
+            4) handle_usb_menu ;;
+            5) handle_deployment_menu ;;
+            6) handle_dashboard_command ;;
+            7) handle_web_command ;;
+            8) handle_info_command ;;
+            9) handle_help_command ;;
+            0|q|Q) return 1 ;;
+            *) echo -e "${RED}Invalid choice. Please try again.${COLOR_RESET}" ;;
         esac
-    done
+    else
+        # Original host mode choices
+        case "$choice" in
+            1) handle_system_menu ;;
+            2) handle_model_menu ;;
+            3) handle_chat_command ;;
+            4) handle_usb_menu ;;
+            5) handle_deployment_menu ;;
+            6) handle_dashboard_command ;;
+            7) handle_web_command ;;
+            8) handle_info_command ;;
+            9) handle_help_command ;;
+            0|q|Q) return 1 ;;
+            *) echo -e "${RED}Invalid choice. Please try again.${COLOR_RESET}" ;;
+        esac
+    fi
+    
+    return 0
 }
 
 # Run system tests
@@ -898,8 +873,8 @@ launch_web_interface() {
 # Exit handler
 handle_exit() {
     echo ""
-    echo "${COLOR_CYAN}Thank you for using Leonardo AI Universal!${COLOR_RESET}"
-    echo "${COLOR_DIM}Stay curious, stay creative.${COLOR_RESET}"
+    echo -e "${COLOR_CYAN}Thank you for using Leonardo AI Universal!${COLOR_RESET}"
+    echo -e "${COLOR_DIM}Stay curious, stay creative.${COLOR_RESET}"
     echo ""
     
     # Cleanup
@@ -911,15 +886,33 @@ handle_exit() {
     exit 0
 }
 
-# Check if any models are installed
-check_installed_models() {
-    # Check for models in default location
-    if [[ -d "$LEONARDO_MODEL_DIR" ]] && [[ -n "$(ls -A "$LEONARDO_MODEL_DIR" 2>/dev/null)" ]]; then
+# Handle chat command
+handle_chat_command() {
+    log_message "INFO" "Starting chat interface"
+    
+    # Auto-detect by default, no prompt needed
+    start_location_aware_chat "" "auto"
+}
+
+# Check if running from USB deployment
+is_usb_deployment() {
+    # Check multiple indicators
+    [[ "${LEONARDO_USB_MODE:-}" == "true" ]] && return 0
+    [[ -n "${LEONARDO_USB_MOUNT:-}" ]] && return 0
+    [[ -f "/leonardo_usb_marker" ]] && return 0
+    
+    # Check if script path contains common USB mount patterns
+    local script_path="${BASH_SOURCE[0]:-$0}"
+    local real_path=$(readlink -f "$script_path" 2>/dev/null || realpath "$script_path" 2>/dev/null || echo "$script_path")
+    
+    # Check for common USB mount patterns (case-insensitive for macOS)
+    if echo "$real_path" | grep -iE '/(Volumes|media|mnt|run/media|usb|removable)/' >/dev/null 2>&1; then
         return 0
     fi
     
-    # Check for Ollama models
-    if command_exists ollama && ollama list 2>/dev/null | grep -q "^[a-zA-Z]"; then
+    # Check if we're in a leonardo directory on a removable device
+    if [[ -d "${script_path%/*}/models" ]] && [[ -f "${script_path%/*}/leonardo.sh" ]]; then
+        # Likely a portable installation
         return 0
     fi
     
@@ -1143,6 +1136,11 @@ EOF
 
 # Check if any models are installed
 check_installed_models() {
+    # For USB deployment, always show chat option
+    if is_usb_deployment; then
+        return 0  # Always allow chat on USB - models should be there
+    fi
+    
     # Check Ollama models
     if command_exists ollama; then
         local ollama_models=$(ollama list 2>/dev/null | tail -n +2 | wc -l)
@@ -1154,6 +1152,20 @@ check_installed_models() {
         local local_models=$(find "$LEONARDO_MODEL_DIR" -name "*.gguf" 2>/dev/null | wc -l)
         [[ $local_models -gt 0 ]] && return 0
     fi
+    
+    # Also check common model locations
+    local common_dirs=(
+        "$LEONARDO_BASE_DIR/models"
+        "$HOME/.leonardo/models"
+        "/opt/leonardo/models"
+        "./models"
+    )
+    
+    for dir in "${common_dirs[@]}"; do
+        if [[ -d "$dir" ]] && [[ -n "$(find "$dir" -name "*.gguf" 2>/dev/null | head -1)" ]]; then
+            return 0
+        fi
+    done
     
     return 1
 }
@@ -1221,4 +1233,749 @@ show_about() {
     echo "  • Cross-platform compatibility"
     echo "  • Web interface"
     echo
+}
+
+# Deploy to USB interactively
+deploy_to_usb_interactive() {
+    # Source USB deployment if not already
+    if [[ -f "${LEONARDO_DIR}/src/deployment/usb_deploy.sh" ]]; then
+        source "${LEONARDO_DIR}/src/deployment/usb_deploy.sh"
+    else
+        echo -e "${RED}Error: USB deployment module not found${COLOR_RESET}"
+        return 1
+    fi
+    
+    # Run the USB deployment command
+    handle_deploy_usb_command
+}
+
+# Initialize Leonardo
+initialize_leonardo() {
+    log_message "INFO" "Initializing Leonardo AI Universal v${LEONARDO_VERSION}"
+    
+    # Check if we're already running from USB
+    local running_from_usb=false
+    local script_path="${BASH_SOURCE[0]:-$0}"
+    local real_path=$(readlink -f "$script_path" 2>/dev/null || realpath "$script_path" 2>/dev/null || echo "$script_path")
+    
+    if echo "$real_path" | grep -iE '/(Volumes|media|mnt|run/media|usb|removable)/' >/dev/null 2>&1; then
+        running_from_usb=true
+        export LEONARDO_USB_MOUNT="${real_path%/leonardo/*}"
+    fi
+    
+    # Check for deployment configuration
+    if [[ -f "${LEONARDO_DIR}/src/core/deployment_mode.sh" ]]; then
+        source "${LEONARDO_DIR}/src/core/deployment_mode.sh"
+    fi
+    
+    # If not already deployed to USB and no config exists, prompt for USB deployment
+    if ! load_deployment_config && [[ "$running_from_usb" != "true" ]]; then
+        clear
+        echo -e "${CYAN}${LEONARDO_BANNERS[0]}${COLOR_RESET}"
+        echo
+        echo -e "${YELLOW}Welcome to Leonardo AI Universal - AI on a Stick!${COLOR_RESET}"
+        echo
+        echo -e "${GREEN}Leonardo is designed to run entirely from a USB drive.${COLOR_RESET}"
+        echo "This provides:"
+        echo "  • Complete portability between computers"
+        echo "  • No installation on host systems"
+        echo "  • Privacy - your AI stays with you"
+        echo "  • Easy backup - just copy your USB"
+        echo
+        echo -e "${CYAN}Would you like to deploy Leonardo to a USB drive now?${COLOR_RESET}"
+        echo
+        echo "1) Yes, deploy to USB (recommended)"
+        echo "2) No, I'll run from current location"
+        echo
+        
+        local choice
+        read -p "Select option (1-2): " choice
+        
+        case "$choice" in
+            1)
+                echo
+                echo -e "${GREEN}Great! Let's set up your AI stick.${COLOR_RESET}"
+                echo
+                # Run USB deployment
+                deploy_to_usb_interactive
+                exit 0  # Exit after deployment
+                ;;
+            2)
+                echo
+                echo -e "${YELLOW}Running from current location.${COLOR_RESET}"
+                echo "Note: For the full Leonardo experience, consider USB deployment later."
+                echo "Run: leonardo deploy-usb"
+                echo
+                
+                # Still need to select deployment mode
+                local mode=$(select_deployment_mode)
+                configure_deployment "$mode"
+                ;;
+            *)
+                echo -e "${RED}Invalid choice. Defaulting to USB deployment prompt.${COLOR_RESET}"
+                deploy_to_usb_interactive
+                exit 0
+                ;;
+        esac
+    elif [[ "$running_from_usb" == "true" ]] && ! load_deployment_config; then
+        # Already on USB, just configure
+        echo -e "${GREEN}Detected Leonardo running from USB!${COLOR_RESET}"
+        echo
+        configure_deployment "usb"
+    fi
+    
+    # Create necessary directories
+    ensure_directory "$LEONARDO_BASE_DIR"
+    ensure_directory "$LEONARDO_CONFIG_DIR" 
+    ensure_directory "$LEONARDO_MODEL_DIR"
+    ensure_directory "$LEONARDO_LOG_DIR"
+    ensure_directory "$LEONARDO_TEMP_DIR"
+    
+    # Load configuration
+    load_config
+    
+    # Initialize components based on deployment mode
+    if [[ "${LEONARDO_USB_MODE:-false}" == "true" ]]; then
+        log_message "INFO" "Running in USB mode (${LEONARDO_DEPLOYMENT_MODE})"
+    fi
+    
+    # Check system requirements
+    check_requirements
+    
+    # Show welcome message
+    if [[ "$LEONARDO_QUIET" != "true" ]]; then
+        show_banner
+    fi
+    
+    log_message "INFO" "Leonardo initialized successfully"
+}
+
+# Handle help command - show comprehensive documentation
+handle_help_command() {
+    echo -e "\n${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
+    echo -e "${BOLD}               ❓ Leonardo AI Universal Help                ${COLOR_RESET}"
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
+    
+    echo -e "\n${BOLD}🎯 Quick Start Guide:${COLOR_RESET}"
+    echo "1. ${BOLD}First Time Setup:${COLOR_RESET}"
+    echo "   • Insert a USB drive (8GB+ recommended)"
+    echo "   • Select '💾 USB Management' → 'Deploy to USB'"
+    echo "   • Leonardo will install everything on the USB"
+    echo ""
+    echo "2. ${BOLD}Download AI Models:${COLOR_RESET}"
+    echo "   • Select '📦 Model Management'"
+    echo "   • Choose models based on your hardware"
+    echo "   • Models are stored on your USB for portability"
+    echo ""
+    echo "3. ${BOLD}Start Chatting:${COLOR_RESET}"
+    echo "   • Select '💬 Chat With AI'"
+    echo "   • Choose a model and start conversing"
+    echo ""
+    
+    echo -e "\n${BOLD}📚 Key Concepts:${COLOR_RESET}"
+    echo "• ${BOLD}USB-First:${COLOR_RESET} Leonardo runs entirely from USB by default"
+    echo "• ${BOLD}Zero-Trace:${COLOR_RESET} Leaves no data on host computers"
+    echo "• ${BOLD}Portable AI:${COLOR_RESET} Take your AI anywhere, use on any computer"
+    echo "• ${BOLD}Privacy-First:${COLOR_RESET} Your data stays on your USB"
+    
+    echo -e "\n${BOLD}⌨️  Command Line Usage:${COLOR_RESET}"
+    echo "• leonardo chat          - Start AI chat"
+    echo "• leonardo model list    - List available models"
+    echo "• leonardo usb list      - Show USB drives"
+    echo "• leonardo deploy usb    - Deploy to USB"
+    echo "• leonardo help          - Show this help"
+    
+    echo -e "\n${BOLD}🔧 Troubleshooting:${COLOR_RESET}"
+    echo "• ${BOLD}No models found:${COLOR_RESET} Run Model Management to download"
+    echo "• ${BOLD}USB not detected:${COLOR_RESET} Check USB is properly inserted"
+    echo "• ${BOLD}Slow performance:${COLOR_RESET} Use smaller models or better hardware"
+    echo "• ${BOLD}Can't write to USB:${COLOR_RESET} Check USB isn't write-protected"
+    
+    echo -e "\n${BOLD}📖 Documentation:${COLOR_RESET}"
+    echo "• GitHub: https://github.com/officialerictm/leonardo-ai"
+    echo "• Wiki: https://github.com/officialerictm/leonardo-ai/wiki"
+    echo "• Issues: https://github.com/officialerictm/leonardo-ai/issues"
+    
+    echo -e "\n${DIM}Press Enter to continue...${COLOR_RESET}"
+    read -r
+}
+
+# Show system information with enhanced details
+handle_info_command() {
+    echo -e "\n${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
+    echo -e "${BOLD}               📋 System Information                ${COLOR_RESET}"
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
+    
+    # Leonardo Information
+    echo -e "\n${BOLD}Leonardo AI Universal:${COLOR_RESET}"
+    echo "├─ Version: v7.0.0"
+    echo "├─ Build Date: $(date -r "$0" 2>/dev/null || echo "Unknown")"
+    echo "├─ Script Path: $(realpath "$0" 2>/dev/null || echo "$0")"
+    echo "└─ PID: $$"
+    
+    # Deployment Information
+    echo -e "\n${BOLD}Deployment:${COLOR_RESET}"
+    if is_usb_deployment; then
+        echo "├─ Mode: USB Drive (Portable)"
+        echo "├─ USB Mount: ${LEONARDO_USB_MOUNT:-Unknown}"
+        echo "└─ USB Free: $(df -h "${LEONARDO_USB_MOUNT}" 2>/dev/null | awk 'NR==2 {print $4}' || echo "Unknown")"
+    else
+        echo "├─ Mode: Host System"
+        echo "└─ Base Dir: ${LEONARDO_BASE_DIR}"
+    fi
+    
+    # System Information
+    echo -e "\n${BOLD}Host System:${COLOR_RESET}"
+    echo "├─ OS: $(uname -s) $(uname -r)"
+    echo "├─ Architecture: $(uname -m)"
+    echo "├─ Hostname: $(hostname 2>/dev/null || echo "Unknown")"
+    echo "├─ User: ${USER}"
+    echo "└─ Shell: ${SHELL} (${BASH_VERSION})"
+    
+    # Hardware Information
+    echo -e "\n${BOLD}Hardware:${COLOR_RESET}"
+    echo "├─ CPU Model: $(grep "model name" /proc/cpuinfo 2>/dev/null | head -1 | cut -d: -f2 | xargs || echo "Unknown")"
+    echo "├─ CPU Cores: $(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo "Unknown")"
+    echo "├─ Total RAM: $(free -h 2>/dev/null | awk '/^Mem:/ {print $2}' || echo "Unknown")"
+    echo "├─ Available RAM: $(free -h 2>/dev/null | awk '/^Mem:/ {print $7}' || echo "Unknown")"
+    
+    # GPU Detection
+    if command -v nvidia-smi >/dev/null 2>&1; then
+        local gpu_info=$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null | head -1)
+        echo "└─ GPU: ${gpu_info:-NVIDIA GPU detected}"
+    elif command -v rocm-smi >/dev/null 2>&1; then
+        echo "└─ GPU: AMD GPU detected (ROCm)"
+    elif [[ -d /sys/class/drm/card0 ]]; then
+        echo "└─ GPU: Integrated graphics detected"
+    else
+        echo "└─ GPU: No dedicated GPU detected"
+    fi
+    
+    # Software Dependencies
+    echo -e "\n${BOLD}Dependencies:${COLOR_RESET}"
+    echo -n "├─ Python: "
+    if command -v python3 >/dev/null 2>&1; then
+        echo "$(python3 --version 2>&1 | awk '{print $2}')"
+    else
+        echo "${RED}Not installed${COLOR_RESET}"
+    fi
+    
+    echo -n "├─ Ollama: "
+    if command -v ollama >/dev/null 2>&1; then
+        echo "${GREEN}Installed${COLOR_RESET} ($(ollama -v 2>&1 | head -1))"
+    else
+        echo "${YELLOW}Not installed${COLOR_RESET}"
+    fi
+    
+    echo -n "├─ Git: "
+    if command -v git >/dev/null 2>&1; then
+        echo "$(git --version | awk '{print $3}')"
+    else
+        echo "${YELLOW}Not installed${COLOR_RESET}"
+    fi
+    
+    echo -n "└─ Curl: "
+    if command -v curl >/dev/null 2>&1; then
+        echo "$(curl --version | head -1 | awk '{print $2}')"
+    else
+        echo "${RED}Not installed${COLOR_RESET}"
+    fi
+    
+    # Environment Variables
+    echo -e "\n${BOLD}Environment:${COLOR_RESET}"
+    echo "├─ LEONARDO_BASE_DIR: ${LEONARDO_BASE_DIR:-Not set}"
+    echo "├─ LEONARDO_MODELS_DIR: ${LEONARDO_MODELS_DIR:-Not set}"
+    echo "├─ LEONARDO_CONFIG_DIR: ${LEONARDO_CONFIG_DIR:-Not set}"
+    echo "├─ LEONARDO_LOG_LEVEL: ${LEONARDO_LOG_LEVEL:-INFO}"
+    echo "└─ TERM: ${TERM:-Not set}"
+    
+    # Run basic system tests
+    echo -e "\n${BOLD}Quick System Check:${COLOR_RESET}"
+    echo -n "├─ Internet: "
+    if check_internet_connection; then
+        echo "${GREEN}✓ Connected${COLOR_RESET}"
+    else
+        echo "${RED}✗ Offline${COLOR_RESET}"
+    fi
+    
+    echo -n "├─ Disk Space: "
+    local free_space=$(df -h . 2>/dev/null | awk 'NR==2 {print $4}')
+    if [[ -n "$free_space" ]]; then
+        echo "$free_space available"
+    else
+        echo "Unknown"
+    fi
+    
+    echo -n "└─ Write Permission: "
+    if touch .leonardo_test 2>/dev/null && rm .leonardo_test 2>/dev/null; then
+        echo "${GREEN}✓ Writable${COLOR_RESET}"
+    else
+        echo "${RED}✗ Read-only${COLOR_RESET}"
+    fi
+    
+    echo -e "\n${DIM}Press Enter to continue...${COLOR_RESET}"
+    read -r
+}
+
+# =======================================================================# MENU HANDLER FUNCTIONS
+# =======================================================================
+# Handle system management menu
+handle_system_menu() {
+    echo -e "\n${CYAN}🔧 System Management${COLOR_RESET}"
+    echo "════════════════════════════════════════════"
+    
+    local options=(
+        "🔍 Run System Tests"
+        "⚙️  Configure Leonardo"
+        "🔐 Security Settings"
+        "📊 Performance Tuning"
+        "🔄 Update Leonardo"
+        "🔙 Back to Main Menu"
+    )
+    
+    while true; do
+        echo ""
+        for i in "${!options[@]}"; do
+            echo "$((i+1)). ${options[$i]}"
+        done
+        echo ""
+        echo -n "Select option: "
+        read -r choice
+        
+        case "$choice" in
+            1) run_system_tests ;;
+            2) configure_leonardo ;;
+            3) configure_security ;;
+            4) configure_performance ;;
+            5) update_leonardo ;;
+            6) break ;;
+            *) echo -e "${RED}Invalid choice${COLOR_RESET}" ;;
+        esac
+    done
+}
+
+# Handle model management menu
+handle_model_menu() {
+    echo -e "\n${CYAN}📦 Model Management${COLOR_RESET}"
+    
+    # Use the model manager CLI
+    if command -v handle_model_command >/dev/null 2>&1; then
+        handle_model_command
+    else
+        echo -e "${RED}Model manager not available${COLOR_RESET}"
+        echo "Please ensure model management modules are properly installed."
+        echo -e "\n${DIM}Press Enter to continue...${COLOR_RESET}"
+        read -r
+    fi
+}
+
+# Handle USB management interactive menu
+handle_usb_menu() {
+    echo -e "\n${CYAN}💾 USB Management${COLOR_RESET}"
+    echo "════════════════════════════════════════════"
+    
+    local options=(
+        "📋 List USB Drives"
+        "🚀 Deploy Leonardo to USB"
+        "💿 Format USB Drive"
+        "🏥 Check USB Health"
+        "📊 Monitor USB Performance"
+        "💾 Backup USB Data"
+        "🔙 Back to Main Menu"
+    )
+    
+    while true; do
+        echo ""
+        for i in "${!options[@]}"; do
+            echo "$((i+1)). ${options[$i]}"
+        done
+        echo ""
+        echo -n "Select option: "
+        read -r choice
+        
+        case "$choice" in
+            1) 
+                if command -v usb_cli >/dev/null 2>&1; then
+                    usb_cli list
+                else
+                    echo -e "${RED}USB CLI not available${COLOR_RESET}"
+                fi
+                echo -e "\n${DIM}Press Enter to continue...${COLOR_RESET}"
+                read -r
+                ;;
+            2) 
+                # USB deployment - prompt for device
+                echo -e "\n${CYAN}Select USB device for deployment:${COLOR_RESET}"
+                if command -v usb_cli >/dev/null 2>&1; then
+                    usb_cli list
+                    echo ""
+                    echo -n "Enter device path (e.g., /dev/sdc): "
+                    read -r device
+                    if [[ -n "$device" ]]; then
+                        handle_deployment_command "usb" "$device"
+                    else
+                        echo -e "${RED}No device selected${COLOR_RESET}"
+                    fi
+                else
+                    echo -e "${RED}USB CLI not available${COLOR_RESET}"
+                fi
+                echo -e "\n${DIM}Press Enter to continue...${COLOR_RESET}"
+                read -r
+                ;;
+            3) 
+                if command -v usb_cli >/dev/null 2>&1; then
+                    echo "Select USB drive to format:"
+                    usb_cli format
+                else
+                    echo -e "${RED}USB CLI not available${COLOR_RESET}"
+                fi
+                ;;
+            4) 
+                if command -v usb_cli >/dev/null 2>&1; then
+                    usb_cli health
+                else
+                    echo -e "${RED}USB CLI not available${COLOR_RESET}"
+                fi
+                echo -e "\n${DIM}Press Enter to continue...${COLOR_RESET}"
+                read -r
+                ;;
+            5) 
+                if command -v usb_cli >/dev/null 2>&1; then
+                    usb_cli monitor
+                else
+                    echo -e "${RED}USB CLI not available${COLOR_RESET}"
+                fi
+                ;;
+            6) 
+                if command -v usb_cli >/dev/null 2>&1; then
+                    usb_cli backup
+                else
+                    echo -e "${RED}USB CLI not available${COLOR_RESET}"
+                fi
+                ;;
+            7) break ;;
+            *) echo -e "${RED}Invalid choice${COLOR_RESET}" ;;
+        esac
+    done
+}
+
+# Handle deployment menu
+handle_deployment_menu() {
+    echo -e "\n${CYAN}🚀 Deployment Options${COLOR_RESET}"
+    echo "════════════════════════════════════════════"
+    
+    local options=(
+        "💾 Deploy to USB Drive"
+        "💻 Local Installation"
+        "🐳 Container Deployment"
+        "☁️  Cloud Deployment"
+        "🔒 Air-Gap Setup"
+        "🔙 Back to Main Menu"
+    )
+    
+    while true; do
+        echo ""
+        for i in "${!options[@]}"; do
+            echo "$((i+1)). ${options[$i]}"
+        done
+        echo ""
+        echo -n "Select deployment option: "
+        read -r choice
+        
+        case "$choice" in
+            1) 
+                # USB deployment - prompt for device
+                echo -e "\n${CYAN}Select USB device for deployment:${COLOR_RESET}"
+                if command -v usb_cli >/dev/null 2>&1; then
+                    usb_cli list
+                    echo ""
+                    echo -n "Enter device path (e.g., /dev/sdc): "
+                    read -r device
+                    if [[ -n "$device" ]]; then
+                        handle_deployment_command "usb" "$device"
+                    else
+                        echo -e "${RED}No device selected${COLOR_RESET}"
+                    fi
+                else
+                    echo -e "${RED}USB CLI not available${COLOR_RESET}"
+                fi
+                echo -e "\n${DIM}Press Enter to continue...${COLOR_RESET}"
+                read -r
+                ;;
+            2) handle_local_deployment ;;
+            3) handle_container_deployment ;;
+            4) handle_cloud_deployment ;;
+            5) handle_airgap_deployment ;;
+            6) break ;;
+            *) echo -e "${RED}Invalid choice${COLOR_RESET}" ;;
+        esac
+    done
+}
+
+# Configure Leonardo settings
+configure_leonardo() {
+    echo -e "\n${CYAN}⚙️  Leonardo Configuration${COLOR_RESET}"
+    echo "════════════════════════════════════════════"
+    
+    # Show current configuration
+    echo -e "\n${BOLD}Current Configuration:${COLOR_RESET}"
+    echo "Base Directory: ${LEONARDO_BASE_DIR:-Not set}"
+    echo "Model Directory: ${LEONARDO_MODELS_DIR:-Not set}"
+    echo "Config Directory: ${LEONARDO_CONFIG_DIR:-Not set}"
+    echo "Log Level: ${LEONARDO_LOG_LEVEL:-INFO}"
+    
+    echo -e "\n${YELLOW}Configuration options coming soon...${COLOR_RESET}"
+    echo -e "\n${DIM}Press Enter to continue...${COLOR_RESET}"
+    read -r
+}
+
+# Configure security settings
+configure_security() {
+    echo -e "\n${CYAN}🔐 Security Settings${COLOR_RESET}"
+    echo "════════════════════════════════════════════"
+    
+    echo "1. Enable encryption at rest"
+    echo "2. Configure access control"
+    echo "3. Set up audit logging"
+    echo "4. Enable stealth mode"
+    echo "5. Back to System Menu"
+    
+    echo -e "\n${YELLOW}Security features coming soon...${COLOR_RESET}"
+    echo -e "\n${DIM}Press Enter to continue...${COLOR_RESET}"
+    read -r
+}
+
+# Configure performance settings
+configure_performance() {
+    echo -e "\n${CYAN}📊 Performance Tuning${COLOR_RESET}"
+    echo "════════════════════════════════════════════"
+    
+    # Show current system resources
+    echo -e "\n${BOLD}System Resources:${COLOR_RESET}"
+    echo "CPU Cores: $(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo "Unknown")"
+    echo "Total RAM: $(free -h 2>/dev/null | awk '/^Mem:/ {print $2}' || echo "Unknown")"
+    
+    if command -v nvidia-smi >/dev/null 2>&1; then
+        echo "GPU: NVIDIA GPU detected"
+    else
+        echo "GPU: No NVIDIA GPU detected"
+    fi
+    
+    echo -e "\n${YELLOW}Performance tuning options coming soon...${COLOR_RESET}"
+    echo -e "\n${DIM}Press Enter to continue...${COLOR_RESET}"
+    read -r
+}
+
+# Update Leonardo
+update_leonardo() {
+    echo -e "\n${CYAN}🔄 Updating Leonardo${COLOR_RESET}"
+    echo "════════════════════════════════════════════"
+    
+    echo "Checking for updates..."
+    
+    # Check if we're in a git repository
+    if [[ -d .git ]]; then
+        echo "Pulling latest changes from git..."
+        git pull origin main 2>/dev/null || {
+            echo -e "${YELLOW}Could not update from git${COLOR_RESET}"
+        }
+    else
+        echo -e "${YELLOW}Not in a git repository${COLOR_RESET}"
+        echo "Please download the latest version from GitHub"
+    fi
+    
+    echo -e "\n${DIM}Press Enter to continue...${COLOR_RESET}"
+    read -r
+}
+
+# Handle local deployment
+handle_local_deployment() {
+    echo -e "\n${CYAN}💻 Local Installation${COLOR_RESET}"
+    echo "════════════════════════════════════════════"
+    
+    echo -e "${YELLOW}⚠️  Warning: Local installation defeats the portable nature of Leonardo${COLOR_RESET}"
+    echo ""
+    echo "Leonardo is designed to run from USB for maximum portability and security."
+    echo "Local installation is only recommended for development or permanent workstations."
+    echo ""
+    echo -n "Continue with local installation? (y/N): "
+    read -r confirm
+    
+    if [[ "$confirm" =~ ^[Yy]$ ]]; then
+        echo -e "\n${YELLOW}Local installation feature coming soon...${COLOR_RESET}"
+    fi
+    
+    echo -e "\n${DIM}Press Enter to continue...${COLOR_RESET}"
+    read -r
+}
+
+# Handle container deployment
+handle_container_deployment() {
+    echo -e "\n${CYAN}🐳 Container Deployment${COLOR_RESET}"
+    echo "════════════════════════════════════════════"
+    
+    echo "Checking for container runtimes..."
+    
+    if command -v docker >/dev/null 2>&1; then
+        echo -e "${GREEN}✓ Docker detected${COLOR_RESET}"
+    elif command -v podman >/dev/null 2>&1; then
+        echo -e "${GREEN}✓ Podman detected${COLOR_RESET}"
+    else
+        echo -e "${RED}✗ No container runtime found${COLOR_RESET}"
+        echo "Please install Docker or Podman to use container deployment"
+    fi
+    
+    echo -e "\n${YELLOW}Container deployment coming soon...${COLOR_RESET}"
+    echo -e "\n${DIM}Press Enter to continue...${COLOR_RESET}"
+    read -r
+}
+
+# Handle cloud deployment
+handle_cloud_deployment() {
+    echo -e "\n${CYAN}☁️  Cloud Deployment${COLOR_RESET}"
+    echo "════════════════════════════════════════════"
+    
+    echo "Supported cloud platforms:"
+    echo "• Amazon Web Services (AWS)"
+    echo "• Google Cloud Platform (GCP)"
+    echo "• Microsoft Azure"
+    echo "• DigitalOcean"
+    echo ""
+    echo -e "${YELLOW}Cloud deployment templates coming soon...${COLOR_RESET}"
+    echo -e "\n${DIM}Press Enter to continue...${COLOR_RESET}"
+    read -r
+}
+
+# Handle air-gap deployment
+handle_airgap_deployment() {
+    echo -e "\n${CYAN}🔒 Air-Gap Setup${COLOR_RESET}"
+    echo "════════════════════════════════════════════"
+    
+    echo "Air-gap deployment creates a completely offline AI environment."
+    echo ""
+    echo "Features:"
+    echo "• No internet connectivity required"
+    echo "• Pre-downloaded models and dependencies"
+    echo "• Enhanced security for sensitive environments"
+    echo "• Compliance with strict security policies"
+    echo ""
+    echo -e "${YELLOW}Air-gap deployment coming soon...${COLOR_RESET}"
+    echo -e "\n${DIM}Press Enter to continue...${COLOR_RESET}"
+    read -r
+}
+
+# Handle dashboard command
+handle_dashboard_command() {
+    log_message "INFO" "Showing dashboard"
+    
+    # Display comprehensive system dashboard
+    echo -e "\n${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
+    echo -e "${BOLD}               📊 Leonardo AI Dashboard                ${COLOR_RESET}"
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
+    
+    # System Overview
+    echo -e "\n${BOLD}System Overview:${COLOR_RESET}"
+    echo "├─ Leonardo Version: v7.0.0"
+    echo "├─ Deployment Mode: $(is_usb_deployment && echo "USB Drive" || echo "Host System")"
+    echo "├─ Base Directory: ${LEONARDO_BASE_DIR}"
+    echo "└─ Uptime: $(uptime -p 2>/dev/null || echo "N/A")"
+    
+    # Hardware Resources
+    echo -e "\n${BOLD}Hardware Resources:${COLOR_RESET}"
+    echo "├─ CPU: $(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo "Unknown") cores"
+    echo "├─ RAM: $(free -h 2>/dev/null | awk '/^Mem:/ {print $2 " total, " $3 " used"}' || echo "Unknown")"
+    if command -v nvidia-smi >/dev/null 2>&1; then
+        local gpu_name=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)
+        echo "├─ GPU: ${gpu_name:-NVIDIA GPU detected}"
+    else
+        echo "├─ GPU: No NVIDIA GPU detected"
+    fi
+    echo "└─ Storage: $(df -h "${LEONARDO_BASE_DIR}" 2>/dev/null | awk 'NR==2 {print $4}' || echo "Unknown")"
+    
+    # Model Status
+    echo -e "\n${BOLD}Model Status:${COLOR_RESET}"
+    local model_count=0
+    if [[ -d "${LEONARDO_MODELS_DIR}" ]]; then
+        model_count=$(find "${LEONARDO_MODELS_DIR}" -name "*.gguf" 2>/dev/null | wc -l)
+    fi
+    echo "├─ Local GGUF Models: ${model_count}"
+    if command -v ollama >/dev/null 2>&1; then
+        echo "├─ Ollama Status: ${GREEN}✓ Installed${COLOR_RESET}"
+        local ollama_models=$(ollama list 2>/dev/null | tail -n +2 | wc -l)
+        echo "└─ Ollama Models: ${ollama_models:-0}"
+    else
+        echo "└─ Ollama Status: ${YELLOW}⚠ Not installed${COLOR_RESET}"
+    fi
+    
+    # Network Status
+    echo -e "\n${BOLD}Network Status:${COLOR_RESET}"
+    if check_internet_connection; then
+        echo "├─ Internet: ${GREEN}✓ Connected${COLOR_RESET}"
+        echo "└─ Model Downloads: Available"
+    else
+        echo "├─ Internet: ${RED}✗ Offline${COLOR_RESET}"
+        echo "└─ Model Downloads: Unavailable"
+    fi
+    
+    # Quick Actions
+    echo -e "\n${BOLD}Quick Actions:${COLOR_RESET}"
+    echo "1. Start Chat → Main Menu → Option 3"
+    echo "2. Download Models → Main Menu → Option 2"
+    echo "3. USB Setup → Main Menu → Option 4"
+    
+    if show_dashboard 2>/dev/null; then
+        # Extended dashboard from dashboard.sh if available
+        :
+    fi
+    
+    echo -e "\n${DIM}Press Enter to continue...${COLOR_RESET}"
+    read -r
+}
+
+# Handle web interface command
+handle_web_command() {
+    log_message "INFO" "Starting web interface"
+    
+    echo -e "\n${CYAN}🌐 Leonardo Web Interface${COLOR_RESET}"
+    echo "════════════════════════════════════════════"
+    
+    # Check if web server module is available
+    if command -v start_web_server >/dev/null 2>&1; then
+        echo "Starting web server..."
+        
+        # Set default port
+        local port="${LEONARDO_WEB_PORT:-8080}"
+        
+        echo -e "\n${BOLD}Web Interface will be available at:${COLOR_RESET}"
+        echo "• Local: http://localhost:${port}"
+        
+        # Get local IP addresses
+        if command -v ip >/dev/null 2>&1; then
+            local ips=$(ip addr show | grep -Eo 'inet ([0-9]{1,3}\.){3}[0-9]{1,3}' | grep -v '127.0.0.1' | awk '{print $2}')
+            if [[ -n "$ips" ]]; then
+                echo "• Network:"
+                while IFS= read -r ip; do
+                    echo "  - http://${ip}:${port}"
+                done <<< "$ips"
+            fi
+        fi
+        
+        echo -e "\n${YELLOW}Press Ctrl+C to stop the web server${COLOR_RESET}"
+        echo ""
+        
+        # Start the web server
+        start_web_server
+    else
+        echo -e "${YELLOW}Web interface module not available${COLOR_RESET}"
+        echo ""
+        echo "The web interface provides:"
+        echo "• Browser-based chat interface"
+        echo "• Model management dashboard"
+        echo "• System monitoring"
+        echo "• Remote access capabilities"
+        echo ""
+        echo -e "${DIM}Coming soon in future updates...${COLOR_RESET}"
+        echo -e "\n${DIM}Press Enter to continue...${COLOR_RESET}"
+        read -r
+    fi
 }

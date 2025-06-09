@@ -46,12 +46,19 @@ COMPONENTS=(
     "src/utils/network.sh"
     "src/utils/terminal.sh"
     
+    # System status tracking
+    "src/core/system_status.sh"
+    
     # UI components
     "src/ui/menu.sh"
     "src/ui/progress.sh"
     "src/ui/dashboard.sh"
     "src/ui/web.sh"
     "src/ui/web_server.sh"
+    
+    # Chat features
+    "src/chat/chat_wrapper.sh"
+    "src/chat/usb_inference.sh"
     
     # Security (stubs for now)
     "src/security/audit.sh"

@@ -7,6 +7,61 @@
 # Dependencies: colors.sh, logging.sh
 # ==============================================================================
 
+# ==============================================================================
+# UTILITY FUNCTIONS - Must be defined before use
+# ==============================================================================
+
+# Format duration from seconds
+format_duration() {
+    local seconds="$1"
+    local hours=$((seconds / 3600))
+    local minutes=$(((seconds % 3600) / 60))
+    local secs=$((seconds % 60))
+    
+    if [[ $hours -gt 0 ]]; then
+        printf "%02d:%02d:%02d" "$hours" "$minutes" "$secs"
+    elif [[ $minutes -gt 0 ]]; then
+        printf "%02d:%02d" "$minutes" "$secs"
+    else
+        printf "%ds" "$secs"
+    fi
+}
+
+# Format bytes for display
+format_bytes() {
+    local bytes="$1"
+    local units=("B" "KB" "MB" "GB" "TB")
+    local unit=0
+    
+    # Use bc for floating point math if available
+    if command -v bc >/dev/null 2>&1; then
+        local size=$bytes
+        while [[ $(echo "$size >= 1024" | bc 2>/dev/null) == "1" ]] && [[ $unit -lt 4 ]]; do
+            size=$(echo "scale=2; $size / 1024" | bc 2>/dev/null)
+            ((unit++))
+        done
+        
+        # Format with appropriate precision
+        if [[ $unit -eq 0 ]]; then
+            printf "%d %s" "$bytes" "${units[unit]}"
+        else
+            printf "%.2f %s" "$size" "${units[unit]}"
+        fi
+    else
+        # Fallback without bc
+        local size=$bytes
+        while [[ $size -ge 1024 ]] && [[ $unit -lt 4 ]]; do
+            size=$((size / 1024))
+            ((unit++))
+        done
+        printf "%d %s" "$size" "${units[unit]}"
+    fi
+}
+
+# ==============================================================================
+# PROGRESS BAR FUNCTIONS
+# ==============================================================================
+
 # Progress bar state
 declare -g PROGRESS_ACTIVE=0
 declare -g PROGRESS_PID=""
@@ -180,64 +235,73 @@ stop_spinner() {
     printf "\r\033[K"  # Clear line
 }
 
-# Matrix-style progress
-show_matrix_progress() {
-    local message="$1"
-    local duration="${2:-5}"
-    local width="${3:-$(tput cols)}"
-    
-    # Matrix rain characters
-    local chars="ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ0123456789"
-    local drops=()
-    
-    # Initialize drops
-    for ((i=0; i<width; i++)); do
-        drops[i]=$((RANDOM % 20 - 10))
-    done
-    
-    # Save screen state
-    tput smcup
-    clear
-    
-    local start_time=$(date +%s)
-    while [[ $(($(date +%s) - start_time)) -lt $duration ]]; do
-        clear
-        
-        # Update and draw drops
-        for ((x=0; x<width; x++)); do
-            local y=${drops[x]}
-            if [[ $y -ge 0 ]]; then
-                # Draw the trail
-                for ((ty=0; ty<y && ty<20; ty++)); do
-                    tput cup $ty $x
-                    local brightness=$((255 - (y - ty) * 12))
-                    printf "\033[38;2;0;%d;0m%s\033[0m" \
-                        "$brightness" \
-                        "${chars:$((RANDOM % ${#chars})):1}"
-                done
-            fi
-            
-            # Move drop down
-            drops[x]=$((drops[x] + 1))
-            
-            # Reset drop if it goes off screen
-            if [[ ${drops[x]} -gt 25 ]]; then
-                drops[x]=$((RANDOM % 10 - 10))
-            fi
-        done
-        
-        # Display message in center
-        local msg_y=$(($(tput lines) / 2))
-        local msg_x=$(((width - ${#message}) / 2))
-        tput cup $msg_y $msg_x
-        echo -e "${BRIGHT}${GREEN}$message${RESET}"
-        
-        sleep 0.05
-    done
-    
-    # Restore screen
-    tput rmcup
-}
+# Matrix-style progress - DISABLED DUE TO SYNTAX ISSUES
+# show_matrix_progress() {
+#     local message="$1"
+#     local duration="${2:-5}"
+#     local width="${3:-$(tput cols)}"
+#     
+#     # Matrix rain characters
+#     local chars="ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ0123456789"
+#     local drops=()
+#     
+#     # Initialize drops
+#     for ((i=0; i<width; i++)); do
+#         drops[i]=$((RANDOM % 20 - 10))
+#     done
+#     
+#     # Save screen state
+#     tput smcup
+#     clear
+#     
+#     local start_time=$(date +%s)
+#     local end_time=$((start_time + duration))
+#     
+#     # Hide cursor
+#     tput civis
+#     
+#     while [[ $(date +%s) -lt $end_time ]]; do
+#         for ((x=0; x<width; x++)); do
+#             local y=${drops[x]}
+#             
+#             # Draw new character at bottom of trail
+#             if [[ $y -ge 0 && $y -lt 20 ]]; then
+#                 tput cup $y $x
+#                 echo -ne "${BRIGHT_GREEN}${chars:$((RANDOM % ${#chars})):1}${NC}"
+#                 
+#                 # Draw the trail
+#                 for ((ty=0; ty<y && ty<20; ty++)); do
+#                     tput cup $ty $x
+#                     local char_index=$((RANDOM % ${#chars}))
+#                     local char="${chars:$char_index:1}"
+#                     echo -ne "${GREEN}${char}${NC}"
+#                 done
+#             fi
+#             
+#             # Move drop down
+#             drops[x]=$((drops[x] + 1))
+#             
+#             # Reset drop if it goes off screen
+#             if [[ ${drops[x]} -gt 25 ]]; then
+#                 drops[x]=$((RANDOM % 10 - 10))
+#             fi
+#         done
+#         
+#         # Display message in center
+#         local msg_y=$((10))
+#         local msg_x=$(((width - ${#message}) / 2))
+#         tput cup $msg_y $msg_x
+#         echo -ne "${BOLD}${CYAN}${message}${NC}"
+#         
+#         sleep 0.05
+#     done
+#     
+#     # Show cursor
+#     tput cnorm
+#     
+#     # Restore screen
+#     tput rmcup
+# }
 
 # Download progress with speed and time
 show_download_progress() {
@@ -289,7 +353,7 @@ track_download_progress() {
             # Update progress bar
             printf "\r${CYAN}Downloading:${COLOR_RESET} "
             show_progress_bar "${percent%.*}" 100 30
-            printf " ${percent}%% | ${downloaded} | ${speed} | ETA: ${eta}  "
+            printf " %s%% \| %s \| ETA: %s  " "$percent" "$speed" "$eta"
         fi
     done
     
@@ -335,8 +399,19 @@ download_with_progress() {
         # Download with progress
         if curl -L $resume_flag -# -o "$output_file" "$url" 2>&1 | \
         while IFS= read -r line; do
-            if [[ "$line" =~ ^[[:space:]]*([0-9]+)\.?[0-9]*[[:space:]]+([0-9]+[kMG]?)[[:space:]]+([0-9]+)\.?[0-9]*[[:space:]]+([0-9]+[kMG]?/s)[[:space:]]+.*[[:space:]]+([0-9]+:[0-9]+:[0-9]+|[0-9]+:[0-9]+|[0-9]+s|--:--:--) ]]; then
-                local percent="${BASH_REMATCH[1]}"
+            # Match curl's progress bar format: ######################################################################## 100.0%
+            if [[ "$line" =~ ^[#[:space:]]+([0-9]+)\+[0-9]+[[:space:]]records ]]; then
+                local blocks="${BASH_REMATCH[1]}"
+                local percent=$((blocks * 100 / 100))
+                local copied=$((blocks * 1048576))
+                local copied_fmt=$(format_bytes "$copied")
+                
+                printf "\r"
+                show_progress_bar "$percent" 100 40
+                printf " %s%% \| %s/%s  " "$percent" "$copied_fmt" "$(format_bytes 104857600)"
+            elif [[ "$line" =~ ^[[:space:]]*([0-9]+)[[:space:]]+([0-9]+[kMG]?)[[:space:]]+([0-9]+)[%][[:space:]]+([0-9]+[kMG]?/s)[[:space:]]+.*[[:space:]]+([0-9]+:[0-9]+:[0-9]+|[0-9]+:[0-9]+|[0-9]+s|--:--:--) ]]; then
+                # Alternative format with more details
+                local percent="${BASH_REMATCH[3]}"
                 local downloaded="${BASH_REMATCH[2]}"
                 local speed="${BASH_REMATCH[4]}"
                 local eta="${BASH_REMATCH[5]}"
@@ -344,7 +419,7 @@ download_with_progress() {
                 # Update progress bar
                 printf "\r"
                 show_progress_bar "$percent" 100 40
-                printf " ${percent}%% | ${speed} | ETA: ${eta}  "
+                printf " %s%% \| %s \| ETA: %s  " "$percent" "$speed" "$eta"
             fi
         done; then
             printf "\r%-80s\r" " "
@@ -398,7 +473,7 @@ copy_with_progress() {
                 
                 printf "\r"
                 show_progress_bar "$percent" 100 40
-                printf " ${percent}%% | ${copied_fmt}/${total_size_fmt}  "
+                printf " %s%% \| %s/%s  " "$percent" "$copied_fmt" "$total_size_fmt"
             fi
         done
     ) &
@@ -414,7 +489,7 @@ copy_with_progress() {
             
             printf "\r"
             show_progress_bar "$percent" 100 40
-            printf " ${percent}%% | ${copied_fmt}/${total_size_fmt}  "
+            printf " %s%% \| %s/%s  " "$percent" "$copied_fmt" "$total_size_fmt"
         fi
         sleep 0.1
     done
@@ -461,15 +536,15 @@ copy_directory_with_progress() {
     # Copy with rsync and progress
     rsync -ah --info=progress2 "$source_dir/" "$dest_dir/" 2>&1 | \
     while IFS= read -r line; do
-        if [[ "$line" =~ ^[[:space:]]*([0-9,]+)[[:space:]]+([0-9]+)%[[:space:]]+([0-9.]+[kMG]B/s)[[:space:]]+([0-9:]+) ]]; then
-            local transferred="${BASH_REMATCH[1]//,/}"
-            local percent="${BASH_REMATCH[2]}"
-            local speed="${BASH_REMATCH[3]}"
-            local eta="${BASH_REMATCH[4]}"
+        if [[ "$line" =~ ^[[:space:]]*([0-9]+)[[:space:]]+([0-9]+[kMG]?)[[:space:]]+([0-9]+)[%][[:space:]]+([0-9]+[kMG]?/s)[[:space:]]+.*[[:space:]]+([0-9]+:[0-9]+:[0-9]+|[0-9]+:[0-9]+|[0-9]+s|--:--:--) ]]; then
+            local percent="${BASH_REMATCH[3]}"
+            local downloaded="${BASH_REMATCH[2]}"
+            local speed="${BASH_REMATCH[4]}"
+            local eta="${BASH_REMATCH[5]}"
             
             printf "\r"
             show_progress_bar "$percent" 100 40
-            printf " ${percent}%% | ${speed} | ETA: ${eta}  "
+            printf " %s%% \| %s \| ETA: %s  " "$percent" "$speed" "$eta"
         fi
     done
     
@@ -530,40 +605,6 @@ show_countdown() {
     show_status "done" "$message complete!"
 }
 
-# Format duration for display
-format_duration() {
-    local seconds="$1"
-    
-    if [[ $seconds -lt 60 ]]; then
-        echo "${seconds}s"
-    elif [[ $seconds -lt 3600 ]]; then
-        printf "%dm %ds" $((seconds / 60)) $((seconds % 60))
-    else
-        printf "%dh %dm" $((seconds / 3600)) $((seconds % 3600 / 60))
-    fi
-}
-
-# Format bytes for display
-format_bytes() {
-    local bytes="$1"
-    local units=("B" "KB" "MB" "GB" "TB")
-    local unit=0
-    
-    # Use bc for floating point math
-    local size=$bytes
-    while [[ $(echo "$size >= 1024" | bc 2>/dev/null) == "1" ]] && [[ $unit -lt 4 ]]; do
-        size=$(echo "scale=2; $size / 1024" | bc 2>/dev/null)
-        ((unit++))
-    done
-    
-    # Format with appropriate precision
-    if [[ $unit -eq 0 ]]; then
-        printf "%d %s" "$bytes" "${units[unit]}"
-    else
-        printf "%.2f %s" "$size" "${units[unit]}"
-    fi
-}
-
 # ASCII art progress animations
 show_ascii_progress() {
     local type="$1"
@@ -613,5 +654,5 @@ show_progress() {
 # Export progress functions
 export -f show_progress_bar show_multi_progress show_spinner stop_spinner
 export -f show_progress show_download_progress show_status show_countdown
-export -f format_duration format_bytes show_matrix_progress show_ascii_progress
+export -f format_duration format_bytes show_ascii_progress
 export -f track_download_progress download_with_progress copy_with_progress copy_directory_with_progress

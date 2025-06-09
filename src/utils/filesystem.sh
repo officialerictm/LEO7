@@ -1,12 +1,9 @@
 #!/usr/bin/env bash
-# ==============================================================================
-# Leonardo AI Universal - File System Utilities
-# ==============================================================================
-# Description: File system operations, USB detection, and disk management
+# =======================================================================# Leonardo AI Universal - File System Utilities
+# =======================================================================# Description: File system operations, USB detection, and disk management
 # Version: 7.0.0
 # Dependencies: logging.sh, colors.sh, validation.sh
-# ==============================================================================
-
+# =======================================================================
 # Create directory with proper permissions
 create_directory() {
     local dir="$1"
@@ -215,12 +212,41 @@ format_usb_device() {
                         # If immediate format fails, try a different approach
                         echo -e "${YELLOW}Initial format failed, trying alternative approach...${COLOR_RESET}"
                         
+                        # First, aggressively unmount with force
+                        echo -e "${DIM}Force unmounting device...${COLOR_RESET}"
+                        echo -e "${YELLOW}Root privileges required for force unmount.${COLOR_RESET}"
+                        if sudo umount -f "$partition" 2>/dev/null; then
+                            echo -e "${GREEN}✓ Force unmount successful${COLOR_RESET}"
+                        else
+                            echo -e "${DIM}Force unmount didn't work, trying lazy unmount...${COLOR_RESET}"
+                            sudo umount -l "$partition" 2>/dev/null || true
+                        fi
+                        
+                        # Check what's still using the device
                         # First, check what's using the device
                         echo -e "${DIM}Checking what's using the device...${COLOR_RESET}"
                         local device_users=$(sudo lsof "$partition" 2>/dev/null || true)
                         if [[ -n "$device_users" ]]; then
                             echo -e "${YELLOW}Processes using device:${COLOR_RESET}"
                             echo "$device_users"
+                            
+                            # Try to kill processes using the device (carefully)
+                            echo -e "${DIM}Attempting to stop processes using the device...${COLOR_RESET}"
+                            local pids=$(sudo lsof -t "$partition" 2>/dev/null || true)
+                            if [[ -n "$pids" ]]; then
+                                for pid in $pids; do
+                                    # Skip critical system processes
+                                    local proc_name=$(ps -p "$pid" -o comm= 2>/dev/null || true)
+                                    if [[ "$proc_name" != "systemd" ]] && [[ "$proc_name" != "init" ]]; then
+                                        echo -e "${DIM}Stopping process $pid ($proc_name)...${COLOR_RESET}"
+                                        sudo kill -TERM "$pid" 2>/dev/null || true
+                                    fi
+                                done
+                                sleep 1
+                            fi
+                        fi
+                        
+                        # Try to eject the device properly
                         fi
                         
                         # Try to eject the device properly first
@@ -228,6 +254,8 @@ format_usb_device() {
                         sudo eject "$partition" 2>/dev/null || true
                         sleep 2
                         
+                        # One more aggressive unmount attempt
+                        echo -e "${DIM}Final unmount attempt...${COLOR_RESET}"
                         # Now unmount with all methods
                         sudo umount "$partition" 2>/dev/null || true
                         sudo umount -f "$partition" 2>/dev/null || true
@@ -236,6 +264,7 @@ format_usb_device() {
                         # Force a sync
                         sync
                         
+                        # Wait for device to settle
                         # Wait for device to settle (you mentioned hearing disconnect)
                         echo -e "${DIM}Waiting for device to settle...${COLOR_RESET}"
                         sleep 3

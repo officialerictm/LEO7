@@ -79,6 +79,69 @@ download_model() {
     
     echo -e "${CYAN}Downloading model: $model_spec${COLOR_RESET}"
     
+    # Check if we're in USB deployment mode
+    if [[ "${LEONARDO_USB_MODE}" == "true" ]] && [[ -n "${LEONARDO_USB_MOUNT:-}" ]]; then
+        echo -e "${YELLOW}USB deployment mode - downloading to USB instead of host${COLOR_RESET}"
+        
+        # For USB mode, always download GGUF files directly
+        case "$provider" in
+            ollama)
+                echo "Converting Ollama model to GGUF download..."
+                # Try to find GGUF URL for this model
+                local model_id="${model_spec%:*}"
+                local variant="${model_spec#*:}"
+                
+                # Check if we have a registry entry
+                if [[ -f "${LEONARDO_DIR}/src/models/registry_loader.sh" ]]; then
+                    source "${LEONARDO_DIR}/src/models/registry_loader.sh"
+                fi
+                
+                local model_url=""
+                if [[ -n "${LEONARDO_GGUF_REGISTRY[${model_id}:${variant}]:-}" ]]; then
+                    model_url="${LEONARDO_GGUF_REGISTRY[${model_id}:${variant}]}"
+                else
+                    # Try common GGUF sources
+                    case "$model_id" in
+                        phi*) model_url="https://huggingface.co/microsoft/phi-2-gguf/resolve/main/phi-2.Q4_K_M.gguf" ;;
+                        llama2*) model_url="https://huggingface.co/TheBloke/Llama-2-7B-GGUF/resolve/main/llama-2-7b.Q4_K_M.gguf" ;;
+                        mistral*) model_url="https://huggingface.co/TheBloke/Mistral-7B-v0.1-GGUF/resolve/main/mistral-7b-v0.1.Q4_K_M.gguf" ;;
+                        qwen*) model_url="https://huggingface.co/Qwen/Qwen2.5-3B-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf" ;;
+                        *) 
+                            echo -e "${RED}No GGUF URL found for $model_id. Please use direct GGUF download.${COLOR_RESET}"
+                            return 1
+                            ;;
+                    esac
+                fi
+                
+                # Download to USB
+                local output_file="${LEONARDO_USB_MOUNT}/leonardo/models/${model_id}-${variant}.gguf"
+                ensure_directory "$(dirname "$output_file")"
+                
+                download_with_progress "$model_url" "$output_file" "Downloading ${model_id} to USB"
+                return $?
+                ;;
+            huggingface|gguf)
+                # Direct GGUF download to USB
+                local model_id="${model_spec%:*}"
+                local variant="${model_spec#*:}"
+                local output_file="${LEONARDO_USB_MOUNT}/leonardo/models/${model_id//\//-}-${variant}.gguf"
+                
+                ensure_directory "$(dirname "$output_file")"
+                
+                # Construct HuggingFace URL
+                local hf_url="https://huggingface.co/${model_id}/resolve/main/${variant}.gguf"
+                
+                download_with_progress "$hf_url" "$output_file" "Downloading to USB"
+                return $?
+                ;;
+            *)
+                echo -e "${RED}Provider $provider not supported in USB mode${COLOR_RESET}"
+                return 1
+                ;;
+        esac
+    fi
+    
+    # Original host-based download logic
     case "$provider" in
         ollama)
             if command_exists ollama; then

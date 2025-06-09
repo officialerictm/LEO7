@@ -119,42 +119,39 @@ show_system_info() {
     # OS info
     local os_name=$(uname -s)
     local os_version=$(uname -r)
-    printf "OS: ${CYAN}%-25s${RESET}\n" "$os_name $os_version"
+    echo -e "${DIM}OS:${RESET} $os_name $os_version"
     
-    # CPU info
-    local cpu_model="Unknown"
-    local cpu_cores=1
-    if [[ -f /proc/cpuinfo ]]; then
-        cpu_model=$(grep "model name" /proc/cpuinfo | head -1 | cut -d: -f2 | xargs)
-        cpu_cores=$(grep -c "processor" /proc/cpuinfo)
-    elif command -v sysctl >/dev/null 2>&1; then
-        cpu_model=$(sysctl -n machdep.cpu.brand_string 2>/dev/null || echo "Unknown")
-        cpu_cores=$(sysctl -n hw.ncpu 2>/dev/null || echo "1")
+    # Service locations
+    local ollama_loc=$(detect_ollama_location)
+    local leonardo_loc=$(detect_leonardo_location)
+    
+    # Ollama status with color
+    echo -ne "${DIM}Ollama:${RESET} "
+    case "$ollama_loc" in
+        Host)
+            echo -e "${GREEN}Running on Host${RESET}"
+            ;;
+        USB)
+            echo -e "${CYAN}Running on USB${RESET}"
+            ;;
+        "Host (not running)")
+            echo -e "${YELLOW}Host (offline)${RESET}"
+            ;;
+        "USB (not running)")
+            echo -e "${YELLOW}USB (offline)${RESET}"
+            ;;
+        none)
+            echo -e "${RED}Not found${RESET}"
+            ;;
+    esac
+    
+    # Leonardo location
+    echo -ne "${DIM}Leonardo:${RESET} "
+    if [[ "$leonardo_loc" == "USB" ]]; then
+        echo -e "${CYAN}Running from USB${RESET}"
+    else
+        echo -e "${GREEN}Running from Host${RESET}"
     fi
-    printf "CPU: ${CYAN}%-24s${RESET}\n" "${cpu_model:0:24}"
-    printf "Cores: ${CYAN}%-22s${RESET}\n" "$cpu_cores"
-    
-    # Memory info
-    local total_mem=0
-    local free_mem=0
-    if command -v free >/dev/null 2>&1; then
-        total_mem=$(free -b | awk '/^Mem:/ {print $2}')
-        free_mem=$(free -b | awk '/^Mem:/ {print $4}')
-    elif command -v vm_stat >/dev/null 2>&1; then
-        local pages=$(vm_stat | grep "Pages free" | awk '{print $3}' | tr -d '.')
-        free_mem=$((pages * 4096))
-        total_mem=$(sysctl -n hw.memsize 2>/dev/null || echo "0")
-    fi
-    
-    printf "Memory: ${CYAN}%s / %s${RESET}\n" \
-        "$(format_bytes "$free_mem")" \
-        "$(format_bytes "$total_mem")"
-    
-    # Disk space
-    local disk_info=$(df -h / | tail -1)
-    local disk_used=$(echo "$disk_info" | awk '{print $3}')
-    local disk_total=$(echo "$disk_info" | awk '{print $2}')
-    printf "Disk: ${CYAN}%s / %s${RESET}\n" "$disk_used" "$disk_total"
 }
 
 # USB device status

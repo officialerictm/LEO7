@@ -1,12 +1,9 @@
 #!/usr/bin/env bash
-# ==============================================================================
-# Leonardo AI Universal - USB Deployment Module
-# ==============================================================================
-# Description: Deploy Leonardo and AI models to USB drives
+# =======================================================================# Leonardo AI Universal - USB Deployment Module
+# =======================================================================# Description: Deploy Leonardo and AI models to USB drives
 # Version: 7.0.0
 # Dependencies: colors.sh, logging.sh, usb/*.sh, models/*.sh, checksum.sh
-# ==============================================================================
-
+# =======================================================================
 # USB deployment configuration
 USB_DEPLOY_MIN_SPACE_GB=8
 USB_DEPLOY_RECOMMENDED_SPACE_GB=32
@@ -369,6 +366,29 @@ EOF
     cat > "$target_dir/start-leonardo" << 'EOF'
 #!/bin/bash
 # Leonardo AI Universal Launcher
+
+# Get the directory where this script is located
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Auto-detect USB mount point
+if [[ "$SCRIPT_DIR" =~ ^(/media/[^/]+/[^/]+)/.* ]] || \
+   [[ "$SCRIPT_DIR" =~ ^(/mnt/[^/]+)/.* ]] || \
+   [[ "$SCRIPT_DIR" =~ ^(/run/media/[^/]+/[^/]+)/.* ]] || \
+   [[ "$SCRIPT_DIR" =~ ^(/Volumes/[^/]+)/.* ]]; then
+    export LEONARDO_USB_MOUNT="${BASH_REMATCH[1]}"
+else
+    export LEONARDO_USB_MOUNT="$SCRIPT_DIR"
+fi
+
+# Set USB environment
+export LEONARDO_USB_MODE="true"
+export LEONARDO_DIR="${LEONARDO_USB_MOUNT}/leonardo"
+export LEONARDO_MODEL_DIR="${LEONARDO_USB_MOUNT}/leonardo/models"
+export LEONARDO_CONFIG_DIR="${LEONARDO_USB_MOUNT}/leonardo/config"
+
+# Launch Leonardo
+cd "$LEONARDO_DIR"
+exec ./leonardo.sh "$@"
 cd "$(dirname "$0")"
 ./leonardo/leonardo.sh "$@"
 EOF
@@ -392,6 +412,7 @@ EOF
 # Configure Leonardo for USB deployment
 configure_usb_leonardo() {
     local config_file="$LEONARDO_USB_MOUNT/leonardo/config/leonardo.conf"
+    local deployment_config="$LEONARDO_USB_MOUNT/leonardo/config/deployment.conf"
     
     # Create configuration
     cat > "$config_file" << EOF
@@ -399,33 +420,37 @@ configure_usb_leonardo() {
 # Generated: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
 
 # Deployment type
-LEONARDO_DEPLOYMENT_TYPE="usb"
+LEONARDO_USB_MODE=true
+LEONARDO_USB_MOUNT="$LEONARDO_USB_MOUNT"
+LEONARDO_MODEL_DIR="$LEONARDO_USB_MOUNT/leonardo/models"
+LEONARDO_CONFIG_DIR="$LEONARDO_USB_MOUNT/leonardo/config"
+LEONARDO_DATA_DIR="$LEONARDO_USB_MOUNT/leonardo/data"
 
-# USB-specific settings
+# Paths relative to USB mount
+LEONARDO_RELATIVE_PATH="/leonardo"
+LEONARDO_MODELS_RELATIVE="/leonardo/models"
+
+# USB optimizations
+LEONARDO_USB_CACHE_SIZE=512
+LEONARDO_USB_PREFETCH=true
+LEONARDO_USB_SYNC_INTERVAL=300
+
+# Privacy settings
+LEONARDO_NO_TELEMETRY=true
+LEONARDO_NO_HOST_ACCESS=false
+EOF
+
+    # Create deployment configuration
+    cat > "$deployment_config" << EOF
+# Leonardo Deployment Configuration
+# Mode: USB
+LEONARDO_DEPLOYMENT_MODE="usb"
 LEONARDO_USB_MODE="true"
-LEONARDO_PORTABLE_MODE="true"
-LEONARDO_NO_INSTALL="true"
-
-# Paths (relative to USB root)
-LEONARDO_BASE_DIR="\$(dirname "\$(readlink -f "\$0")")/leonardo"
-LEONARDO_MODEL_DIR="\$LEONARDO_BASE_DIR/models"
-LEONARDO_CACHE_DIR="\$LEONARDO_BASE_DIR/cache"
-LEONARDO_CONFIG_DIR="\$LEONARDO_BASE_DIR/config"
-LEONARDO_LOG_DIR="\$LEONARDO_BASE_DIR/logs"
-LEONARDO_DATA_DIR="\$LEONARDO_BASE_DIR/data"
-
-# Performance settings for USB
-LEONARDO_LOW_MEMORY_MODE="true"
-LEONARDO_CACHE_SIZE_MB="512"
-LEONARDO_MAX_THREADS="4"
-
-# Security settings
-LEONARDO_PARANOID_MODE="true"
-LEONARDO_NO_TELEMETRY="true"
-LEONARDO_CLEANUP_ON_EXIT="true"
+LEONARDO_USB_ONLY="false"
+LEONARDO_USB_MOUNT="$LEONARDO_USB_MOUNT"
 EOF
     
-    log_message "SUCCESS" "USB configuration created"
+    echo -e "${GREEN}✓ USB configuration created${COLOR_RESET}" >&2
 }
 
 # Deploy models to USB
@@ -528,6 +553,20 @@ download_model_to_usb() {
     # Set download target
     export LEONARDO_MODEL_DIR="$target_dir"
     
+    echo "Downloading from model registry..." >&2
+    
+    # Set LEONARDO_DIR if not already set
+    if [[ -z "${LEONARDO_DIR:-}" ]]; then
+        # Try to determine the Leonardo installation directory
+        if [[ -f "${LEONARDO_BASE_DIR}/src/models/registry_loader.sh" ]]; then
+            LEONARDO_DIR="${LEONARDO_BASE_DIR}"
+        elif [[ -f "${HOME}/.leonardo/src/models/registry_loader.sh" ]]; then
+            LEONARDO_DIR="${HOME}/.leonardo"
+        elif [[ -f "./src/models/registry_loader.sh" ]]; then
+            LEONARDO_DIR="$(pwd)"
+        else
+            # Fallback - assume we're in the Leonardo directory
+            LEONARDO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
     echo -e "${CYAN}Downloading ${model_id}:${variant}${COLOR_RESET}" >&2
     
     # Check if we have Ollama provider
@@ -716,16 +755,90 @@ EOF
                 return 0
             fi
         fi
+        export LEONARDO_DIR
     fi
     
+    # Load dynamic registry if available
+    if [[ -f "${LEONARDO_DIR}/src/models/registry_loader.sh" ]]; then
+        source "${LEONARDO_DIR}/src/models/registry_loader.sh"
+    fi
     # Direct download from registry as fallback
     echo "Downloading from model registry..." >&2
     
     # Debug output
     echo -e "${DIM}DEBUG: Looking for model '${model_id}:${variant}' in registry${COLOR_RESET}" >&2
     
-    # Map common model names to HuggingFace URLs
+    # Check dynamic registry first
     local model_url=""
+    if [[ -n "${LEONARDO_GGUF_REGISTRY[${model_id}:${variant}]:-}" ]]; then
+        model_url="${LEONARDO_GGUF_REGISTRY[${model_id}:${variant}]}"
+        echo -e "${DIM}Found in dynamic registry${COLOR_RESET}" >&2
+    else
+        # Fallback to hardcoded registry
+        echo -e "${DIM}Checking hardcoded registry${COLOR_RESET}" >&2
+        
+        case "${model_id}:${variant}" in
+            "phi:2.7b")
+                model_url="https://huggingface.co/microsoft/phi-2/resolve/main/phi-2.Q4_K_M.gguf"
+                ;;
+            "llama2:7b")
+                model_url="https://huggingface.co/TheBloke/Llama-2-7B-GGUF/resolve/main/llama-2-7b.Q4_K_M.gguf"
+                ;;
+            "mistral:7b")
+                model_url="https://huggingface.co/TheBloke/Mistral-7B-v0.1-GGUF/resolve/main/mistral-7b-v0.1.Q4_K_M.gguf"
+                ;;
+            "llama3.2:1b")
+                model_url="https://huggingface.co/lmstudio-community/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf"
+                ;;
+            "llama3.2:3b")
+                model_url="https://huggingface.co/lmstudio-community/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf"
+                ;;
+            "qwen2.5:3b")
+                model_url="https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf"
+                ;;
+            "gemma2:2b")
+                model_url="https://huggingface.co/lmstudio-community/gemma-2-2b-it-GGUF/resolve/main/gemma-2-2b-it-Q4_K_M.gguf"
+                ;;
+            "codellama:7b")
+                model_url="https://huggingface.co/TheBloke/CodeLlama-7B-Instruct-GGUF/resolve/main/codellama-7b-instruct.Q4_K_M.gguf"
+                ;;
+            "llama3.1:8b")
+                model_url="https://huggingface.co/lmstudio-community/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf"
+                ;;
+            "llama2:13b")
+                model_url="https://huggingface.co/TheBloke/Llama-2-13B-chat-GGUF/resolve/main/llama-2-13b-chat.Q4_K_M.gguf"
+                ;;
+        esac
+    fi
+    
+    if [[ -z "$model_url" ]]; then
+        echo -e "${RED}✗ Model ${model_id}:${variant} not found in registry${COLOR_RESET}" >&2
+        
+        # Show available models from both registries
+        echo -e "${YELLOW}Available models:${COLOR_RESET}" >&2
+        
+        # Dynamic registry models
+        if [[ ${#LEONARDO_GGUF_REGISTRY[@]} -gt 0 ]]; then
+            echo -e "${DIM}From dynamic registry:${COLOR_RESET}" >&2
+            for model in "${!LEONARDO_GGUF_REGISTRY[@]}"; do
+                echo "  - $model" >&2
+            done | sort
+        fi
+        
+        # Hardcoded models
+        echo -e "${DIM}From hardcoded registry:${COLOR_RESET}" >&2
+        echo "  - phi:2.7b" >&2
+        echo "  - llama2:7b" >&2
+        echo "  - mistral:7b" >&2
+        echo "  - llama3.2:1b" >&2
+        echo "  - llama3.2:3b" >&2
+        echo "  - qwen2.5:3b" >&2
+        echo "  - gemma2:2b" >&2
+        echo "  - codellama:7b" >&2
+        echo "  - llama3.1:8b" >&2
+        echo "  - llama2:13b" >&2
+        return 1
+    fi
     case "${model_id}:${variant}" in
         "phi:2.7b")
             model_url="https://huggingface.co/microsoft/phi-2/resolve/main/phi-2.Q4_K_M.gguf"
@@ -780,7 +893,7 @@ Model: ${model_id}:${variant}
 Downloaded: $(date)
 Type: GGUF Model
 Location: $output_file
-Size: $(du -h "$output_file" | cut -f1)
+Size: $(du -h "$output_file" 2>/dev/null | cut -f1)
 EOF
         echo -e "${GREEN}✓ Model downloaded successfully to USB${COLOR_RESET}" >&2
         return 0

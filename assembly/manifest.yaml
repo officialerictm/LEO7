@@ -52,6 +52,11 @@ components:
     description: "System detection and utilities"
     dependencies: ["config", "logging"]
     
+  - id: "system_status"
+    path: "src/core/system_status.sh"
+    description: "Track where services are running (Host vs USB)"
+    dependencies: ["colors", "config"]
+    
   - id: "validation"
     path: "src/core/utils/validation.sh"
     description: "Input validation functions"
@@ -161,6 +166,12 @@ components:
     path: "src/modules/airgap/deploy.sh"
     description: "Air-gapped deployment module"
     dependencies: ["fs_operations", "model_installer"]
+
+  # Chat features (06b)
+  - id: "chat_wrapper"
+    path: "src/chat/chat_wrapper.sh"
+    description: "Location-aware chat interface"
+    dependencies: ["system_status", "ui_interactive", "colors"]
 
   # Main application (07)
   - id: "main_cli"
