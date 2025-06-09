@@ -567,6 +567,10 @@ download_model_to_usb() {
         else
             # Fallback - assume we're in the Leonardo directory
             LEONARDO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+        fi
+        export LEONARDO_DIR
+    fi
+    
     echo -e "${CYAN}Downloading ${model_id}:${variant}${COLOR_RESET}" >&2
     
     # Check if we have Ollama provider
@@ -685,9 +689,6 @@ EOF
                         ;;
                     "llama2:13b")
                         gguf_url="https://huggingface.co/TheBloke/Llama-2-13B-chat-GGUF/resolve/main/llama-2-13b-chat.Q4_K_M.gguf"
-                        ;;
-                    *)
-                        echo -e "${DIM}No direct download available for ${model_id}:${variant}${COLOR_RESET}" >&2
                         ;;
                 esac
 
@@ -832,7 +833,6 @@ EOF
         echo "  - mistral:7b" >&2
         echo "  - llama3.2:1b" >&2
         echo "  - llama3.2:3b" >&2
-        echo "  - qwen2.5:3b" >&2
         echo "  - gemma2:2b" >&2
         echo "  - codellama:7b" >&2
         echo "  - llama3.1:8b" >&2

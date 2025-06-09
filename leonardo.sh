@@ -10,11 +10,14 @@ fi
 
 
 # ==== Component: src/core/header.sh ====
-# =======================================================================# Leonardo AI Universal - Core Header
-# =======================================================================# Description: Script header and metadata initialization
+# ==============================================================================
+# Leonardo AI Universal - Core Header
+# ==============================================================================
+# Description: Script header and metadata initialization
 # Version: 7.0.0
 # Dependencies: none
-# =======================================================================
+# ==============================================================================
+
 # Ensure TERM is set for terminal operations
 if [[ -z "$TERM" ]]; then
     export TERM=xterm
@@ -24,6 +27,7 @@ fi
 readonly LEONARDO_VERSION="7.0.0"
 readonly LEONARDO_NAME="Leonardo AI Universal"
 readonly LEONARDO_CODENAME="Phoenix"
+readonly LEONARDO_BUILD="stable"
 readonly LEONARDO_BUILD_DATE="$(date -u +"%Y-%m-%d")"
 readonly LEONARDO_AUTHORS=("Eric TM" "AI Assistant Team")
 readonly LEONARDO_LICENSE="MIT"
@@ -92,11 +96,14 @@ if [[ "$LEONARDO_QUIET" != "true" ]] && [[ "$LEONARDO_DEBUG" == "true" ]]; then
 fi
 
 # ==== Component: src/core/config.sh ====
-# =======================================================================# Leonardo AI Universal - Configuration
-# =======================================================================# Description: Global configuration and constants
+# ==============================================================================
+# Leonardo AI Universal - Configuration
+# ==============================================================================
+# Description: Global configuration and constants
 # Version: 7.0.0
 # Dependencies: header.sh, termfix.sh
-# =======================================================================
+# ==============================================================================
+
 # Version and metadata (from header, but available globally)
 readonly LEONARDO_CONFIG_VERSION="7.0.0"
 
@@ -229,11 +236,14 @@ export LEONARDO_DESCRIPTION="Portable AI deployment system with integrated model
 export LEONARDO_CONFIG_LOADED=true
 
 # ==== Component: src/utils/logging.sh ====
-# =======================================================================# Leonardo AI Universal - Logging System
-# =======================================================================# Description: Centralized logging with levels, colors, and file output
+# ==============================================================================
+# Leonardo AI Universal - Logging System
+# ==============================================================================
+# Description: Centralized logging with levels, colors, and file output
 # Version: 7.0.0
 # Dependencies: colors.sh
-# =======================================================================
+# ==============================================================================
+
 # Log levels
 readonly LOG_LEVEL_DEBUG=0
 readonly LOG_LEVEL_INFO=1
@@ -438,11 +448,14 @@ export -f log_debug log_info log_warn log_error log_fatal log_success
 init_logging
 
 # ==== Component: src/utils/colors.sh ====
-# =======================================================================# Leonardo AI Universal - Color Definitions
-# =======================================================================# Description: Terminal color codes and styling utilities
+# ==============================================================================
+# Leonardo AI Universal - Color Definitions
+# ==============================================================================
+# Description: Terminal color codes and styling utilities
 # Version: 7.0.0
 # Dependencies: none
-# =======================================================================
+# ==============================================================================
+
 # Check if colors should be disabled
 if [[ "$LEONARDO_NO_COLOR" == "true" ]] || [[ ! -t 1 ]]; then
     # No colors - define empty variables
@@ -691,11 +704,14 @@ export BOX_DOUBLE_TOP_RIGHT BOX_DOUBLE_BOTTOM_LEFT BOX_DOUBLE_BOTTOM_RIGHT
 export COLOR_RESET COLOR_BLACK COLOR_RED COLOR_GREEN COLOR_YELLOW COLOR_BLUE COLOR_MAGENTA COLOR_CYAN COLOR_WHITE COLOR_DIM
 
 # ==== Component: src/utils/validation.sh ====
-# =======================================================================# Leonardo AI Universal - Input Validation
-# =======================================================================# Description: Input validation and sanitization utilities
+# ==============================================================================
+# Leonardo AI Universal - Input Validation
+# ==============================================================================
+# Description: Input validation and sanitization utilities
 # Version: 7.0.0
 # Dependencies: logging.sh, colors.sh
-# =======================================================================
+# ==============================================================================
+
 # Check if a command exists
 command_exists() {
     command -v "$1" >/dev/null 2>&1
@@ -1352,9 +1368,6 @@ format_usb_device() {
                         fi
                         
                         # Try to eject the device properly
-                        fi
-                        
-                        # Try to eject the device properly first
                         echo -e "${DIM}Ejecting device properly...${COLOR_RESET}"
                         sudo eject "$partition" 2>/dev/null || true
                         sleep 2
@@ -1370,8 +1383,6 @@ format_usb_device() {
                         sync
                         
                         # Wait for device to settle
-                        # Wait for device to settle (you mentioned hearing disconnect)
-                        echo -e "${DIM}Waiting for device to settle...${COLOR_RESET}"
                         sleep 3
                         
                         # Try formatting one more time
@@ -1719,11 +1730,14 @@ export -f safe_delete get_file_checksum create_temp_dir
 export -f create_directory ensure_directory
 
 # ==== Component: src/utils/network.sh ====
-# =======================================================================# Leonardo AI Universal - Network Utilities
-# =======================================================================# Description: Network operations, downloads, and connectivity checks
+# ==============================================================================
+# Leonardo AI Universal - Network Utilities
+# ==============================================================================
+# Description: Network operations, downloads, and connectivity checks
 # Version: 7.0.0
 # Dependencies: logging.sh, colors.sh, validation.sh
-# =======================================================================
+# ==============================================================================
+
 # Check internet connectivity
 check_connectivity() {
     local timeout="${1:-5}"
@@ -2288,11 +2302,14 @@ export -f format_system_status
 export -f get_chat_location_prefix
 
 # ==== Component: src/ui/menu.sh ====
-# =======================================================================# Leonardo AI Universal - Menu System
-# =======================================================================# Description: Interactive menu navigation and selection
+# ==============================================================================
+# Leonardo AI Universal - Menu System
+# ==============================================================================
+# Description: Interactive menu navigation and selection
 # Version: 7.0.0
 # Dependencies: colors.sh, logging.sh, validation.sh
-# =======================================================================
+# ==============================================================================
+
 # Menu state tracking
 declare -g MENU_SELECTION=""
 declare -g MENU_POSITION=1
@@ -2743,13 +2760,18 @@ export -f show_menu confirm_menu confirm_action show_checklist show_radio_menu
 export -f show_progress_menu show_input_dialog show_filtered_list
 
 # ==== Component: src/ui/progress.sh ====
-# =======================================================================# Leonardo AI Universal - Progress Display Components
-# =======================================================================# Description: Progress bars, spinners, and status displays
+# ==============================================================================
+# Leonardo AI Universal - Progress Display Components
+# ==============================================================================
+# Description: Progress bars, spinners, and status displays
 # Version: 7.0.0
 # Dependencies: colors.sh, logging.sh
-# =======================================================================
-# =======================================================================# UTILITY FUNCTIONS - Must be defined before use
-# =======================================================================
+# ==============================================================================
+
+# ==============================================================================
+# UTILITY FUNCTIONS - Must be defined before use
+# ==============================================================================
+
 # Format duration from seconds
 format_duration() {
     local seconds="$1"
@@ -2797,8 +2819,10 @@ format_bytes() {
     fi
 }
 
-# =======================================================================# PROGRESS BAR FUNCTIONS
-# =======================================================================
+# ==============================================================================
+# PROGRESS BAR FUNCTIONS
+# ==============================================================================
+
 # Progress bar state
 declare -g PROGRESS_ACTIVE=0
 declare -g PROGRESS_PID=""
@@ -3395,11 +3419,14 @@ export -f format_duration format_bytes show_ascii_progress
 export -f track_download_progress download_with_progress copy_with_progress copy_directory_with_progress
 
 # ==== Component: src/ui/dashboard.sh ====
-# =======================================================================# Leonardo AI Universal - Dashboard Display
-# =======================================================================# Description: Interactive dashboard and system status displays
+# ==============================================================================
+# Leonardo AI Universal - Dashboard Display
+# ==============================================================================
+# Description: Interactive dashboard and system status displays
 # Version: 7.0.0
 # Dependencies: colors.sh, logging.sh, filesystem.sh
-# =======================================================================
+# ==============================================================================
+
 # Dashboard state
 declare -g DASHBOARD_ACTIVE=0
 declare -g DASHBOARD_REFRESH_RATE=1
@@ -3779,11 +3806,14 @@ show_health_check() {
 export -f show_dashboard show_mini_dashboard show_health_check
 
 # ==== Component: src/ui/web.sh ====
-# =======================================================================# Leonardo AI Universal - Web UI Foundation
-# =======================================================================# Description: Web server and browser-based UI components
+# ==============================================================================
+# Leonardo AI Universal - Web UI Foundation
+# ==============================================================================
+# Description: Web server and browser-based UI components
 # Version: 7.0.0
 # Dependencies: colors.sh, logging.sh, network.sh
-# =======================================================================
+# ==============================================================================
+
 # Web server configuration
 LEONARDO_WEB_PORT="${LEONARDO_WEB_PORT:-7777}"
 LEONARDO_WEB_HOST="${LEONARDO_WEB_HOST:-0.0.0.0}"
@@ -4385,10 +4415,13 @@ handle_api_request() {
 export -f start_web_ui stop_web_ui generate_web_ui_files
 
 # ==== Component: src/ui/web_server.sh ====
-# =======================================================================# Leonardo AI Universal - Web Server
-# =======================================================================# Description: Simple web server for Leonardo's web interface
+# ==============================================================================
+# Leonardo AI Universal - Web Server
+# ==============================================================================
+# Description: Simple web server for Leonardo's web interface
 # Version: 7.0.0
-# =======================================================================
+# ==============================================================================
+
 # Start the web server
 start_web_server() {
     local port="${1:-8080}"
@@ -5268,10 +5301,13 @@ export -f check_portable_inference setup_portable_inference run_gguf_inference r
 # TODO: Implement src/security/encryption.sh
 
 # ==== Component: src/models/model_database.sh ====
-# =======================================================================# Leonardo AI Universal - Model Database
-# =======================================================================# Description: Curated list of AI models for easy discovery and download
+# ==============================================================================
+# Leonardo AI Universal - Model Database
+# ==============================================================================
+# Description: Curated list of AI models for easy discovery and download
 # Version: 7.0.0
-# =======================================================================
+# ==============================================================================
+
 # Model database format: "id|name|size|quantization|license|description"
 declare -a MODEL_DATABASE=(
     # Llama Models
@@ -5440,11 +5476,14 @@ suggest_models() {
 }
 
 # ==== Component: src/models/registry.sh ====
-# =======================================================================# Leonardo AI Universal - Model Registry
-# =======================================================================# Description: AI model registry and metadata management
+# ==============================================================================
+# Leonardo AI Universal - Model Registry
+# ==============================================================================
+# Description: AI model registry and metadata management
 # Version: 7.0.0
 # Dependencies: colors.sh, logging.sh, network.sh, validation.sh
-# =======================================================================
+# ==============================================================================
+
 # Model registry data structure
 declare -A LEONARDO_MODEL_REGISTRY
 declare -A LEONARDO_MODEL_METADATA
@@ -6420,11 +6459,14 @@ export -f get_model_info
 export -f update_model_registry
 
 # ==== Component: src/models/selector.sh ====
-# =======================================================================# Leonardo AI Universal - Model Selector
-# =======================================================================# Description: Interactive model selection and configuration interface
+# ==============================================================================
+# Leonardo AI Universal - Model Selector
+# ==============================================================================
+# Description: Interactive model selection and configuration interface
 # Version: 7.0.0
 # Dependencies: colors.sh, logging.sh, menu.sh, progress.sh, registry.sh, manager.sh
-# =======================================================================
+# ==============================================================================
+
 # Model selector state
 LEONARDO_SELECTED_MODEL=""
 LEONARDO_MODEL_PREFERENCES=()
@@ -6832,11 +6874,14 @@ export -f interactive_model_selector custom_model_selection compare_models
 export -f configure_model_preferences quick_install_model
 
 # ==== Component: src/models/cli.sh ====
-# =======================================================================# Leonardo AI Universal - Model CLI
-# =======================================================================# Description: Command-line interface for model management
+# ==============================================================================
+# Leonardo AI Universal - Model CLI
+# ==============================================================================
+# Description: Command-line interface for model management
 # Version: 7.0.0
 # Dependencies: all model modules, colors.sh, logging.sh
-# =======================================================================
+# ==============================================================================
+
 # Model CLI help
 model_cli_help() {
     cat << EOF
@@ -7525,10 +7570,19 @@ if [[ "$SCRIPT_DIR" =~ ^(/media/[^/]+/[^/]+)/.* ]] || \
     export LEONARDO_USB_MOUNT="${BASH_REMATCH[1]}"
 else
     export LEONARDO_USB_MOUNT="$SCRIPT_DIR"
+fi
+
+# Set USB environment
+export LEONARDO_USB_MODE="true"
+export LEONARDO_DIR="${LEONARDO_USB_MOUNT}/leonardo"
+export LEONARDO_MODEL_DIR="${LEONARDO_USB_MOUNT}/leonardo/models"
+export LEONARDO_CONFIG_DIR="${LEONARDO_USB_MOUNT}/leonardo/config"
 
 # Launch Leonardo
 cd "$LEONARDO_DIR"
 exec ./leonardo.sh "$@"
+cd "$(dirname "$0")"
+./leonardo/leonardo.sh "$@"
 EOF
     chmod +x "$target_dir/start-leonardo" 2>/dev/null || true
     
@@ -7709,24 +7763,7 @@ download_model_to_usb() {
         export LEONARDO_DIR
     fi
     
-    # Debug output
-    echo -e "${DIM}DEBUG: Looking for model '${model_id}:${variant}' in registry${COLOR_RESET}" >&2
-    
-    # Check dynamic registry first
-    local model_url=""
-    
-    # Load dynamic registry if available
-    if [[ -f "${LEONARDO_DIR}/src/models/registry_loader.sh" ]]; then
-        source "${LEONARDO_DIR}/src/models/registry_loader.sh"
-    fi
-    # Direct download from registry as fallback
-    echo "Downloading from model registry..." >&2
-    
-    # Debug output
-    echo -e "${DIM}DEBUG: Looking for model '${model_id}:${variant}' in registry${COLOR_RESET}" >&2
-    
-    # Check dynamic registry first
-    local model_url=""
+    echo -e "${CYAN}Downloading ${model_id}:${variant}${COLOR_RESET}" >&2
     
     # Check if we have Ollama provider
     if command_exists ollama; then
@@ -7844,9 +7881,6 @@ EOF
                         ;;
                     "llama2:13b")
                         gguf_url="https://huggingface.co/TheBloke/Llama-2-13B-chat-GGUF/resolve/main/llama-2-13b-chat.Q4_K_M.gguf"
-                        ;;
-                    *)
-                        echo -e "${DIM}No direct download available for ${model_id}:${variant}${COLOR_RESET}" >&2
                         ;;
                 esac
 
@@ -7991,7 +8025,6 @@ EOF
         echo "  - mistral:7b" >&2
         echo "  - llama3.2:1b" >&2
         echo "  - llama3.2:3b" >&2
-        echo "  - qwen2.5:3b" >&2
         echo "  - gemma2:2b" >&2
         echo "  - codellama:7b" >&2
         echo "  - llama3.1:8b" >&2
@@ -8325,11 +8358,14 @@ get_device_size_mb() {
 }
 
 # ==== Component: src/deployment/cli.sh ====
-# =======================================================================# Leonardo AI Universal - Deployment CLI Module
-# =======================================================================# Description: Command-line interface for deployment operations
+# ==============================================================================
+# Leonardo AI Universal - Deployment CLI Module
+# ==============================================================================
+# Description: Command-line interface for deployment operations
 # Version: 7.0.0
 # Dependencies: colors.sh, logging.sh, usb_deploy.sh, local_deploy.sh
-# =======================================================================
+# ==============================================================================
+
 # Main deployment CLI handler
 deployment_cli() {
     local command="${1:-help}"
@@ -8581,11 +8617,14 @@ export -f deployment_cli deployment_usb_command deployment_local_command
 export -f deployment_status_command deployment_verify_command
 
 # ==== Component: src/usb/detector.sh ====
-# =======================================================================# Leonardo AI Universal - USB Detection Module
-# =======================================================================# Description: Detect and identify USB drives across platforms
+# ==============================================================================
+# Leonardo AI Universal - USB Detection Module
+# ==============================================================================
+# Description: Detect and identify USB drives across platforms
 # Version: 7.0.0
 # Dependencies: colors.sh, logging.sh, filesystem.sh
-# =======================================================================
+# ==============================================================================
+
 # Detect platform
 detect_platform() {
     case "$(uname -s)" in
@@ -9015,6 +9054,11 @@ test_usb_write_speed() {
     case "$platform" in
         "macos")
             mount_point=$(diskutil info "$device" 2>/dev/null | grep "Mount Point:" | cut -d: -f2- | xargs)
+            if [[ -z "$mount_point" || "$mount_point" =~ [Nn]ot\ mounted ]]; then
+                local part="$device"
+                [[ ! "$device" =~ s[0-9]+$ ]] && part="${device}s1"
+                mount_point=$(diskutil info "$part" 2>/dev/null | grep "Mount Point:" | cut -d: -f2- | xargs)
+            fi
             ;;
         "linux")
             mount_point=$(lsblk -no MOUNTPOINT "$device" 2>/dev/null | head -1)
@@ -9067,6 +9111,11 @@ is_leonardo_usb() {
     case "$platform" in
         "macos")
             mount_point=$(diskutil info "$device" 2>/dev/null | grep "Mount Point:" | cut -d: -f2- | xargs)
+            if [[ -z "$mount_point" || "$mount_point" =~ [Nn]ot\ mounted ]]; then
+                local part="$device"
+                [[ ! "$device" =~ s[0-9]+$ ]] && part="${device}s1"
+                mount_point=$(diskutil info "$part" 2>/dev/null | grep "Mount Point:" | cut -d: -f2- | xargs)
+            fi
             ;;
         "linux")
             mount_point=$(lsblk -no MOUNTPOINT "$device" 2>/dev/null | grep -v "^$" | head -1)
@@ -9100,11 +9149,14 @@ export -f is_leonardo_usb
 export -f list_usb_drives test_usb_write_speed
 
 # ==== Component: src/usb/manager.sh ====
-# =======================================================================# Leonardo AI Universal - USB Management Module
-# =======================================================================# Description: Manage USB drive lifecycle and operations
+# ==============================================================================
+# Leonardo AI Universal - USB Management Module
+# ==============================================================================
+# Description: Manage USB drive lifecycle and operations
 # Version: 7.0.0
 # Dependencies: colors.sh, logging.sh, filesystem.sh, validation.sh, detector.sh
-# =======================================================================
+# ==============================================================================
+
 # USB manager state
 declare -g LEONARDO_USB_DEVICE=""
 declare -g LEONARDO_USB_MOUNT=""
@@ -9146,9 +9198,14 @@ init_usb_device() {
         "macos")
             LEONARDO_USB_MOUNT=$(diskutil info "$device" 2>/dev/null | grep "Mount Point:" | cut -d: -f2- | xargs)
             if [[ -z "$LEONARDO_USB_MOUNT" || "$LEONARDO_USB_MOUNT" =~ [Nn]ot\ mounted ]]; then
-                local part="$device"
-                [[ ! "$device" =~ s[0-9]+$ ]] && part="${device}s1"
-                LEONARDO_USB_MOUNT=$(diskutil info "$part" 2>/dev/null | grep "Mount Point:" | cut -d: -f2- | xargs)
+                if ! diskutil mountDisk "$device" >/dev/null 2>&1; then
+                    local part="${device}s1"
+                    if ! diskutil mount "$part" >/dev/null 2>&1; then
+                        log_message "ERROR" "Failed to mount device"
+                        return 1
+                    fi
+                    LEONARDO_USB_MOUNT=$(diskutil info "$part" 2>/dev/null | grep "Mount Point:" | cut -d: -f2- | xargs)
+                fi
             fi
             ;;
         "linux")
@@ -9411,23 +9468,12 @@ mount_usb_drive() {
             LEONARDO_USB_MOUNT=$(diskutil info "$device" 2>/dev/null | grep "Mount Point:" | cut -d: -f2- | xargs)
             if [[ -z "$LEONARDO_USB_MOUNT" || "$LEONARDO_USB_MOUNT" =~ [Nn]ot\ mounted ]]; then
                 if ! diskutil mountDisk "$device" >/dev/null 2>&1; then
-            # Check if already mounted
-            LEONARDO_USB_MOUNT=$(diskutil info "$device" 2>/dev/null | grep "Mount Point:" | cut -d: -f2- | xargs)
-            if [[ -z "$LEONARDO_USB_MOUNT" || "$LEONARDO_USB_MOUNT" == "not mounted" ]]; then
-                # Try mounting the whole disk first
-                if ! diskutil mountDisk "$device" >/dev/null 2>&1; then
-                    # Fallback to first partition (diskXs1)
                     local part="${device}s1"
                     if ! diskutil mount "$part" >/dev/null 2>&1; then
                         log_message "ERROR" "Failed to mount device"
                         return 1
                     fi
                     LEONARDO_USB_MOUNT=$(diskutil info "$part" 2>/dev/null | grep "Mount Point:" | cut -d: -f2- | xargs)
-                else
-                    local part="$device"
-                    [[ ! "$device" =~ s[0-9]+$ ]] && part="${device}s1"
-                    LEONARDO_USB_MOUNT=$(diskutil info "$part" 2>/dev/null | grep "Mount Point:" | cut -d: -f2- | xargs)
-                    LEONARDO_USB_MOUNT=$(diskutil info "$device" 2>/dev/null | grep "Mount Point:" | cut -d: -f2- | xargs)
                 fi
             fi
             export LEONARDO_USB_MOUNT
@@ -9873,11 +9919,14 @@ export -f create_leonardo_structure install_leonardo_to_usb
 export -f backup_usb_data restore_usb_data check_usb_free_space clean_usb_temp
 
 # ==== Component: src/usb/health.sh ====
-# =======================================================================# Leonardo AI Universal - USB Health Monitoring Module
-# =======================================================================# Description: Monitor USB drive health, write cycles, and performance
+# ==============================================================================
+# Leonardo AI Universal - USB Health Monitoring Module
+# ==============================================================================
+# Description: Monitor USB drive health, write cycles, and performance
 # Version: 7.0.0
 # Dependencies: colors.sh, logging.sh, filesystem.sh, detector.sh
-# =======================================================================
+# ==============================================================================
+
 # Health check thresholds
 readonly USB_HEALTH_WRITE_CYCLE_WARNING=10000
 readonly USB_HEALTH_WRITE_CYCLE_CRITICAL=50000
@@ -10373,11 +10422,14 @@ export -f generate_health_report monitor_usb_health stop_health_monitoring
 export -f analyze_health_trends
 
 # ==== Component: src/usb/cli.sh ====
-# =======================================================================# Leonardo AI Universal - USB CLI Module
-# =======================================================================# Description: Command-line interface for USB operations
+# ==============================================================================
+# Leonardo AI Universal - USB CLI Module
+# ==============================================================================
+# Description: Command-line interface for USB operations
 # Version: 7.0.0
 # Dependencies: colors.sh, logging.sh, detector.sh, manager.sh, health.sh
-# =======================================================================
+# ==============================================================================
+
 # USB CLI help
 usb_cli_help() {
     cat << EOF
@@ -10531,6 +10583,11 @@ usb_cli_info() {
     case "$platform" in
         "macos")
             mount_point=$(diskutil info "$device" 2>/dev/null | grep "Mount Point:" | cut -d: -f2- | xargs)
+            if [[ -z "$mount_point" || "$mount_point" =~ [Nn]ot\ mounted ]]; then
+                local part="$device"
+                [[ ! "$device" =~ s[0-9]+$ ]] && part="${device}s1"
+                mount_point=$(diskutil info "$part" 2>/dev/null | grep "Mount Point:" | cut -d: -f2- | xargs)
+            fi
             ;;
         "linux")
             mount_point=$(lsblk -no MOUNTPOINT "$device" 2>/dev/null | head -1)

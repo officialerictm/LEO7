@@ -247,9 +247,6 @@ format_usb_device() {
                         fi
                         
                         # Try to eject the device properly
-                        fi
-                        
-                        # Try to eject the device properly first
                         echo -e "${DIM}Ejecting device properly...${COLOR_RESET}"
                         sudo eject "$partition" 2>/dev/null || true
                         sleep 2
@@ -265,8 +262,6 @@ format_usb_device() {
                         sync
                         
                         # Wait for device to settle
-                        # Wait for device to settle (you mentioned hearing disconnect)
-                        echo -e "${DIM}Waiting for device to settle...${COLOR_RESET}"
                         sleep 3
                         
                         # Try formatting one more time

@@ -16,6 +16,7 @@ fi
 readonly LEONARDO_VERSION="7.0.0"
 readonly LEONARDO_NAME="Leonardo AI Universal"
 readonly LEONARDO_CODENAME="Phoenix"
+readonly LEONARDO_BUILD="stable"
 readonly LEONARDO_BUILD_DATE="$(date -u +"%Y-%m-%d")"
 readonly LEONARDO_AUTHORS=("Eric TM" "AI Assistant Team")
 readonly LEONARDO_LICENSE="MIT"
