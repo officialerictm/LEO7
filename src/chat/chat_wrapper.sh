@@ -352,33 +352,10 @@ start_gguf_chat_session() {
     
     # Check if we should use USB-only inference (stealth mode)
     if [[ "${LEONARDO_USB_MODE:-false}" == "true" ]] || [[ -n "${LEONARDO_USB_MOUNT:-}" ]]; then
-        # Source USB inference module if not already loaded
-        if ! command -v handle_usb_inference >/dev/null 2>&1; then
-            local usb_inference_path
-            # Try multiple locations for the USB inference module
-            for path in \
-                "${LEONARDO_BASE_DIR:-}/src/chat/usb_inference.sh" \
-                "${LEONARDO_USB_MOUNT:-}/leonardo/src/chat/usb_inference.sh" \
-                "$(dirname "${BASH_SOURCE[0]}")/usb_inference.sh" \
-                "./src/chat/usb_inference.sh"
-            do
-                if [[ -f "$path" ]]; then
-                    usb_inference_path="$path"
-                    break
-                fi
-            done
-            
-            if [[ -f "$usb_inference_path" ]]; then
-                source "$usb_inference_path"
-            fi
-        fi
-        
-        # Try portable inference first
-        if command -v handle_usb_inference >/dev/null 2>&1; then
-            echo -e "${CYAN}Using portable USB inference engine (stealth mode)${COLOR_RESET}"
-            handle_usb_inference "$model_file"
-            return
-        fi
+        # Try portable inference first - the function should already be available
+        echo -e "${CYAN}Using portable USB inference engine (stealth mode)${COLOR_RESET}"
+        handle_usb_inference "$model_file"
+        return
     fi
     
     # Check if we can use Ollama with the GGUF model

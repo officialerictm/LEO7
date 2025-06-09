@@ -15,10 +15,15 @@
 # Check for portable llama.cpp on USB
 check_portable_inference() {
     local usb_mount="${LEONARDO_USB_MOUNT:-/media/$USER/LEONARDO}"
-    local llama_cpp_path="$usb_mount/leonardo/bin/llama-cli"
+    local llama_server_path="$usb_mount/leonardo/bin/llama-server"
+    local llama_cli_path="$usb_mount/leonardo/bin/llama-cli"
     
-    if [[ -f "$llama_cpp_path" && -x "$llama_cpp_path" ]]; then
-        echo "$llama_cpp_path"
+    # Return server path if available, otherwise cli path
+    if [[ -f "$llama_server_path" && -x "$llama_server_path" ]]; then
+        echo "$llama_server_path"
+        return 0
+    elif [[ -f "$llama_cli_path" && -x "$llama_cli_path" ]]; then
+        echo "$llama_cli_path"
         return 0
     fi
     return 1
@@ -35,48 +40,55 @@ setup_portable_inference() {
     # Create directories
     mkdir -p "$bin_dir" "$temp_dir"
     
-    # Detect system architecture
-    local arch=$(uname -m)
-    local os=$(uname -s | tr '[:upper:]' '[:lower:]')
-    
-    # Map architecture names
-    case "$arch" in
-        x86_64) arch="x64" ;;
-        aarch64) arch="arm64" ;;
-        armv7l) arch="arm" ;;
-    esac
-    
-    # Download pre-built llama.cpp binary
-    local download_url=""
-    case "$os" in
-        linux)
-            download_url="https://github.com/ggerganov/llama.cpp/releases/latest/download/llama-cli-linux-$arch"
-            ;;
-        darwin)
-            download_url="https://github.com/ggerganov/llama.cpp/releases/latest/download/llama-cli-macos-$arch"
-            ;;
-        *)
-            echo -e "${RED}Unsupported OS: $os${COLOR_RESET}"
-            return 1
-            ;;
-    esac
-    
-    echo -e "${DIM}Downloading llama.cpp for $os-$arch...${COLOR_RESET}"
-    
-    # Download with progress
-    if command -v wget >/dev/null 2>&1; then
-        wget -q --show-progress -O "$bin_dir/llama-cli" "$download_url"
-    elif command -v curl >/dev/null 2>&1; then
-        curl -L --progress-bar -o "$bin_dir/llama-cli" "$download_url"
-    else
-        echo -e "${RED}Neither wget nor curl found. Cannot download.${COLOR_RESET}"
-        return 1
+    # First check if llama-server is already on USB
+    if [[ -f "$bin_dir/llama-server" && -x "$bin_dir/llama-server" ]]; then
+        echo -e "${GREEN}✓ Inference engine already installed${COLOR_RESET}"
+        return 0
     fi
     
-    # Make executable
-    chmod +x "$bin_dir/llama-cli"
+    # Check if llama.cpp is installed on host and copy it
+    if command -v llama-server >/dev/null 2>&1; then
+        echo -e "${DIM}Copying llama.cpp from host system...${COLOR_RESET}"
+        local host_server=$(which llama-server)
+        local host_cli=$(which llama-cli 2>/dev/null || true)
+        
+        cp "$host_server" "$bin_dir/" && chmod +x "$bin_dir/llama-server"
+        [[ -n "$host_cli" ]] && cp "$host_cli" "$bin_dir/" && chmod +x "$bin_dir/llama-cli"
+        
+        echo -e "${GREEN}✓ Copied inference engine from host${COLOR_RESET}"
+        return 0
+    fi
     
-    echo -e "${GREEN}✓ Portable inference engine installed${COLOR_RESET}"
+    # Build llama.cpp from source on USB
+    echo -e "${YELLOW}Building llama.cpp from source...${COLOR_RESET}"
+    echo -e "${DIM}This is a one-time setup that may take a few minutes${COLOR_RESET}"
+    
+    cd "$temp_dir"
+    
+    # Clone llama.cpp repository
+    if [[ -d "llama.cpp" ]]; then
+        echo -e "${DIM}Updating existing source...${COLOR_RESET}"
+        cd llama.cpp && git pull
+    else
+        echo -e "${DIM}Cloning llama.cpp repository...${COLOR_RESET}"
+        git clone https://github.com/ggerganov/llama.cpp.git
+        cd llama.cpp
+    fi
+    
+    # Build with minimal dependencies
+    echo -e "${DIM}Building (this may take a while)...${COLOR_RESET}"
+    make clean
+    make -j$(nproc) LLAMA_PORTABLE=1 llama-server llama-cli
+    
+    # Copy binaries to USB bin directory
+    cp llama-server "$bin_dir/" && chmod +x "$bin_dir/llama-server"
+    cp llama-cli "$bin_dir/" && chmod +x "$bin_dir/llama-cli"
+    
+    # Clean up
+    cd "$usb_mount/leonardo"
+    rm -rf "$temp_dir/llama.cpp"
+    
+    echo -e "${GREEN}✓ Portable inference engine built and installed${COLOR_RESET}"
     return 0
 }
 
@@ -112,6 +124,7 @@ run_gguf_inference() {
 run_portable_chat() {
     local model_path="$1"
     local model_name=$(basename "$model_path" .gguf)
+    local usb_mount="${LEONARDO_USB_MOUNT:-/media/$USER/LEONARDO}"
     
     echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
     echo -e "${BOLD}               🤖 Leonardo AI Chat - USB Mode                ${COLOR_RESET}"
@@ -124,7 +137,7 @@ run_portable_chat() {
     # Check/setup inference engine
     local llama_path=$(check_portable_inference)
     if [[ -z "$llama_path" ]]; then
-        echo -e "${YELLOW}First time setup - downloading portable inference engine...${COLOR_RESET}"
+        echo -e "${YELLOW}First time setup - installing portable inference engine...${COLOR_RESET}"
         if ! setup_portable_inference; then
             echo -e "${RED}Failed to setup inference engine${COLOR_RESET}"
             return 1
@@ -132,7 +145,36 @@ run_portable_chat() {
         llama_path=$(check_portable_inference)
     fi
     
-    # Initialize conversation context
+    # Check if we have server or just CLI
+    local server_mode=false
+    if [[ "$llama_path" == *"llama-server"* ]]; then
+        server_mode=true
+        local server_port=8080
+        local server_pid=""
+        
+        # Start llama-server in background
+        echo -e "${DIM}Starting inference server...${COLOR_RESET}"
+        "$llama_path" \
+            --model "$model_path" \
+            --ctx-size 2048 \
+            --n-gpu-layers 0 \
+            --port $server_port \
+            --host 127.0.0.1 \
+            --log-disable \
+            > /dev/null 2>&1 &
+        server_pid=$!
+        
+        # Wait for server to start
+        sleep 2
+        
+        # Check if server is running
+        if ! kill -0 $server_pid 2>/dev/null; then
+            echo -e "${RED}Failed to start inference server${COLOR_RESET}"
+            server_mode=false
+        fi
+    fi
+    
+    # Initialize conversation
     local context=""
     local system_prompt="You are a helpful AI assistant running locally on a USB drive. You provide accurate, thoughtful responses while respecting user privacy."
     
@@ -145,6 +187,7 @@ run_portable_chat() {
         case "$user_input" in
             exit|quit|bye)
                 echo -e "\n${CYAN}Chat ended. Thank you!${COLOR_RESET}"
+                [[ -n "$server_pid" ]] && kill $server_pid 2>/dev/null
                 break
                 ;;
             clear|cls)
@@ -154,47 +197,55 @@ run_portable_chat() {
                 echo -e "${CYAN}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
                 continue
                 ;;
+            "")
+                continue
+                ;;
         esac
         
-        # Build prompt with context
-        local full_prompt="$system_prompt
-
-$context
-User: $user_input
-Assistant:"
+        # Show typing indicator
+        echo -en "\n${GREEN}AI:${COLOR_RESET} ${DIM}thinking...${COLOR_RESET}"
         
-        # Show thinking indicator
-        echo -ne "\n${GREEN}$model_name:${COLOR_RESET} ${DIM}Thinking...${COLOR_RESET}\r"
-        
-        # Run inference
-        local response=$("$llama_path" \
-            -m "$model_path" \
-            -p "$full_prompt" \
-            -n 512 \
-            --temp 0.7 \
-            --top-k 40 \
-            --top-p 0.95 \
-            --repeat-penalty 1.1 \
-            --ctx-size 4096 \
-            --no-display-prompt \
-            --simple-io \
-            2>/dev/null | sed 's/^[[:space:]]*//')
-        
-        # Clear thinking indicator and show response
-        echo -ne "\033[2K\r"
-        echo -e "${GREEN}$model_name:${COLOR_RESET} $response"
-        
-        # Update context (keep last 2 exchanges)
-        context="${context}
-User: $user_input
-Assistant: $response"
-        
-        # Trim context if too long
-        local context_lines=$(echo "$context" | wc -l)
-        if [[ $context_lines -gt 8 ]]; then
-            context=$(echo "$context" | tail -n 8)
+        # Generate response
+        local response=""
+        if [[ "$server_mode" == "true" ]]; then
+            # Use server API
+            local prompt_json=$(jq -n \
+                --arg prompt "$system_prompt\n\nHuman: $user_input\n\nAssistant:" \
+                '{prompt: $prompt, n_predict: 512, temperature: 0.7}')
+            
+            response=$(curl -s -X POST http://127.0.0.1:$server_port/completion \
+                -H "Content-Type: application/json" \
+                -d "$prompt_json" | jq -r '.content // empty')
+        else
+            # Use CLI mode
+            local full_prompt="$system_prompt\n\nHuman: $user_input\n\nAssistant:"
+            response=$(echo -e "$full_prompt" | "$llama_path" \
+                -m "$model_path" \
+                -f - \
+                -n 512 \
+                --temp 0.7 \
+                --top-k 40 \
+                --top-p 0.95 \
+                --repeat-penalty 1.1 \
+                --ctx-size 2048 \
+                2>/dev/null | tail -n +2)
         fi
+        
+        # Clear thinking message and show response
+        echo -en "\r${GREEN}AI:${COLOR_RESET} "
+        
+        if [[ -n "$response" ]]; then
+            echo "$response"
+        else
+            echo "${DIM}(No response generated - model may be loading)${COLOR_RESET}"
+        fi
+        
+        # Update context for next turn
+        context+="\nHuman: $user_input\nAssistant: $response"
     done
+    
+    # Cleanup
+    [[ -n "$server_pid" ]] && kill $server_pid 2>/dev/null
 }
 
 # Main handler for USB inference
